@@ -1,0 +1,9 @@
+{
+    "listen_addr": "127.0.0.1:10001",
+    "queue_size": 1024,
+    "buffer_size": 1500,
+    "forwarders": [
+        "a.com:1111",
+        "b.com:2222"
+    ]
+}
