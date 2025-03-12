@@ -1,7 +1,8 @@
 {
     "listen_addr": "127.0.0.1:10001",
     "forwarders": [
-        "www.baidu.com:1111"
+        "a.com:1111",
+        "b.com:2222"
     ],
     "queue_size": 1024,
     "buffer_size": 1500,
