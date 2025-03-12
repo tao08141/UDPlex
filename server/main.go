@@ -13,24 +13,30 @@ import (
 
 // AddrMapping stores each mapped address and its last active timestamp
 type AddrMapping struct {
-    addr      net.Addr
-    lastActive time.Time
+    addr        net.Addr
+    lastActive  time.Time
 }
 
 type Config struct {
     ListenAddr  string `json:"listen_addr"`
     ForwardAddr string `json:"forward_addr"`
     BufferSize  int    `json:"buffer_size"`
-    TimeoutSec  int    `json:"timeout"`  // Changed from time.Duration to int
-    Timeout     time.Duration `json:"-"` // Added field for internal use
+    TimeoutSec  int    `json:"timeout"`
+    Timeout     time.Duration `json:"-"`
 }
 
-// Buffer pool to reduce memory allocations
-var bufferPool = sync.Pool{
-    New: func() interface{} {
-        return make([]byte, 1500) // Default size
-    },
-}
+var (
+    bufferPool = sync.Pool{
+        New: func() interface{} {
+            return make([]byte, 1500)
+        },
+    }
+    slicePool = sync.Pool{
+        New: func() interface{} {
+            return make([]net.Addr, 0, 100)
+        },
+    }
+)
 
 func loadConfig(filename string) (*Config, error) {
     configFile, err := os.ReadFile(filename)
@@ -39,15 +45,14 @@ func loadConfig(filename string) (*Config, error) {
     }
 
     config := &Config{
-        BufferSize: 1500,      // Default value
-        TimeoutSec: 60,        // Default timeout in seconds
+        BufferSize: 1500,
+        TimeoutSec: 60,
     }
 
     if err := json.Unmarshal(configFile, config); err != nil {
         return nil, fmt.Errorf("error parsing config: %w", err)
     }
 
-    // Convert seconds to time.Duration
     config.Timeout = time.Duration(config.TimeoutSec) * time.Second
 
     if config.ListenAddr == "" || config.ForwardAddr == "" {
@@ -58,10 +63,7 @@ func loadConfig(filename string) (*Config, error) {
 }
 
 func main() {
-    // Configure log format
     log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
-
-    // Parse command line flags
     configPath := flag.String("config", "config.json", "Path to configuration file")
     flag.Parse()
 
@@ -102,8 +104,7 @@ func main() {
     }
     defer forwardConn.Close()
 
-    log.Printf("Forwarding to %s", config.ForwardAddr)
-
+    log.Printf("Listening on %s, forwarding to %s", config.ListenAddr, config.ForwardAddr)
     handleServerPackets(listenConn, forwardConn, config)
 }
 
@@ -111,9 +112,6 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
     mappings := make(map[string]AddrMapping)
     var mutex sync.RWMutex
 
-    log.Printf("Server started with timeout: %v", config.Timeout)
-
-    // Start periodic cleanup instead of per-packet cleanup
     go func() {
         ticker := time.NewTicker(config.Timeout / 2)
         defer ticker.Stop()
@@ -129,16 +127,13 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
                 }
             }
             mutex.Unlock()
-            
         }
     }()
 
     // Handle responses from forwarded connection
     go func() {
         for {
-            // Get buffer from pool
             buffer := bufferPool.Get().([]byte)
-            
             respLen, _, err := forwardConn.ReadFrom(buffer)
             if err != nil {
                 log.Printf("Error reading from forwarding conn: %v", err)
@@ -146,62 +141,53 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
                 continue
             }
 
-            // Use read lock for reading mappings
+            clientAddrs := slicePool.Get().([]net.Addr)
+            clientAddrs = clientAddrs[:0]
             mutex.RLock()
-            clientAddrs := make([]net.Addr, 0, len(mappings))
             for _, mapping := range mappings {
                 clientAddrs = append(clientAddrs, mapping.addr)
             }
             mutex.RUnlock()
 
-            // Send response to all clients
             responseData := buffer[:respLen]
             for _, clientAddr := range clientAddrs {
                 if _, err = listenConn.WriteTo(responseData, clientAddr); err != nil {
-                    log.Printf("Error sending response to %v: %v", clientAddr, err)
+                    log.Printf("Response error: %v", err)
                     mutex.Lock()
                     delete(mappings, clientAddr.String())
                     mutex.Unlock()
                 }
             }
-            
-            // Return buffer to the pool
+
+            slicePool.Put(clientAddrs)
             bufferPool.Put(buffer)
         }
     }()
 
     // Handle incoming client packets
     for {
-        // Get buffer from pool
         buffer := bufferPool.Get().([]byte)
-        
         length, addr, err := listenConn.ReadFrom(buffer)
         if err != nil {
-            log.Printf("Server read error: %v", err)
+            log.Printf("Client read error: %v", err)
             bufferPool.Put(buffer)
             continue
         }
 
-        // Update mapping with minimal lock time
         addrKey := addr.String()
         mutex.Lock()
-        // 判断是否已经存在，如果存在则更新时间，不存在则添加
-        if _, ok := mappings[addrKey]; ok {
-
+        if entry, ok := mappings[addrKey]; ok {
+            entry.lastActive = time.Now()
+            mappings[addrKey] = entry
         } else {
-            log.Printf("Added new mapping: %s", addr.String())
+            log.Printf("New mapping: %s", addr.String())
+            mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
         }
-
-        mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
-
         mutex.Unlock()
 
-        // Forward the packet
         if _, err = forwardConn.Write(buffer[:length]); err != nil {
-            log.Printf("Error forwarding packet: %v", err)
+            log.Printf("Forward write error: %v", err)
         }
-        
-        // Return buffer to the pool
         bufferPool.Put(buffer)
     }
 }
