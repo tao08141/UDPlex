@@ -1,0 +1,104 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # Server builds
+          - project: server
+            goos: linux
+            goarch: amd64
+            suffix: ''
+          - project: server
+            goos: linux
+            goarch: arm64
+            suffix: ''
+          - project: server
+            goos: darwin
+            goarch: amd64
+            suffix: ''
+          - project: server
+            goos: darwin
+            goarch: arm64
+            suffix: ''
+          - project: server
+            goos: windows
+            goarch: amd64
+            suffix: '.exe'
+
+          # Client builds
+          - project: client
+            goos: linux
+            goarch: amd64
+            suffix: ''
+          - project: client
+            goos: linux
+            goarch: arm64
+            suffix: ''
+          - project: client
+            goos: darwin
+            goarch: amd64
+            suffix: ''
+          - project: client
+            goos: darwin
+            goarch: arm64
+            suffix: ''
+          - project: client
+            goos: windows
+            goarch: amd64
+            suffix: '.exe'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Get Version Tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          cd ${{ matrix.project }}
+          OUTPUT_NAME="${{ matrix.project }}-${{ env.TAG }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+          go build -o "$OUTPUT_NAME"
+          echo "BUILT_FILE=$OUTPUT_NAME" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ matrix.project }}/${{ env.BUILT_FILE }}
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          files: |
+            artifacts/**/*
+          body: |
+            Auto-generated release for version ${{ github.ref_name }}
+            Contains both server and client binaries for multiple platforms.
