@@ -1,0 +1,6 @@
+{
+    "listen_addr": 6000,
+    "buffer_size": 1500,
+    "timeout": 120,
+    "forward_addr": "127.0.0.1:6001"
+}
