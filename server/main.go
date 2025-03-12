@@ -58,6 +58,9 @@ func loadConfig(filename string) (*Config, error) {
 }
 
 func main() {
+    // Configure log format
+    log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+
     // Parse command line flags
     configPath := flag.String("config", "config.json", "Path to configuration file")
     flag.Parse()
@@ -182,7 +185,15 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
         // Update mapping with minimal lock time
         addrKey := addr.String()
         mutex.Lock()
+        // 判断是否已经存在，如果存在则更新时间，不存在则添加
+        if _, ok := mappings[addrKey]; ok {
+
+        } else {
+            log.Printf("Added new mapping: %s", addr.String())
+        }
+
         mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
+
         mutex.Unlock()
 
         // Forward the packet

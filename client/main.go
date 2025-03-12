@@ -3,6 +3,7 @@ package main
 import (
     "encoding/json"
     "fmt"
+    "log"
     "net"
     "os"
     "sync"
@@ -11,10 +12,12 @@ import (
 )
 
 type Config struct {
-    ListenAddr string   `json:"listen_addr"`
-    Forwarders []string `json:"forwarders"`
-    BufferSize int      `json:"buffer_size"` // Exported fields for proper JSON unmarshaling
-    QueueSize  int      `json:"queue_size"`
+    ListenAddr          string   `json:"listen_addr"`
+    Forwarders          []string `json:"forwarders"`
+    BufferSize          int      `json:"buffer_size"`
+    QueueSize           int      `json:"queue_size"`
+    ReconnectInterval   int      `json:"reconnect_interval"`    // Seconds between reconnection attempts
+    ConnectionCheckTime int      `json:"connection_check_time"` // Seconds between connection checks
 }
 
 var (
@@ -25,6 +28,7 @@ var (
             return make([]byte, 1500) // Default size, will be adjusted after config is loaded
         },
     }
+    returnAddr atomic.Value // Stores *net.UDPAddr
 )
 
 func loadConfig(filename string) (*Config, error) {
@@ -34,8 +38,10 @@ func loadConfig(filename string) (*Config, error) {
     }
 
     config := &Config{
-        BufferSize: 1500, // Default values
-        QueueSize:  1024,
+        BufferSize:          1500, // Default values
+        QueueSize:           1024,
+        ReconnectInterval:   5,    // Default 5 seconds between reconnect attempts
+        ConnectionCheckTime: 30,   // Default 30 seconds between connection checks
     }
 
     if err := json.Unmarshal(configFile, config); err != nil {
@@ -50,19 +56,24 @@ func loadConfig(filename string) (*Config, error) {
 }
 
 type ForwardConn struct {
-    conn        *net.UDPConn
-    sendQueue   chan []byte
-    isConnected int32 // Atomic flag for connection status
+    conn                *net.UDPConn
+    sendQueue           chan []byte
+    isConnected         int32     // Atomic flag for connection status: 0=disconnected, 1=connected
+    remoteAddr          string    // Store the remote address for reconnection
+    udpAddr             *net.UDPAddr
+    lastReconnectAttempt time.Time
+    reconnectMutex      sync.Mutex
 }
 
 func main() {
+    log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+    
     var err error
     config, err = loadConfig("config.json")
     if err != nil {
-        panic(err)
+        log.Fatalf("Failed to load configuration: %v", err)
     }
 
-    // Update buffer pool size based on config
     bufferPool = sync.Pool{
         New: func() interface{} {
             return make([]byte, config.BufferSize)
@@ -71,61 +82,68 @@ func main() {
 
     listenAddr, err := net.ResolveUDPAddr("udp", config.ListenAddr)
     if err != nil {
-        fmt.Printf("Failed to resolve local address: %v\n", err)
+        log.Printf("Failed to resolve local address: %v", err)
         return
     }
     
     listenConn, err := net.ListenUDP("udp", listenAddr)
     if err != nil {
-        fmt.Printf("Failed to listen on %s: %v\n", config.ListenAddr, err)
+        log.Printf("Failed to listen on %s: %v", config.ListenAddr, err)
         return
     }
     defer listenConn.Close()
 
-    fmt.Printf("Client listening on %s and will forward packets to: %v\n", config.ListenAddr, config.Forwarders)
-    fmt.Printf("BufferSize: %d, QueueSize: %d\n", config.BufferSize, config.QueueSize)
+    log.Printf("Client listening on %s and will forward packets to: %v", config.ListenAddr, config.Forwarders)
+    log.Printf("BufferSize: %d, QueueSize: %d", config.BufferSize, config.QueueSize)
 
     // Pre-initialize connections
     forwardConns := make(map[string]*ForwardConn)
-    var forwardMapMutex sync.RWMutex
+    var forwardConnList []*ForwardConn
 
-    // Setup response handler
-    returnAddrMutex := &sync.RWMutex{}
-    var returnAddr *net.UDPAddr
+    returnAddr.Store((*net.UDPAddr)(nil))
     responseChan := make(chan packetData, config.QueueSize)
 
-    // Response writer goroutine
     go func() {
         for packet := range responseChan {
-            returnAddrMutex.RLock()
-            currentReturnAddr := returnAddr
-            returnAddrMutex.RUnlock()
-            
+            currentReturnAddr := returnAddr.Load().(*net.UDPAddr)
             if currentReturnAddr != nil {
                 listenConn.WriteTo(packet.data, currentReturnAddr)
             }
-            
-            // Return buffer to pool
             bufferPool.Put(packet.buffer)
         }
     }()
 
-    // Initialize forwarders
     for _, addr := range config.Forwarders {
         conn, err := setupForwarder(addr, responseChan)
         if err != nil {
-            fmt.Printf("Failed to initialize forwarder %s: %v\n", addr, err)
+            log.Printf("Failed to initialize forwarder %s: %v", addr, err)
             continue
         }
         forwardConns[addr] = conn
+        forwardConnList = append(forwardConnList, conn)
     }
 
-    // Main packet processing loop
+    go func() {
+        for {
+            time.Sleep(time.Duration(config.ConnectionCheckTime) * time.Second)
+            for _, conn := range forwardConnList {
+                if atomic.LoadInt32(&conn.isConnected) == 0 {
+                    go tryReconnect(conn, responseChan)
+                } else {
+                    select {
+                    case conn.sendQueue <- []byte{0}:
+                    default:
+                    }
+                }
+            }
+        }
+    }()
+
     for {
         buffer := bufferPool.Get().([]byte)
         length, addr, err := listenConn.ReadFromUDP(buffer)
         if err != nil {
-            fmt.Printf("Error reading from UDP: %v\n", err)
+            log.Printf("Error reading from UDP: %v", err)
             bufferPool.Put(buffer)
             continue
         }
@@ -135,36 +153,85 @@ func main() {
             continue
         }
 
-        returnAddrMutex.Lock()
-        returnAddr = addr
-        returnAddrMutex.Unlock()
+        returnAddr.Store(addr)
 
-        // Create a copy of the actual data
         data := make([]byte, length)
         copy(data, buffer[:length])
         
-        // Forward packet to all destinations
-        forwardMapMutex.RLock()
-        for addr, conn := range forwardConns {
+        for _, conn := range forwardConnList {
             if atomic.LoadInt32(&conn.isConnected) == 1 {
                 select {
                 case conn.sendQueue <- data:
-                    // Successfully queued
                 default:
-                    fmt.Printf("Queue full for %s, dropping packet\n", addr)
+                    log.Printf("Queue full for %s, dropping packet", conn.remoteAddr)
                 }
             }
         }
-        forwardMapMutex.RUnlock()
         
-        // Return the read buffer to the pool
         bufferPool.Put(buffer)
     }
 }
 
 type packetData struct {
     data   []byte
-    buffer []byte // Original buffer for returning to pool
+    buffer []byte
+}
+
+func tryReconnect(conn *ForwardConn, responseChan chan<- packetData) {
+    conn.reconnectMutex.Lock()
+    defer conn.reconnectMutex.Unlock()
+
+    if time.Since(conn.lastReconnectAttempt) < time.Duration(config.ReconnectInterval)*time.Second {
+        return
+    }
+    
+    conn.lastReconnectAttempt = time.Now()
+    
+    if conn.conn != nil {
+        conn.conn.Close()
+        conn.conn = nil
+    }
+    
+    log.Printf("Attempting to reconnect to %s", conn.remoteAddr)
+    
+    newConn, err := net.DialUDP("udp", nil, conn.udpAddr)
+    if err != nil {
+        log.Printf("Reconnection to %s failed: %v", conn.remoteAddr, err)
+        return
+    }
+    
+    conn.conn = newConn
+    atomic.StoreInt32(&conn.isConnected, 1)
+    log.Printf("Successfully reconnected to %s", conn.remoteAddr)
+    
+    go readFromForwarder(conn, responseChan)
+}
+
+func readFromForwarder(conn *ForwardConn, responseChan chan<- packetData) {
+    for atomic.LoadInt32(&conn.isConnected) == 1 {
+        buffer := bufferPool.Get().([]byte)
+        conn.conn.SetReadDeadline(time.Now().Add(time.Duration(config.ConnectionCheckTime) * time.Second))
+        length, err := conn.conn.Read(buffer)
+        
+        if err != nil {
+            bufferPool.Put(buffer)
+            if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+                continue
+            }
+            
+            log.Printf("Error reading from %s: %v", conn.remoteAddr, err)
+            atomic.StoreInt32(&conn.isConnected, 0)
+            return
+        }
+        
+        if length > 0 {
+            data := buffer[:length]
+            responseChan <- packetData{data: data, buffer: buffer}
+
+        } else {
+            bufferPool.Put(buffer)
+        }
+    }
 }
 
 func setupForwarder(remoteAddr string, responseChan chan<- packetData) (*ForwardConn, error) {
@@ -179,58 +246,34 @@ func setupForwarder(remoteAddr string, responseChan chan<- packetData) (*Forward
     }
 
     forwardConn := &ForwardConn{
-        conn:        conn,
-        sendQueue:   make(chan []byte, config.QueueSize),
-        isConnected: 1,
+        conn:                conn,
+        sendQueue:           make(chan []byte, config.QueueSize),
+        isConnected:         1,
+        remoteAddr:          remoteAddr,
+        udpAddr:             udpAddr,
+        lastReconnectAttempt: time.Now(),
     }
 
-    // Writer goroutine
     go func() {
         for data := range forwardConn.sendQueue {
-            _, err := conn.Write(data)
+            if atomic.LoadInt32(&forwardConn.isConnected) == 0 {
+                continue
+            }
+            
+            currentConn := forwardConn.conn
+            if currentConn == nil {
+                continue
+            }
+            
+            _, err := currentConn.Write(data)
             if err != nil {
-                fmt.Printf("Error writing to %s: %v\n", remoteAddr, err)
+                log.Printf("Error writing to %s: %v", remoteAddr, err)
                 atomic.StoreInt32(&forwardConn.isConnected, 0)
-                conn.Close()
-                return
             }
         }
     }()
 
-    // Reader goroutine
-    go func() {
-        for atomic.LoadInt32(&forwardConn.isConnected) == 1 {
-            buffer := bufferPool.Get().([]byte)
-            conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-            length, err := conn.Read(buffer)
-            
-            if err != nil {
-                bufferPool.Put(buffer)
-                if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-                    // Just a timeout, continue
-                    continue
-                }
-                
-                fmt.Printf("Error reading from %s: %v\n", remoteAddr, err)
-                atomic.StoreInt32(&forwardConn.isConnected, 0)
-                conn.Close()
-                return
-            }
-            
-            if length > 0 {
-                // Copy data to avoid race conditions
-                data := make([]byte, length)
-                copy(data, buffer[:length])
-                
-                responseChan <- packetData{
-                    data:   data,
-                    buffer: buffer,
-                }
-            } else {
-                bufferPool.Put(buffer)
-            }
-        }
-    }()
+    go readFromForwarder(forwardConn, responseChan)
 
     return forwardConn, nil
 }
