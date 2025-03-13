@@ -130,9 +130,10 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
             for addrString, mapping := range mappings {
                 if now.Sub(mapping.lastActive) > config.Timeout {
                     delete(mappings, addrString)
-                    log.Printf("Removed inactive mapping: %s", mapping.addr.String())
+                    log.Printf("Removed inactive mapping: %s", addrString)
                 }
             }
+
             mutex.Unlock()
         }
     }()
@@ -140,7 +141,6 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
     // Handle responses from forwarded connection
     go func() {
 
-        clientAddrs := make([]net.Addr, 0, 100)
         for {
             buffer := bufferPool.Get().([]byte)
             respLen, _, err := forwardConn.ReadFrom(buffer)
@@ -150,24 +150,26 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
                 continue
             }
 
-            clientAddrs = clientAddrs[:0]       
+            var toDelete []string
             mutex.RLock()
+            responseData := buffer[:respLen]
             for _, mapping := range mappings {
-                clientAddrs = append(clientAddrs, mapping.addr)
+                if _, err = listenConn.WriteTo(responseData, mapping.addr); err != nil {
+                    log.Printf("Response error: %v", err)
+                    toDelete = append(toDelete, mapping.addr.String())
+                }
             }
             mutex.RUnlock()
 
-            responseData := buffer[:respLen]
-            for _, clientAddr := range clientAddrs {
-                if _, err = listenConn.WriteTo(responseData, clientAddr); err != nil {
-                    log.Printf("Response error: %v", err)
-                    mutex.Lock()
-                    delete(mappings, clientAddr.String())
-                    mutex.Unlock()
-                }
-            }
-
             bufferPool.Put(buffer)
+
+            if len(toDelete) > 0 {
+                mutex.Lock()
+                for _, addrStr := range toDelete {
+                    delete(mappings, addrStr)
+                }
+                mutex.Unlock()
+            }
         }
     }()
 
@@ -197,7 +199,7 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
             }
             mutex.Unlock()
         }
-        
+
         activeClients[addrKey] = struct{}{}
         
 
