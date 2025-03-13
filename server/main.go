@@ -105,6 +105,7 @@ func main() {
 
 func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, config *Config) {
     mappings := make(map[string]AddrMapping)
+    activeClients := make(map[string]struct{})
     var mutex sync.RWMutex
 
     go func() {
@@ -115,6 +116,17 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
             now := time.Now()
             
             mutex.Lock()
+            // Process activity markers and update timestamps in batch
+            for addrString := range activeClients {
+                if mapping, exists := mappings[addrString]; exists {
+                    mapping.lastActive = now
+                    mappings[addrString] = mapping
+                }
+            }
+            // Clear activity tracking for next cycle
+            activeClients = make(map[string]struct{})
+            
+            // Remove inactive mappings
             for addrString, mapping := range mappings {
                 if now.Sub(mapping.lastActive) > config.Timeout {
                     delete(mappings, addrString)
@@ -160,7 +172,8 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
     }()
 
 
-    lastCheckTime := time.Now()
+
+    // Handle incoming client packets
     for {
         buffer := bufferPool.Get().([]byte)
         length, addr, err := listenConn.ReadFrom(buffer)
@@ -170,20 +183,23 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
             continue
         }
 
-        // 5s check for inactive mappings
-        if time.Since(lastCheckTime) > 5 * time.Second {
-            lastCheckTime = time.Now()
-            addrKey := addr.String()
+        addrKey := addr.String()
+        
+        mutex.RLock()
+        _, exists := mappings[addrKey]
+        mutex.RUnlock()
+        
+        if !exists {
             mutex.Lock()
-            if entry, ok := mappings[addrKey]; ok {
-                entry.lastActive = time.Now()
-                mappings[addrKey] = entry
-            } else {
+            if _, ok := mappings[addrKey]; !ok {
                 log.Printf("New mapping: %s", addr.String())
                 mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
             }
             mutex.Unlock()
         }
+        
+        activeClients[addrKey] = struct{}{}
+        
 
         if _, err = forwardConn.Write(buffer[:length]); err != nil {
             log.Printf("Forward write error: %v", err)
