@@ -140,23 +140,20 @@ func main() {
     }()
 
     for {
-        buffer := bufferPool.Get().([]byte)
+        buffer := make([]byte, config.BufferSize)
         length, addr, err := listenConn.ReadFromUDP(buffer)
         if err != nil {
             log.Printf("Error reading from UDP: %v", err)
-            bufferPool.Put(buffer)
             continue
         }
 
         if length == 0 {
-            bufferPool.Put(buffer)
             continue
         }
 
         returnAddr.Store(addr)
 
-        data := make([]byte, length)
-        copy(data, buffer[:length])
+        data := buffer[:length]
         
         for _, conn := range forwardConnList {
             if atomic.LoadInt32(&conn.isConnected) == 1 {
@@ -167,8 +164,6 @@ func main() {
                 }
             }
         }
-        
-        bufferPool.Put(buffer)
     }
 }
 
