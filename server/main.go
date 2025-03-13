@@ -31,11 +31,6 @@ var (
             return make([]byte, 1500)
         },
     }
-    slicePool = sync.Pool{
-        New: func() interface{} {
-            return make([]net.Addr, 0, 100)
-        },
-    }
 )
 
 func loadConfig(filename string) (*Config, error) {
@@ -132,6 +127,8 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
 
     // Handle responses from forwarded connection
     go func() {
+
+        clientAddrs := make([]net.Addr, 0, 100)
         for {
             buffer := bufferPool.Get().([]byte)
             respLen, _, err := forwardConn.ReadFrom(buffer)
@@ -141,8 +138,7 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
                 continue
             }
 
-            clientAddrs := slicePool.Get().([]net.Addr)
-            clientAddrs = clientAddrs[:0]
+            clientAddrs = clientAddrs[:0]       
             mutex.RLock()
             for _, mapping := range mappings {
                 clientAddrs = append(clientAddrs, mapping.addr)
@@ -159,7 +155,6 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
                 }
             }
 
-            slicePool.Put(clientAddrs)
             bufferPool.Put(buffer)
         }
     }()
