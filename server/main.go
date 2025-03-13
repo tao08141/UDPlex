@@ -159,7 +159,8 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
         }
     }()
 
-    // Handle incoming client packets
+
+    lastCheckTime := time.Now()
     for {
         buffer := bufferPool.Get().([]byte)
         length, addr, err := listenConn.ReadFrom(buffer)
@@ -169,16 +170,20 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
             continue
         }
 
-        addrKey := addr.String()
-        mutex.Lock()
-        if entry, ok := mappings[addrKey]; ok {
-            entry.lastActive = time.Now()
-            mappings[addrKey] = entry
-        } else {
-            log.Printf("New mapping: %s", addr.String())
-            mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
+        // 5s check for inactive mappings
+        if time.Since(lastCheckTime) > 5 * time.Second {
+            lastCheckTime = time.Now()
+            addrKey := addr.String()
+            mutex.Lock()
+            if entry, ok := mappings[addrKey]; ok {
+                entry.lastActive = time.Now()
+                mappings[addrKey] = entry
+            } else {
+                log.Printf("New mapping: %s", addr.String())
+                mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
+            }
+            mutex.Unlock()
         }
-        mutex.Unlock()
 
         if _, err = forwardConn.Write(buffer[:length]); err != nil {
             log.Printf("Forward write error: %v", err)
