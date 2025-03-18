@@ -33,7 +33,7 @@
     ],
     "queue_size": 1024,               // 处理队列容量
     "buffer_size": 1500,              // 数据包缓冲区大小
-    "reconnect_interval": 5,         // 连接重试间隔（秒）
+    "reconnect_interval": 5,          // 连接重试间隔（秒）
     "connection_check_time": 30       // 连接健康检查间隔（秒）
 }
 ```
@@ -61,10 +61,11 @@
 ### 配置文件说明 (`config.json`)
 ```json
 {
-    "listen_addr": "0.0.0.0:6000",   // 监听地址（服务端入口）
-    "buffer_size": 1500,             // 数据包缓冲区大小
-    "timeout": 300,                  // 客户端超时时间（秒）（5分钟=300）
-    "forward_addr": "127.0.0.1:6001" // 唯一转发目标地址
+    "listen_addr": "0.0.0.0:6000",    // 监听地址（服务端入口）
+    "buffer_size": 1500,              // 数据包缓冲区大小
+    "timeout": 300,                   // 客户端超时时间（秒）（5分钟=300）
+    "forward_addr": "127.0.0.1:6001", // 唯一转发目标地址
+    "replace_old_conns": true         // 当出现相同ip时是否替换旧连接
 }
 ```
 

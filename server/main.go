@@ -18,11 +18,12 @@ type AddrMapping struct {
 }
 
 type Config struct {
-    ListenAddr  string `json:"listen_addr"`
-    ForwardAddr string `json:"forward_addr"`
-    BufferSize  int    `json:"buffer_size"`
-    TimeoutSec  int    `json:"timeout"`
-    Timeout     time.Duration `json:"-"`
+    ListenAddr      string        `json:"listen_addr"`
+    ForwardAddr     string        `json:"forward_addr"`
+    BufferSize      int           `json:"buffer_size"`
+    TimeoutSec      int           `json:"timeout"`
+    Timeout         time.Duration `json:"-"`
+    ReplaceOldConns bool          `json:"replace_old_conns"`
 }
 
 var (
@@ -193,6 +194,25 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
         
         if !exists {
             mutex.Lock()
+
+            if config.ReplaceOldConns {
+                addrIP := addr.(*net.UDPAddr).IP.String()
+                
+                for key, mapping := range mappings {
+                    if mapping.addr.(*net.UDPAddr).IP.String() == addrIP {
+                        log.Printf("Replacing old mapping: %s", mapping.addr.String())
+                        delete(mappings, key)
+                    }
+                }
+
+                
+                if _, exists := mappings[addrKey]; !exists {
+                    log.Printf("New mapping: %s", addr.String())
+                }
+                mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
+            }
+
+
             if _, ok := mappings[addrKey]; !ok {
                 log.Printf("New mapping: %s", addr.String())
                 mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
