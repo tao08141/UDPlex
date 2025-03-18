@@ -60,7 +60,8 @@ func loadConfig(filename string) (*Config, error) {
 
 func main() {
     log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
-    configPath := flag.String("config", "config.json", "Path to configuration file")
+
+    configPath := flag.String("c", "config.json", "Path to configuration file")
     flag.Parse()
 
     // Load configuration

@@ -85,12 +85,11 @@
 
 ### 运行命令
 ```bash
-# 启动Client，config.json为配置文件
-./client
+# 启动Client
+./client -c ./config.json
 
-# 启动Server，config.json为配置文件
-./server
+# 启动Server
+./server -c ./config.json
 ```
-
 
 ---

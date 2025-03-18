@@ -68,8 +68,11 @@ type ForwardConn struct {
 func main() {
     log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
     
+    configPath := flag.String("c", "config.json", "path to configuration file")
+    flag.Parse()
+    
     var err error
-    config, err = loadConfig("config.json")
+    config, err = loadConfig(*configPath)
     if err != nil {
         log.Fatalf("Failed to load configuration: %v", err)
     }
