@@ -204,14 +204,7 @@ func handleServerPackets(listenConn net.PacketConn, forwardConn *net.UDPConn, co
                         delete(mappings, key)
                     }
                 }
-
-                
-                if _, exists := mappings[addrKey]; !exists {
-                    log.Printf("New mapping: %s", addr.String())
-                }
-                mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
             }
-
 
             if _, ok := mappings[addrKey]; !ok {
                 log.Printf("New mapping: %s", addr.String())
