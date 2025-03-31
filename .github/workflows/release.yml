@@ -79,7 +79,7 @@ jobs:
           tag_name: ${{ github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
           files: |
-            artifacts/*
+            artifacts/**/*
           body: |
             Auto-generated release for version ${{ github.ref_name }}
             Contains both server and client binaries for multiple platforms.
