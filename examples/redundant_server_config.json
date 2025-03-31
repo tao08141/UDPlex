@@ -1,0 +1,27 @@
+[
+    {
+        "type": "listen",
+        "tag": "server_listen",
+        "listen_addr": "0.0.0.0:9000",
+        "buffer_size": 1500,
+        "timeout": 120,
+        "replace_old_conns": true,
+        "detour": [
+            "server_forward"
+        ]
+    },
+    {
+        "type": "forward",
+        "tag": "server_forward",
+        "forwarders": [
+            "127.0.0.1:3000"
+        ],
+        "queue_size": 1024,
+        "buffer_size": 1500,
+        "reconnect_interval": 5,
+        "connection_check_time": 30,
+        "detour": [
+            "server_listen"
+        ]
+    }
+]
