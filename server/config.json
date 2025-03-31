@@ -1,8 +1,0 @@
-{
-    "listen_addr": "0.0.0.0:6000",
-    "buffer_size": 1500,
-    "timeout": 120,
-    "forward_addr": "127.0.0.1:6001",
-    "replace_old_conns": true
-
-}

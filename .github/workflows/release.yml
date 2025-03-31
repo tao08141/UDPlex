@@ -13,48 +13,27 @@ jobs:
       matrix:
         include:
           # Server builds
-          - project: server
+          - project: double_udp
             goos: linux
             goarch: amd64
             suffix: ''
-          - project: server
+          - project: double_udp
             goos: linux
             goarch: arm64
             suffix: ''
-          - project: server
+          - project: double_udp
             goos: darwin
             goarch: amd64
             suffix: ''
-          - project: server
+          - project: double_udp
             goos: darwin
             goarch: arm64
             suffix: ''
-          - project: server
+          - project: double_udp
             goos: windows
             goarch: amd64
             suffix: '.exe'
 
-          # Client builds
-          - project: client
-            goos: linux
-            goarch: amd64
-            suffix: ''
-          - project: client
-            goos: linux
-            goarch: arm64
-            suffix: ''
-          - project: client
-            goos: darwin
-            goarch: amd64
-            suffix: ''
-          - project: client
-            goos: darwin
-            goarch: arm64
-            suffix: ''
-          - project: client
-            goos: windows
-            goarch: amd64
-            suffix: '.exe'
 
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +51,6 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          cd ${{ matrix.project }}
           OUTPUT_NAME="${{ matrix.project }}-${{ env.TAG }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
           go build -o "$OUTPUT_NAME"
           echo "BUILT_FILE=$OUTPUT_NAME" >> $GITHUB_ENV

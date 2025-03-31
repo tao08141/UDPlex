@@ -1,95 +1,99 @@
-# UDP 转发工具套件
+Double UDP 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量同时转发到多个目标服务器，并能处理返回流量。
 
-## 介绍
-本项目主打大力出奇迹，没有处理重传，适合用来转发WireGuard的数据包。
+## 功能特点
 
-## 概述
-本工具包含两个独立的UDP转发程序，分别实现不同的网络数据中转场景：
+- 监听指定 UDP 端口接收数据包
+- 将数据包并行转发到多个目标服务器
+- 支持双向流量转发
+- 自动重连断开的连接
+- 可配置的缓冲区大小和超时参数
+- 简单的 JSON 配置文件
 
-1. **Client** - 多路分发代理  
-   监听指定端口，将接收到的数据同时转发到多个目标地址，并支持双向数据回传。
+## 安装
 
-2. **Server** - 聚合转发服务  
-   聚合来自多个客户端的数据，统一转发到单个目标地址，并实现响应数据广播和连接状态维护。
+```bash
+git clone https://github.com/yourusername/double_udp.git
+cd double_udp
+go build
+```
 
----
+## 使用方法
 
-## Client 程序
+1. 编辑 config.json 文件配置监听地址和转发目标
+2. 运行程序：
 
-### 功能特性
-- 从指定UDP端口监听接收数据
-- 支持同时向多个目标地址转发数据
-- 自动维护转发连接状态
-- 支持双向数据回传（转发响应返回原始发送方）
-- 可配置连接重试和健康检查
+```bash
+# 使用默认配置文件
+./double_udp
 
-### 配置文件说明 (`config.json`)
+# 或指定配置文件路径
+./double_udp -c /path/to/config.json
+```
+
+## 配置说明
+
+配置文件使用 JSON 格式，包含多个组件配置：
+
+### 监听组件 (listen)
+
 ```json
 {
-    "listen_addr": "127.0.0.1:10001",  // 监听地址（客户端入口）
-    "forwarders": [                    // 转发目标地址列表
+    "type": "listen",
+    "tag": "client_listen",
+    "listen_addr": "0.0.0.0:6000",
+    "buffer_size": 1500,
+    "timeout": 120,
+    "replace_old_conns": true,
+    "detour": [
+        "client_forward"
+    ]
+}
+```
+
+### 转发组件 (forward)
+
+```json
+{
+    "type": "forward",
+    "tag": "client_forward",
+    "forwarders": [
         "a.com:1111",
         "b.com:2222"
     ],
-    "queue_size": 1024,               // 处理队列容量
-    "buffer_size": 1500,              // 数据包缓冲区大小
-    "reconnect_interval": 5,          // 连接重试间隔（秒）
-    "connection_check_time": 30       // 连接健康检查间隔（秒）
+    "queue_size": 1024,
+    "buffer_size": 1500,
+    "reconnect_interval": 5,
+    "connection_check_time": 30,
+    "detour": [
+        "client_listen"
+    ]
 }
 ```
 
-### 数据流向
-```
-发送方 -> [Client监听端口] 
-        ├─> 目标地址1
-        └─> 目标地址2
-        
-目标地址响应 -> [Client监听端口] -> 原发送方
-```
+## 参数详解
 
----
+| 参数 | 说明 |
+|------|------|
+| `type` | 组件类型: `listen` 或 `forward` |
+| `tag` | 组件唯一标识 |
+| `listen_addr` | 监听地址和端口 (仅 listen 组件) |
+| `buffer_size` | 数据包缓冲区大小 (字节) |
+| `timeout` | 连接超时时间 (秒) |
+| `replace_old_conns` | 是否替换旧连接 (仅 listen 组件)  |
+| `forwarders` | 转发目标地址列表 (仅 forward 组件) |
+| `queue_size` | 队列大小 (仅 forward 组件) |
+| `reconnect_interval` | 重连间隔时间 (秒) |
+| `connection_check_time` | 连接检查间隔 (秒) |
+| `detour` | 转发路径，指定接收返回数据的组件 |
 
-## Server 程序
+## 使用场景
 
-### 功能特性
-- 接收来自多个客户端的UDP数据
-- 统一转发到单个目标地址
-- 自动维护客户端地址列表
-- 支持响应数据广播
-- 自动清理闲置连接（5分钟无活动）
+- 游戏加速：将游戏流量同时转发到多个服务器，选择最快的响应
+- 网络冗余：确保重要的 UDP 数据能通过多条路径传输
+- 流量分流：将 UDP 流量复制到多个目标进行处理
 
-### 配置文件说明 (`config.json`)
-```json
-{
-    "listen_addr": "0.0.0.0:6000",    // 监听地址（服务端入口）
-    "buffer_size": 1500,              // 数据包缓冲区大小
-    "timeout": 300,                   // 客户端超时时间（秒）（5分钟=300）
-    "forward_addr": "127.0.0.1:6001", // 唯一转发目标地址
-    "replace_old_conns": true         // 当出现相同ip时是否替换旧连接
-}
-```
+## 注意事项
 
-### 数据流向
-```
-客户端A -> [Server监听端口] -> 目标地址
-客户端B -> [Server监听端口] ↗
-
-目标地址响应 -> [Server监听端口] 
-            ├─> 客户端A
-            └─> 客户端B
-```
-
----
-
-## 使用指南
-
-### 运行命令
-```bash
-# 启动Client
-./client -c ./config.json
-
-# 启动Server
-./server -c ./config.json
-```
-
----
+- 确保监听端口在防火墙中已开放
+- 转发目标服务器需要能够正确处理转发来的 UDP 数据包
+- 对于高流量场景，请适当调整 `buffer_size` 和 `queue_size` 参数
