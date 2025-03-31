@@ -59,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.project }}-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ matrix.project }}/${{ env.BUILT_FILE }}
+          path: ${{ env.BUILT_FILE }}
 
   release:
     name: Create Release
