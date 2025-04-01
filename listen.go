@@ -141,10 +141,6 @@ func (l *ListenComponent) handlePackets() {
 				continue
 			}
 
-			if length == 0 {
-				continue
-			}
-
 			addrKey := addr.String()
 
 			// Check if this is a new mapping

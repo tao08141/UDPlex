@@ -83,6 +83,7 @@ go build
 | `connection_check_time` | 连接检查间隔 (秒)  (仅 forward 组件) |
 | `detour` | 转发路径，指定接收返回数据的组件 |
 
+
 ## 使用场景
 
 - 游戏加速：将游戏流量同时转发到多个服务器，选择最快的响应
@@ -94,3 +95,24 @@ go build
 - 确保监听端口在防火墙中已开放
 - 转发目标服务器需要能够正确处理转发来的 UDP 数据包
 - 对于高流量场景，请适当调整 `buffer_size` 和 `queue_size` 参数
+
+
+## 目录结构
+
+### 核心文件
+
+- **main.go** - 程序入口点，包含配置解析、组件路由系统和主函数
+- **packe.go** - 定义数据包结构体(Packet)，用于在组件间传递UDP数据
+- **listen.go** - 实现监听组件(ListenComponent)，负责监听UDP端口接收数据包
+- **forward.go** - 实现转发组件(ForwardComponent)，负责将数据包转发到目标服务器
+- **config.json** - 主配置文件，定义系统监听地址和转发目标
+- **go.mod** - Go模块定义文件
+
+### 配置示例
+
+examples目录包含多种使用场景的配置示例：
+
+- **redundant_client_config.json** - 冗余客户端配置，将流量同时发送到多个服务器
+- **redundant_server_config.json** - 冗余服务端配置，接收客户端流量并转发
+- **bidirectional_client_config.json** - 上下行分离通信客户端配置
+- **bidirectional_server_config.json** - 上下行分离通信服务端配置

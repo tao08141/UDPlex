@@ -1,0 +1,38 @@
+{
+    "buffer_size": 1500,
+    "services":[
+        {
+            "type": "listen",
+            "tag": "server_listen_down",
+            "listen_addr": "0.0.0.0:9000",
+            "timeout": 120,
+            "replace_old_conns": true,
+            "detour": [
+                "server_forward"
+            ]
+        },
+        {
+            "type": "listen",
+            "tag": "server_listen_up",
+            "listen_addr": "0.0.0.0:9001",
+            "timeout": 120,
+            "replace_old_conns": true,
+            "detour": [
+                "server_forward"
+            ]
+        },
+        {
+            "type": "forward",
+            "tag": "server_forward",
+            "forwarders": [
+                "127.0.0.1:51866"
+            ],
+            "queue_size": 1024,
+            "reconnect_interval": 5,
+            "connection_check_time": 30,
+            "detour": [
+                "server_listen_up"
+            ]
+        }
+    ]
+}
