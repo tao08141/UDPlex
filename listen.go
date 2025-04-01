@@ -131,7 +131,7 @@ func (l *ListenComponent) handlePackets() {
 		case <-l.stopCh:
 			return
 		default:
-			buffer := l.router.bufferPool.Get().([]byte)
+			buffer := l.router.GetBuffer()
 			length, addr, err := l.conn.ReadFrom(buffer)
 			if err != nil {
 				if l.stopped {
@@ -207,6 +207,6 @@ func (l *ListenComponent) HandlePacket(packet Packet) error {
 		}
 	}
 
-	l.router.bufferPool.Put(packet.buffer)
+	l.router.PutBuffer(packet.buffer)
 	return nil
 }

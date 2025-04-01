@@ -53,10 +53,21 @@ func NewRouter(config Config) *Router {
 		components: make(map[string]Component),
 		bufferPool: sync.Pool{
 			New: func() any {
-				return make([]byte, config.BufferSize)
+				buf := make([]byte, config.BufferSize)
+				return &buf // Return pointer to slice
 			},
 		},
 	}
+}
+
+// GetBuffer retrieves a buffer from the pool
+func (r *Router) GetBuffer() []byte {
+	return *(r.bufferPool.Get().(*[]byte))
+}
+
+// PutBuffer returns a buffer to the pool
+func (r *Router) PutBuffer(buf []byte) {
+	r.bufferPool.Put(&buf)
 }
 
 // Register adds a component to the router

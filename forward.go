@@ -229,9 +229,8 @@ func (f *ForwardComponent) sendRoutine(conn *ForwardConn) {
 				atomic.StoreInt32(&conn.isConnected, 0)
 			}
 
-			atomic.AddInt32(&packet.count, -1)
-			if atomic.LoadInt32(&packet.count) == 0 {
-				f.router.bufferPool.Put(packet.buffer)
+			if atomic.AddInt32(&packet.count, -1) == 0 {
+				f.router.PutBuffer(packet.buffer)
 			}
 
 		}
@@ -247,7 +246,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 			return
 		default:
 			conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
-			buffer := f.router.bufferPool.Get().([]byte)
+			buffer := f.router.GetBuffer()
 			length, err := conn.conn.Read(buffer)
 
 			if err != nil {
