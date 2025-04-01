@@ -1,0 +1,28 @@
+{
+    "buffer_size": 65535,
+    "services":[
+        {
+            "type": "listen",
+            "tag": "client_listen",
+            "listen_addr": "0.0.0.0:5202",
+            "timeout": 120,
+            "replace_old_conns": true,
+            "detour": [
+                "client_forward"
+            ]
+        },
+        {
+            "type": "forward",
+            "tag": "client_forward",
+            "forwarders": [
+                "127.0.0.1:5201"
+            ],
+            "queue_size": 10240,
+            "reconnect_interval": 5,
+            "connection_check_time": 30,
+            "detour": [
+                "client_listen"
+            ]
+        }
+    ]
+}

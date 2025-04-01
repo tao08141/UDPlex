@@ -112,7 +112,8 @@ go build
 
 examples目录包含多种使用场景的配置示例：
 
-- **redundant_client_config.json** - 冗余客户端配置，将流量同时发送到多个服务器
-- **redundant_server_config.json** - 冗余服务端配置，接收客户端流量并转发
-- **bidirectional_client_config.json** - 上下行分离通信客户端配置
-- **bidirectional_server_config.json** - 上下行分离通信服务端配置
+- **basic.json** - UDP转发的基本配置示例
+- **redundant_client_config.json** - UDP冗余客户端配置，将流量同时发送到多个服务器
+- **redundant_server_config.json** - UDP冗余服务端配置，接收客户端流量并转发
+- **bidirectional_client_config.json** - UDP上下行分离通信客户端配置
+- **bidirectional_server_config.json** - UDP上下行分离通信服务端配置
