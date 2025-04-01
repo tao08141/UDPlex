@@ -12,7 +12,7 @@ Double UDP 是一个高效的 UDP 数据包双向转发工具，支持将 UDP �
 ## 安装
 
 ```bash
-git clone https://github.com/yourusername/double_udp.git
+git clone https://github.com/tao08141/double_udp.git
 cd double_udp
 go build
 ```
