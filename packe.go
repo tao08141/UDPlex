@@ -7,4 +7,5 @@ type Packet struct {
 	length  int
 	srcAddr net.Addr
 	srcTag  string
+	count   int32
 }

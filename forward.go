@@ -12,6 +12,7 @@ import (
 // ForwardConn represents a connection to a forwarder
 type ForwardConn struct {
 	conn                 *net.UDPConn
+	sendQueue            chan Packet
 	isConnected          int32 // Atomic flag: 0=disconnected, 1=connected
 	remoteAddr           string
 	udpAddr              *net.UDPAddr
@@ -23,22 +24,26 @@ type ForwardConn struct {
 type ForwardComponent struct {
 	tag                 string
 	forwarders          []string
+	bufferSize          int
 	queueSize           int
 	reconnectInterval   time.Duration
 	connectionCheckTime time.Duration
 	detour              []string
-	bufferSize          int
 
 	router          *Router
 	forwardConns    map[string]*ForwardConn
 	forwardConnList []*ForwardConn
 	stopCh          chan struct{}
 	stopped         bool
-	sendQueue       chan Packet
 }
 
 // NewForwardComponent creates a new forward component
 func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent {
+	bufferSize := cfg.BufferSize
+	if bufferSize <= 0 {
+		bufferSize = 1500 // Default buffer size
+	}
+
 	queueSize := cfg.QueueSize
 	if queueSize <= 0 {
 		queueSize = 1024 // Default queue size
@@ -57,15 +62,14 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 	return &ForwardComponent{
 		tag:                 cfg.Tag,
 		forwarders:          cfg.Forwarders,
+		bufferSize:          bufferSize,
 		queueSize:           queueSize,
 		reconnectInterval:   reconnectInterval,
 		connectionCheckTime: connectionCheckTime,
 		detour:              cfg.Detour,
-		bufferSize:          cfg.BufferSize,
 		router:              router,
 		forwardConns:        make(map[string]*ForwardConn),
 		stopCh:              make(chan struct{}),
-		sendQueue:           make(chan Packet, queueSize),
 	}
 }
 
@@ -87,9 +91,6 @@ func (f *ForwardComponent) Start() error {
 		f.forwardConnList = append(f.forwardConnList, conn)
 	}
 
-	// Start goroutine to handle sending packets
-	go f.sendRoutine()
-
 	// Start connection checker routine
 	go f.connectionChecker()
 
@@ -104,12 +105,12 @@ func (f *ForwardComponent) Stop() error {
 
 	f.stopped = true
 	close(f.stopCh)
-	close(f.sendQueue)
 
 	for _, conn := range f.forwardConnList {
 		if conn.conn != nil {
 			conn.conn.Close()
 		}
+		close(conn.sendQueue)
 	}
 
 	return nil
@@ -129,7 +130,12 @@ func (f *ForwardComponent) connectionChecker() {
 				if atomic.LoadInt32(&conn.isConnected) == 0 {
 					go f.tryReconnect(conn)
 				} else {
-					conn.conn.Write([]byte{0})
+					// Send keepalive
+					select {
+					case conn.sendQueue <- Packet{buffer: []byte{0}, length: 0}:
+					default:
+						// Queue is full, skip keepalive
+					}
 				}
 			}
 		}
@@ -150,11 +156,15 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 
 	forwardConn := &ForwardConn{
 		conn:                 conn,
+		sendQueue:            make(chan Packet, f.queueSize),
 		isConnected:          1,
 		remoteAddr:           remoteAddr,
 		udpAddr:              udpAddr,
 		lastReconnectAttempt: time.Now(),
 	}
+
+	// Start goroutine to handle sending packets
+	go f.sendRoutine(forwardConn)
 
 	// Start goroutine to handle receiving packets
 	go f.readFromForwarder(forwardConn)
@@ -199,37 +209,30 @@ func (f *ForwardComponent) sendRoutine(conn *ForwardConn) {
 		select {
 		case <-f.stopCh:
 			return
-		case packet, ok := <-f.sendQueue:
+		case packet, ok := <-conn.sendQueue:
 			if !ok {
 				return // Channel closed
 			}
 
-			data := packet.buffer[:packet.length]
-			// Process data for each packet
-
-			for _, conn := range f.forwardConns {
-				if conn == nil {
-					continue
-				}
-
-				if atomic.LoadInt32(&conn.isConnected) == 0 {
-					continue
-				}
-
-				currentConn := conn.conn
-				if currentConn == nil {
-					continue
-				}
-
-				_, err := currentConn.Write(data)
-				if err != nil {
-					log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
-					atomic.StoreInt32(&conn.isConnected, 0)
-				}
-
+			if atomic.LoadInt32(&conn.isConnected) == 0 {
+				continue
 			}
-			// Release the buffer back to the pool
-			f.router.bufferPool.Put(packet.buffer)
+
+			currentConn := conn.conn
+			if currentConn == nil {
+				continue
+			}
+
+			_, err := currentConn.Write(packet.buffer[:packet.length])
+			if err != nil {
+				log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
+				atomic.StoreInt32(&conn.isConnected, 0)
+			}
+
+			atomic.AddInt32(&packet.count, -1)
+			if atomic.LoadInt32(&packet.count) == 0 {
+				f.router.bufferPool.Put(packet.buffer)
+			}
 
 		}
 	}
@@ -237,8 +240,6 @@ func (f *ForwardComponent) sendRoutine(conn *ForwardConn) {
 
 // readFromForwarder handles receiving packets from a forwarder
 func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
-	buffer := f.router.bufferPool.Get().([]byte)
-	defer f.router.bufferPool.Put(buffer)
 
 	for atomic.LoadInt32(&conn.isConnected) == 1 {
 		select {
@@ -246,6 +247,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 			return
 		default:
 			conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
+			buffer := f.router.bufferPool.Get().([]byte)
 			length, err := conn.conn.Read(buffer)
 
 			if err != nil {
@@ -265,6 +267,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 					length:  length,
 					srcAddr: conn.udpAddr,
 					srcTag:  f.tag,
+					count:   0,
 				}
 
 				// Forward to detour components
@@ -279,12 +282,17 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 // HandlePacket processes packets from other components
 func (f *ForwardComponent) HandlePacket(packet Packet) error {
 	// Forward the packet to all connected forwarders
+	packet.count = int32(len(f.forwardConnList))
 
-	select {
-	case f.sendQueue <- packet:
-		// Successfully queued
-	default:
-		log.Printf("%s: Queue full, dropping packet", f.tag)
+	for _, conn := range f.forwardConnList {
+		if atomic.LoadInt32(&conn.isConnected) == 1 {
+			select {
+			case conn.sendQueue <- packet:
+				// Successfully queued
+			default:
+				log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+			}
+		}
 	}
 
 	return nil
