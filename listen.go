@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"maps"
 	"net"
-	"sync"
 	"time"
 )
 
@@ -23,13 +23,12 @@ type ListenComponent struct {
 	replaceOldConns bool
 	detour          []string
 
-	conn          net.PacketConn
-	router        *Router
-	mappings      map[string]AddrMapping
-	activeClients map[string]struct{}
-	mu            sync.RWMutex
-	stopCh        chan struct{}
-	stopped       bool
+	conn         net.PacketConn
+	router       *Router
+	mappings     map[string]*AddrMapping
+	mappingsRead *map[string]*AddrMapping
+	stopCh       chan struct{}
+	stopped      bool
 }
 
 // NewListenComponent creates a new listen component
@@ -46,8 +45,8 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		replaceOldConns: cfg.ReplaceOldConns,
 		detour:          cfg.Detour,
 		router:          router,
-		mappings:        make(map[string]AddrMapping),
-		activeClients:   make(map[string]struct{}),
+		mappings:        make(map[string]*AddrMapping),
+		mappingsRead:    &map[string]*AddrMapping{},
 		stopCh:          make(chan struct{}),
 	}
 }
@@ -67,10 +66,7 @@ func (l *ListenComponent) Start() error {
 	l.conn = conn
 	log.Printf("%s is listening on %s", l.tag, conn.LocalAddr())
 
-	// Start the cleanup goroutine
-	go l.cleanupRoutine()
-
-	// Start packet handling routine
+	// Start packet handling routine (which now also handles cleanup)
 	go l.handlePackets()
 
 	return nil
@@ -87,70 +83,79 @@ func (l *ListenComponent) Stop() error {
 	return l.conn.Close()
 }
 
-// cleanupRoutine periodically cleans up inactive mappings
-func (l *ListenComponent) cleanupRoutine() {
-	ticker := time.NewTicker(l.timeout / 2)
-	defer ticker.Stop()
+// performCleanup handles the cleaning of inactive mappings
+func (l *ListenComponent) performCleanup() {
+	now := time.Now()
 
-	for {
-		select {
-		case <-l.stopCh:
-			return
-		case <-ticker.C:
-			now := time.Now()
+	isSync := false
 
-			l.mu.Lock()
-			// Process activity markers and update timestamps
-			for addrString := range l.activeClients {
-				if mapping, exists := l.mappings[addrString]; exists {
-					mapping.lastActive = now
-					l.mappings[addrString] = mapping
-				}
-			}
-
-			// Clear activity tracking for next cycle
-			l.activeClients = make(map[string]struct{})
-
-			// Remove inactive mappings
-			for addrString, mapping := range l.mappings {
-				if now.Sub(mapping.lastActive) > l.timeout {
-					delete(l.mappings, addrString)
-					log.Printf("%s: Removed inactive mapping: %s", l.tag, addrString)
-				}
-			}
-			l.mu.Unlock()
+	// Remove inactive mappings
+	for addrString, mapping := range l.mappings {
+		if now.Sub(mapping.lastActive) > l.timeout {
+			delete(l.mappings, addrString)
+			isSync = true
+			log.Printf("%s: Removed inactive mapping: %s", l.tag, addrString)
 		}
+	}
+
+	if isSync {
+		l.syncMapping()
 	}
 }
 
-// handlePackets processes incoming UDP packets
+func (l *ListenComponent) syncMapping() error {
+	mappingsTemp := make(map[string]*AddrMapping)
+
+	maps.Copy(mappingsTemp, l.mappings)
+
+	l.mappingsRead = &mappingsTemp
+
+	return nil
+}
+
+// handlePackets processes incoming UDP packets and handles cleanup
 func (l *ListenComponent) handlePackets() {
+	cleanupInterval := l.timeout / 2
+	lastCleanupTime := time.Now()
+	shortDeadline := min(time.Second*5, cleanupInterval)
 
 	for {
 		select {
 		case <-l.stopCh:
 			return
 		default:
+			// Check if it's time to do cleanup
+			now := time.Now()
+			if now.Sub(lastCleanupTime) >= cleanupInterval {
+				l.performCleanup()
+				lastCleanupTime = now
+			}
+
+			// Set a shorter read deadline to ensure we check for cleanup regularly
+			if err := l.conn.SetReadDeadline(time.Now().Add(shortDeadline)); err != nil {
+				log.Printf("%s: Error setting read deadline: %v", l.tag, err)
+			}
+
 			buffer := l.router.GetBuffer()
 			length, addr, err := l.conn.ReadFrom(buffer)
-			if err != nil {
+
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// Just a read timeout - continue the loop to check if cleanup is needed
+				l.router.PutBuffer(buffer)
+				continue
+			} else if err != nil {
 				if l.stopped {
 					return
 				}
 				log.Printf("%s: Read error: %v", l.tag, err)
+				l.router.PutBuffer(buffer)
 				continue
 			}
 
 			addrKey := addr.String()
 
 			// Check if this is a new mapping
-			l.mu.RLock()
-			_, exists := l.mappings[addrKey]
-			l.mu.RUnlock()
-
-			if !exists {
-				l.mu.Lock()
-
+			if _, exists := l.mappings[addrKey]; !exists {
 				// If we should replace old connections with the same IP
 				if l.replaceOldConns {
 					addrIP := addr.(*net.UDPAddr).IP.String()
@@ -164,14 +169,13 @@ func (l *ListenComponent) handlePackets() {
 				}
 
 				// Add the new mapping
-				if _, ok := l.mappings[addrKey]; !ok {
-					log.Printf("%s: New mapping: %s", l.tag, addr.String())
-					l.mappings[addrKey] = AddrMapping{addr: addr, lastActive: time.Now()}
-				}
-				l.mu.Unlock()
+				log.Printf("%s: New mapping: %s", l.tag, addr.String())
+				l.mappings[addrKey] = &AddrMapping{addr: addr, lastActive: time.Now()}
+				l.syncMapping()
+			} else {
+				// Update the last active time for existing mapping
+				l.mappings[addrKey].lastActive = time.Now()
 			}
-
-			l.activeClients[addrKey] = struct{}{}
 
 			packet := Packet{
 				buffer:  buffer,
@@ -190,16 +194,13 @@ func (l *ListenComponent) handlePackets() {
 
 // HandlePacket processes packets from other components
 func (l *ListenComponent) HandlePacket(packet Packet) error {
-	// When receiving from another component, broadcast to all known mappings
-	l.mu.RLock()
-	defer l.mu.RUnlock()
 
 	data := packet.buffer[:packet.length]
+	mappings := *l.mappingsRead
 
-	for _, mapping := range l.mappings {
+	for _, mapping := range mappings {
 		if _, err := l.conn.WriteTo(data, mapping.addr); err != nil {
 			log.Printf("%s: Error writing to %s: %v", l.tag, mapping.addr, err)
-			// We don't remove mappings here to avoid map changes during iteration
 		}
 	}
 

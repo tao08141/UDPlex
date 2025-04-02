@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -17,7 +16,6 @@ type ForwardConn struct {
 	remoteAddr           string
 	udpAddr              *net.UDPAddr
 	lastReconnectAttempt time.Time
-	reconnectMutex       sync.Mutex
 }
 
 // ForwardComponent implements a UDP forwarder
@@ -174,9 +172,6 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 
 // tryReconnect attempts to reconnect to a forwarder
 func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
-	conn.reconnectMutex.Lock()
-	defer conn.reconnectMutex.Unlock()
-
 	if time.Since(conn.lastReconnectAttempt) < f.reconnectInterval {
 		return
 	}
