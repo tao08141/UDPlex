@@ -84,8 +84,13 @@ go build
 | `detour` | 转发路径，指定接收返回数据的组件 |
 
 
-## 使用场景
+## 开发计划
+- [ ] 支持包过滤和选择性转发
+- [ ] 支持鉴权、加密、去重等功能
+- [ ] 支持更复杂的负载均衡算法
+- [ ] 支持UDP Over TCP的转发
 
+## 使用场景
 - 游戏加速：将游戏流量同时转发到多个服务器，选择最快的响应
 - 网络冗余：确保重要的 UDP 数据能通过多条路径传输
 - 流量分流：将 UDP 流量复制到多个目标进行处理
@@ -120,6 +125,8 @@ examples目录包含多种使用场景的配置示例：
 - **redundant_server_config.json** - UDP冗余服务端配置，接收客户端流量并转发
 - **bidirectional_client_config.json** - UDP上下行分离通信客户端配置
 - **bidirectional_server_config.json** - UDP上下行分离通信服务端配置
+
+
 
 ## 性能测试
 
