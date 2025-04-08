@@ -1,4 +1,4 @@
-Double UDP 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量同时转发到多个目标服务器，并能处理返回流量。
+UDPlex 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量同时转发到多个目标服务器，并能处理返回流量。
 
 ## 功能特点
 
@@ -12,8 +12,8 @@ Double UDP 是一个高效的 UDP 数据包双向转发工具，支持将 UDP �
 ## 安装
 
 ```bash
-git clone https://github.com/tao08141/double_udp.git
-cd double_udp
+git clone https://github.com/tao08141/UDPlex.git
+cd UDPlex
 go build
 ```
 
@@ -24,10 +24,10 @@ go build
 
 ```bash
 # 使用默认配置文件
-./double_udp
+./UDPlex
 
 # 或指定配置文件路径
-./double_udp -c /path/to/config.json
+./UDPlex -c /path/to/config.json
 ```
 
 ## 配置说明

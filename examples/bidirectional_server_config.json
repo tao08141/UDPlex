@@ -6,7 +6,7 @@
             "tag": "server_listen_down",
             "listen_addr": "0.0.0.0:9000",
             "timeout": 120,
-            "replace_old_conns": true,
+            "replace_old_mapping": true,
             "detour": [
                 "server_forward"
             ]
@@ -16,7 +16,7 @@
             "tag": "server_listen_up",
             "listen_addr": "0.0.0.0:9001",
             "timeout": 120,
-            "replace_old_conns": true,
+            "replace_old_mapping": true,
             "detour": [
                 "server_forward"
             ]

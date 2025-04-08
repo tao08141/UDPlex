@@ -1,12 +1,12 @@
 {
-    "buffer_size": 65535,
+    "buffer_size": 1500,
     "services":[
         {
             "type": "listen",
             "tag": "client_listen",
             "listen_addr": "0.0.0.0:5202",
             "timeout": 120,
-            "replace_old_conns": true,
+            "replace_old_mapping": false,
             "detour": [
                 "client_forward"
             ]

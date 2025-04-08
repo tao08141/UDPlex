@@ -22,7 +22,7 @@ type ComponentConfig struct {
 	ListenAddr          string   `json:"listen_addr"`
 	BufferSize          int      `json:"buffer_size"`
 	Timeout             int      `json:"timeout"`
-	ReplaceOldConns     bool     `json:"replace_old_conns"`
+	replaceOldMapping   bool     `json:"replace_old_mapping"`
 	Forwarders          []string `json:"forwarders"`
 	QueueSize           int      `json:"queue_size"`
 	ReconnectInterval   int      `json:"reconnect_interval"`

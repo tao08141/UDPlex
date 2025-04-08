@@ -18,10 +18,10 @@ type AddrMapping struct {
 type ListenComponent struct {
 	tag string
 
-	listenAddr      string
-	timeout         time.Duration
-	replaceOldConns bool
-	detour          []string
+	listenAddr        string
+	timeout           time.Duration
+	replaceOldMapping bool
+	detour            []string
 
 	conn         net.PacketConn
 	router       *Router
@@ -39,15 +39,15 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	}
 
 	return &ListenComponent{
-		tag:             cfg.Tag,
-		listenAddr:      cfg.ListenAddr,
-		timeout:         timeout,
-		replaceOldConns: cfg.ReplaceOldConns,
-		detour:          cfg.Detour,
-		router:          router,
-		mappings:        make(map[string]*AddrMapping),
-		mappingsRead:    &map[string]*AddrMapping{},
-		stopCh:          make(chan struct{}),
+		tag:               cfg.Tag,
+		listenAddr:        cfg.ListenAddr,
+		timeout:           timeout,
+		replaceOldMapping: cfg.replaceOldMapping,
+		detour:            cfg.Detour,
+		router:            router,
+		mappings:          make(map[string]*AddrMapping),
+		mappingsRead:      &map[string]*AddrMapping{},
+		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -157,7 +157,7 @@ func (l *ListenComponent) handlePackets() {
 			// Check if this is a new mapping
 			if _, exists := l.mappings[addrKey]; !exists {
 				// If we should replace old connections with the same IP
-				if l.replaceOldConns {
+				if l.replaceOldMapping {
 					addrIP := addr.(*net.UDPAddr).IP.String()
 
 					for key, mapping := range l.mappings {

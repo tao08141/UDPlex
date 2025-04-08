@@ -13,23 +13,23 @@ jobs:
       matrix:
         include:
           # Server builds
-          - project: double_udp
+          - project: UDPlex
             goos: linux
             goarch: amd64
             suffix: ''
-          - project: double_udp
+          - project: UDPlex
             goos: linux
             goarch: arm64
             suffix: ''
-          - project: double_udp
+          - project: UDPlex
             goos: darwin
             goarch: amd64
             suffix: ''
-          - project: double_udp
+          - project: UDPlex
             goos: darwin
             goarch: arm64
             suffix: ''
-          - project: double_udp
+          - project: UDPlex
             goos: windows
             goarch: amd64
             suffix: '.exe'

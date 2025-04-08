@@ -6,7 +6,7 @@
             "tag": "client_listen",
             "listen_addr": "0.0.0.0:7000",
             "timeout": 120,
-            "replace_old_conns": true,
+            "replace_old_mapping": true,
             "detour": [
                 "client_forward"
             ]
