@@ -42,7 +42,7 @@ go build
     "tag": "client_listen",
     "listen_addr": "0.0.0.0:6000",
     "timeout": 120,
-    "replace_old_conns": true,
+    "replace_old_mapping": true,
     "detour": [
         "client_forward"
     ]
@@ -76,7 +76,7 @@ go build
 | `tag` | 组件唯一标识 |
 | `listen_addr` | 监听地址和端口 (仅 listen 组件) |
 | `timeout` | 连接超时时间 (秒) (仅 listen 组件) |
-| `replace_old_conns` | 是否替换旧连接 (仅 listen 组件)  |
+| `replace_old_mapping` | 是否替换旧连接 (仅 listen 组件)  |
 | `forwarders` | 转发目标地址列表 (仅 forward 组件) |
 | `queue_size` | 队列大小 (仅 forward 组件) |
 | `reconnect_interval` | 重连间隔时间 (秒)  (仅 forward 组件) |
