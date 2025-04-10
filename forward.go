@@ -27,6 +27,7 @@ type ForwardComponent struct {
 	reconnectInterval   time.Duration
 	connectionCheckTime time.Duration
 	detour              []string
+	sendKeepalive       bool // New field to control sending keepalive packets
 
 	router          *Router
 	forwardConns    map[string]*ForwardConn
@@ -57,6 +58,12 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		connectionCheckTime = 30 * time.Second // Default connection check interval
 	}
 
+	// Default to true if not specified
+	sendKeepalive := true
+	if cfg.SendKeepalive != nil {
+		sendKeepalive = *cfg.SendKeepalive
+	}
+
 	return &ForwardComponent{
 		tag:                 cfg.Tag,
 		forwarders:          cfg.Forwarders,
@@ -65,6 +72,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		reconnectInterval:   reconnectInterval,
 		connectionCheckTime: connectionCheckTime,
 		detour:              cfg.Detour,
+		sendKeepalive:       sendKeepalive,
 		router:              router,
 		forwardConns:        make(map[string]*ForwardConn),
 		stopCh:              make(chan struct{}),
@@ -127,8 +135,8 @@ func (f *ForwardComponent) connectionChecker() {
 			for _, conn := range f.forwardConnList {
 				if atomic.LoadInt32(&conn.isConnected) == 0 {
 					go f.tryReconnect(conn)
-				} else {
-					// Send keepalive
+				} else if f.sendKeepalive {
+					// Send keepalive only if enabled
 					select {
 					case conn.sendQueue <- Packet{buffer: nil, length: 0, router: f.router}:
 					default:
@@ -258,23 +266,21 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 				return
 			}
 
-			if length > 0 && length != 1 { // Skip empty keepalive packets
+			packet := Packet{
+				buffer:  buffer,
+				length:  length,
+				srcAddr: conn.udpAddr,
+				srcTag:  f.tag,
+				count:   0,
+				router:  f.router,
+			}
 
-				packet := Packet{
-					buffer:  buffer,
-					length:  length,
-					srcAddr: conn.udpAddr,
-					srcTag:  f.tag,
-					count:   0,
-					router:  f.router,
-				}
-
-				// Forward to detour components
-				if err := f.router.Route(packet, f.detour); err != nil {
-					log.Printf("%s: Error routing: %v", f.tag, err)
-				}
+			// Forward to detour components
+			if err := f.router.Route(packet, f.detour); err != nil {
+				log.Printf("%s: Error routing: %v", f.tag, err)
 			}
 		}
+
 	}
 }
 

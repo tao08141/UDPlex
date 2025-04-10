@@ -20,4 +20,5 @@ type ComponentConfig struct {
 	ReconnectInterval   int      `json:"reconnect_interval"`
 	ConnectionCheckTime int      `json:"connection_check_time"`
 	Detour              []string `json:"detour"`
+	SendKeepalive       *bool    `json:"send_keepalive"`
 }
