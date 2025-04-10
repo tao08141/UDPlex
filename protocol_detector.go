@@ -38,12 +38,13 @@ type SignatureRule struct {
 	Contains string `json:"contains,omitempty"`
 	Hex      bool   `json:"hex,omitempty"`
 
-	// Length matching
-	MinLength int `json:"min_length,omitempty"`
-	MaxLength int `json:"max_length,omitempty"`
-
 	// Length as an object
 	Length *LengthMatch `json:"length,omitempty"`
+
+	// Pre-decoded data for performance
+	decodedBytes    []byte
+	decodedMask     []byte
+	decodedContains []byte
 }
 
 // ProtocolDefinition represents a complete protocol detection rule
@@ -59,10 +60,70 @@ type ProtocolDetector struct {
 	protocols map[string]ProtocolDefinition
 }
 
+// preprocess decodes hex strings in signature rules to improve performance
+func preprocess(protoDefs map[string]ProtocolDefinition) map[string]ProtocolDefinition {
+	processedDefs := make(map[string]ProtocolDefinition)
+
+	for name, def := range protoDefs {
+		processedDef := def
+
+		for i, sig := range processedDef.Signatures {
+			// Pre-decode Bytes field
+			if sig.Bytes != "" {
+				if sig.Hex {
+					decoded, err := hex.DecodeString(sig.Bytes)
+					if err == nil {
+						processedDef.Signatures[i].decodedBytes = decoded
+					} else {
+						log.Printf("Error pre-decoding bytes pattern %s: %v", sig.Bytes, err)
+					}
+				} else {
+					processedDef.Signatures[i].decodedBytes = []byte(sig.Bytes)
+				}
+			}
+
+			// Pre-decode Mask field
+			if sig.Mask != "" {
+				if sig.Hex {
+					decoded, err := hex.DecodeString(sig.Mask)
+					if err == nil {
+						processedDef.Signatures[i].decodedMask = decoded
+					} else {
+						log.Printf("Error pre-decoding mask %s: %v", sig.Mask, err)
+					}
+				} else {
+					processedDef.Signatures[i].decodedMask = []byte(sig.Mask)
+				}
+			}
+
+			// Pre-decode Contains field
+			if sig.Contains != "" {
+				if sig.Hex {
+					decoded, err := hex.DecodeString(sig.Contains)
+					if err == nil {
+						processedDef.Signatures[i].decodedContains = decoded
+					} else {
+						log.Printf("Error pre-decoding contains pattern %s: %v", sig.Contains, err)
+					}
+				} else {
+					processedDef.Signatures[i].decodedContains = []byte(sig.Contains)
+				}
+			}
+		}
+
+		processedDefs[name] = processedDef
+	}
+
+	return processedDefs
+}
+
 // NewProtocolDetector creates a new protocol detector
 func NewProtocolDetector(protoDefs map[string]ProtocolDefinition) *ProtocolDetector {
+	// Preprocess all protocol definitions to decode hex strings
+	processedDefs := preprocess(protoDefs)
+
 	return &ProtocolDetector{
-		protocols: protoDefs,
+		protocols: processedDefs,
 	}
 }
 
@@ -112,13 +173,6 @@ func (pd *ProtocolDetector) matchProtocol(data []byte, length int, protoDef Prot
 
 // matchSignature checks if a packet matches a single signature rule
 func (pd *ProtocolDetector) matchSignature(data []byte, length int, sig SignatureRule) bool {
-	// Check length constraints
-	if sig.MinLength > 0 && length < sig.MinLength {
-		return false
-	}
-	if sig.MaxLength > 0 && length > sig.MaxLength {
-		return false
-	}
 
 	// Check length from Length object if present
 	if sig.Length != nil {
@@ -132,30 +186,8 @@ func (pd *ProtocolDetector) matchSignature(data []byte, length int, sig Signatur
 
 	// Check bytes at offset with mask
 	if sig.Bytes != "" {
-		var pattern []byte
-		var mask []byte
-		var err error
-
-		if sig.Hex {
-			pattern, err = hex.DecodeString(sig.Bytes)
-			if err != nil {
-				log.Printf("Error decoding bytes pattern %s: %v", sig.Bytes, err)
-				return false
-			}
-
-			if sig.Mask != "" {
-				mask, err = hex.DecodeString(sig.Mask)
-				if err != nil {
-					log.Printf("Error decoding mask %s: %v", sig.Mask, err)
-					return false
-				}
-			}
-		} else {
-			pattern = []byte(sig.Bytes)
-			if sig.Mask != "" {
-				mask = []byte(sig.Mask)
-			}
-		}
+		pattern := sig.decodedBytes
+		mask := sig.decodedMask
 
 		// Check if offset is within bounds
 		if sig.Offset+len(pattern) > length {
@@ -164,7 +196,7 @@ func (pd *ProtocolDetector) matchSignature(data []byte, length int, sig Signatur
 
 		// Apply mask if present
 		if len(mask) > 0 {
-			for i := 0; i < len(pattern); i++ {
+			for i := range pattern {
 				if i >= len(mask) {
 					break
 				}
@@ -175,7 +207,7 @@ func (pd *ProtocolDetector) matchSignature(data []byte, length int, sig Signatur
 			}
 		} else {
 			// Direct comparison without mask
-			for i := 0; i < len(pattern); i++ {
+			for i := range pattern {
 				if data[sig.Offset+i] != pattern[i] {
 					return false
 				}
@@ -185,18 +217,7 @@ func (pd *ProtocolDetector) matchSignature(data []byte, length int, sig Signatur
 
 	// Check contains
 	if sig.Contains != "" {
-		var pattern []byte
-		var err error
-
-		if sig.Hex {
-			pattern, err = hex.DecodeString(sig.Contains)
-			if err != nil {
-				log.Printf("Error decoding contains pattern %s: %v", sig.Contains, err)
-				return false
-			}
-		} else {
-			pattern = []byte(sig.Contains)
-		}
+		pattern := sig.decodedContains
 
 		if !bytes.Contains(data[:length], pattern) {
 			return false

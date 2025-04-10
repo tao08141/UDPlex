@@ -32,15 +32,15 @@
         "wg_keepalive": {
             "signatures": [
                 {
-                    "offset": 2,
-                    "bytes": "0400000062",
-                    "mask": "FFFFFFFFFF",
+                    "offset": 0,
+                    "bytes": "04000000",
+                    "mask": "FFFFFFFF",
                     "hex": true,
                     "length": { "min": 32, "max": 32 }
                 }
             ],
             "match_logic": "AND",
-            "description": "This is a Keepalive message"
+            "description": "WireGuard Keepalive message"
         }
     }
 }
