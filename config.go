@@ -17,6 +17,7 @@ type ComponentConfig struct {
 	ReplaceOldMapping   bool     `json:"replace_old_mapping"`
 	Forwarders          []string `json:"forwarders"`
 	QueueSize           int      `json:"queue_size"`
+	WorkerCount         int      `json:"worker_count"`
 	ReconnectInterval   int      `json:"reconnect_interval"`
 	ConnectionCheckTime int      `json:"connection_check_time"`
 	Detour              []string `json:"detour"`

@@ -22,6 +22,8 @@ type ListenComponent struct {
 	timeout           time.Duration
 	replaceOldMapping bool
 	detour            []string
+	queueSize         int
+	workerCount       int
 
 	conn         net.PacketConn
 	router       *Router
@@ -29,6 +31,7 @@ type ListenComponent struct {
 	mappingsRead *map[string]*AddrMapping
 	stopCh       chan struct{}
 	stopped      bool
+	sendQueue    chan packetDestination
 }
 
 // NewListenComponent creates a new listen component
@@ -38,17 +41,36 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		timeout = 120 * time.Second // Default timeout
 	}
 
+	queueSize := cfg.QueueSize
+	if queueSize <= 0 {
+		queueSize = 1024 // Default queue size
+	}
+
+	workerCount := cfg.WorkerCount
+	if workerCount <= 0 {
+		workerCount = 4 // Default worker count
+	}
+
 	return &ListenComponent{
 		tag:               cfg.Tag,
 		listenAddr:        cfg.ListenAddr,
 		timeout:           timeout,
 		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
+		queueSize:         queueSize,
+		workerCount:       workerCount,
 		router:            router,
 		mappings:          make(map[string]*AddrMapping),
 		mappingsRead:      &map[string]*AddrMapping{},
 		stopCh:            make(chan struct{}),
+		sendQueue:         make(chan packetDestination, queueSize),
 	}
+}
+
+// Add new struct for queued packets
+type packetDestination struct {
+	packet Packet
+	addr   net.Addr
 }
 
 // GetTag returns the component's tag
@@ -69,7 +91,32 @@ func (l *ListenComponent) Start() error {
 	// Start packet handling routine (which now also handles cleanup)
 	go l.handlePackets()
 
+	// Start worker goroutines to process send queue
+	for i := 0; i < l.workerCount; i++ {
+		go l.sendWorker()
+	}
+
 	return nil
+}
+
+func (l *ListenComponent) sendWorker() {
+	for {
+		select {
+		case <-l.stopCh:
+			return
+		case pd, ok := <-l.sendQueue:
+			if !ok {
+				return // Channel closed
+			}
+
+			data := pd.packet.buffer[:pd.packet.length]
+			if _, err := l.conn.WriteTo(data, pd.addr); err != nil {
+				log.Printf("%s: Error writing to %s: %v", l.tag, pd.addr, err)
+			}
+			pd.packet.Release(1)
+
+		}
+	}
 }
 
 // Stop closes the listener
@@ -80,6 +127,7 @@ func (l *ListenComponent) Stop() error {
 
 	l.stopped = true
 	close(l.stopCh)
+	close(l.sendQueue)
 	return l.conn.Close()
 }
 
@@ -196,17 +244,24 @@ func (l *ListenComponent) handlePackets() {
 
 // HandlePacket processes packets from other components
 func (l *ListenComponent) HandlePacket(packet Packet) error {
+	defer packet.Release(1)
 
-	data := packet.buffer[:packet.length]
+	droppedCount := 0
+
 	mappings := *l.mappingsRead
 
 	for _, mapping := range mappings {
-		if _, err := l.conn.WriteTo(data, mapping.addr); err != nil {
-			log.Printf("%s: Error writing to %s: %v", l.tag, mapping.addr, err)
+		select {
+		case l.sendQueue <- packetDestination{packet: packet, addr: mapping.addr}:
+			packet.AddRef(1)
+		default:
+			droppedCount++
 		}
 	}
 
-	packet.Release(1)
+	if droppedCount > 0 {
+		log.Printf("%s: Queue full, dropped %d packets", l.tag, droppedCount)
+	}
 
 	return nil
 }
