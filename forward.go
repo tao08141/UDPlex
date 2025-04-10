@@ -130,7 +130,7 @@ func (f *ForwardComponent) connectionChecker() {
 				} else {
 					// Send keepalive
 					select {
-					case conn.sendQueue <- Packet{buffer: []byte{0}, length: 0}:
+					case conn.sendQueue <- Packet{buffer: nil, length: 0, router: f.router}:
 					default:
 						// Queue is full, skip keepalive
 					}
@@ -218,13 +218,19 @@ func (f *ForwardComponent) sendRoutine(conn *ForwardConn) {
 				continue
 			}
 
-			_, err := currentConn.Write(packet.buffer[:packet.length])
+			var err error
+
+			if packet.buffer == nil {
+				_, err = currentConn.Write([]byte{0})
+			} else {
+				_, err = currentConn.Write(packet.buffer[:packet.length])
+				packet.Release(1)
+			}
+
 			if err != nil {
 				log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
 				atomic.StoreInt32(&conn.isConnected, 0)
 			}
-
-			packet.Release(1)
 
 		}
 	}
@@ -283,7 +289,7 @@ func (f *ForwardComponent) HandlePacket(packet Packet) error {
 			case conn.sendQueue <- packet:
 				// Successfully queued
 			default:
-				log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+				//log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
 			}
 		}
 	}
