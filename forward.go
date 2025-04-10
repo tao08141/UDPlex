@@ -224,9 +224,7 @@ func (f *ForwardComponent) sendRoutine(conn *ForwardConn) {
 				atomic.StoreInt32(&conn.isConnected, 0)
 			}
 
-			if atomic.AddInt32(&packet.count, -1) == 0 {
-				f.router.PutBuffer(packet.buffer)
-			}
+			packet.Release(1)
 
 		}
 	}
@@ -262,6 +260,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 					srcAddr: conn.udpAddr,
 					srcTag:  f.tag,
 					count:   0,
+					router:  f.router,
 				}
 
 				// Forward to detour components
@@ -276,7 +275,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 // HandlePacket processes packets from other components
 func (f *ForwardComponent) HandlePacket(packet Packet) error {
 	// Forward the packet to all connected forwarders
-	packet.count = int32(len(f.forwardConnList))
+	packet.AddRef(int32(len(f.forwardConnList)))
 
 	for _, conn := range f.forwardConnList {
 		if atomic.LoadInt32(&conn.isConnected) == 1 {
@@ -288,6 +287,8 @@ func (f *ForwardComponent) HandlePacket(packet Packet) error {
 			}
 		}
 	}
+
+	packet.Release(1)
 
 	return nil
 }

@@ -42,7 +42,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		tag:               cfg.Tag,
 		listenAddr:        cfg.ListenAddr,
 		timeout:           timeout,
-		replaceOldMapping: cfg.replaceOldMapping,
+		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
 		router:            router,
 		mappings:          make(map[string]*AddrMapping),
@@ -182,6 +182,8 @@ func (l *ListenComponent) handlePackets() {
 				length:  length,
 				srcAddr: addr,
 				srcTag:  l.tag,
+				count:   0,
+				router:  l.router,
 			}
 
 			// Forward the packet to detour components
@@ -204,6 +206,7 @@ func (l *ListenComponent) HandlePacket(packet Packet) error {
 		}
 	}
 
-	l.router.PutBuffer(packet.buffer)
+	packet.Release(1)
+
 	return nil
 }

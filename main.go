@@ -9,27 +9,6 @@ import (
 	"sync"
 )
 
-// Config represents the top-level configuration structure
-type Config struct {
-	BufferSize int               `json:"buffer_size"`
-	Services   []ComponentConfig `json:"services"`
-}
-
-// ComponentConfig represents the common configuration for all components
-type ComponentConfig struct {
-	Type                string   `json:"type"`
-	Tag                 string   `json:"tag"`
-	ListenAddr          string   `json:"listen_addr"`
-	BufferSize          int      `json:"buffer_size"`
-	Timeout             int      `json:"timeout"`
-	replaceOldMapping   bool     `json:"replace_old_mapping"`
-	Forwarders          []string `json:"forwarders"`
-	QueueSize           int      `json:"queue_size"`
-	ReconnectInterval   int      `json:"reconnect_interval"`
-	ConnectionCheckTime int      `json:"connection_check_time"`
-	Detour              []string `json:"detour"`
-}
-
 // Component is the interface that all network components must implement
 type Component interface {
 	Start() error
@@ -98,6 +77,7 @@ func (r *Router) GetComponent(tag string) (Component, bool) {
 
 // Route sends a packet to components specified by their tags
 func (r *Router) Route(packet Packet, destTags []string) error {
+	packet.AddRef(1)
 	for _, tag := range destTags {
 		if tag == packet.srcTag {
 			continue // Don't route back to source
@@ -109,10 +89,12 @@ func (r *Router) Route(packet Packet, destTags []string) error {
 			continue
 		}
 
+		packet.AddRef(1)
 		if err := c.HandlePacket(packet); err != nil {
 			log.Printf("Error routing to %s: %v", tag, err)
 		}
 	}
+	packet.Release(1)
 	return nil
 }
 
@@ -163,27 +145,59 @@ func main() {
 	// Initialize router with buffer pool
 	router := NewRouter(config)
 
+	// Create protocol detector
+	protocolDetector := NewProtocolDetector(config.ProtocolDetectors)
+
 	// Create components based on config
-	for _, cfg := range config.Services {
-		// Apply global buffer size if not specified for component
-		if cfg.BufferSize <= 0 {
-			cfg.BufferSize = config.BufferSize
+	for _, cfgMap := range config.Services {
+		// Get component type
+		typeVal, ok := cfgMap["type"].(string)
+		if !ok {
+			log.Printf("Component missing type field, skipping")
+			continue
+		}
+
+		// Convert generic config to specific config based on type
+		cfgBytes, err := json.Marshal(cfgMap)
+		if err != nil {
+			log.Printf("Failed to marshal component config: %v", err)
+			continue
 		}
 
 		var component Component
 
-		switch cfg.Type {
+		switch typeVal {
 		case "listen":
+			var cfg ComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				log.Printf("Failed to unmarshal listen config: %v", err)
+				continue
+			}
 			component = NewListenComponent(cfg, router)
+
 		case "forward":
+			var cfg ComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				log.Printf("Failed to unmarshal forward config: %v", err)
+				continue
+			}
 			component = NewForwardComponent(cfg, router)
+
+		case "filter":
+			var cfg FilterComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				log.Printf("Failed to unmarshal filter config: %v", err)
+				continue
+			}
+			component = NewFilterComponent(cfg, router, protocolDetector)
+
 		default:
-			log.Printf("Unknown component type: %s", cfg.Type)
+			log.Printf("Unknown component type: %s", typeVal)
 			continue
 		}
 
 		if err := router.Register(component); err != nil {
-			log.Printf("Failed to register component %s: %v", cfg.Tag, err)
+			log.Printf("Failed to register component: %v", err)
 		}
 	}
 
