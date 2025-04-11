@@ -17,15 +17,6 @@ type FilterComponent struct {
 	stopped           bool
 }
 
-// FilterComponentConfig represents the configuration for a filter component
-type FilterComponentConfig struct {
-	Type              string              `json:"type"`
-	Tag               string              `json:"tag"`
-	Detour            map[string][]string `json:"detour"`
-	DetourMiss        []string            `json:"detour_miss"`
-	UseProtoDetectors []string            `json:"use_proto_detectors"`
-}
-
 // NewFilterComponent creates a new filter component
 func NewFilterComponent(cfg FilterComponentConfig, router *Router, protoDetector *ProtocolDetector) *FilterComponent {
 

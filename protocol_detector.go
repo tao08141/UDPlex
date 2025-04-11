@@ -6,20 +6,6 @@ import (
 	"log"
 )
 
-// BytesMatch represents a byte pattern to match at a specific offset
-type BytesMatch struct {
-	Offset int    `json:"offset"`          // Offset from the start of the packet
-	Bytes  string `json:"bytes,omitempty"` // Hex string of bytes to match
-	Mask   string `json:"mask,omitempty"`  // Hex string mask (FF means match exact byte)
-	Hex    bool   `json:"hex"`             // Whether bytes/mask are in hex (true) or ASCII (false)
-}
-
-// ContainsMatch represents a pattern that should be contained anywhere in the packet
-type ContainsMatch struct {
-	Contains string `json:"contains"` // Bytes to search for
-	Hex      bool   `json:"hex"`      // Whether contains is in hex (true) or ASCII (false)
-}
-
 // LengthMatch represents length requirements for the packet
 type LengthMatch struct {
 	Min int `json:"min,omitempty"` // Minimum length

@@ -22,7 +22,6 @@ type ListenComponent struct {
 	timeout           time.Duration
 	replaceOldMapping bool
 	detour            []string
-	workerCount       int
 
 	conn         net.PacketConn
 	router       *Router
@@ -39,18 +38,12 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		timeout = 120 * time.Second // Default timeout
 	}
 
-	workerCount := cfg.WorkerCount
-	if workerCount <= 0 {
-		workerCount = 4
-	}
-
 	return &ListenComponent{
 		tag:               cfg.Tag,
 		listenAddr:        cfg.ListenAddr,
 		timeout:           timeout,
 		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
-		workerCount:       workerCount,
 		router:            router,
 		mappings:          make(map[string]*AddrMapping),
 		mappingsRead:      &map[string]*AddrMapping{},
@@ -206,7 +199,7 @@ func (l *ListenComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
 	for _, mapping := range *l.mappingsRead {
-		if _, err := l.conn.WriteTo(packet.buffer[:packet.length], mapping.addr); err != nil {
+		if _, err := l.conn.WriteTo(packet.buffer, mapping.addr); err != nil {
 			log.Printf("%s: Error writing to %s: %v", l.tag, mapping.addr, err)
 		}
 	}
