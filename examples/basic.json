@@ -7,7 +7,6 @@
             "tag": "client_listen",
             "listen_addr": "0.0.0.0:5202",
             "timeout": 120,
-            "queue_size": 10240,
             "worker_count": 1,
             "replace_old_mapping": true,
             "detour": [
@@ -20,7 +19,6 @@
             "forwarders": [
                 "127.0.0.1:5201"
             ],
-            "queue_size": 10240,
             "reconnect_interval": 5,
             "connection_check_time": 30,
             "send_keepalive": true,

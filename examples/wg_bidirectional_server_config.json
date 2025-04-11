@@ -1,11 +1,11 @@
 {
     "buffer_size": 1500,
+    "queue_size": 10240,
     "services":[
         {
             "type": "listen",
             "tag": "server_listen_down",
             "listen_addr": "0.0.0.0:9000",
-            "queue_size": 1024,
             "worker_count": 1,
             "timeout": 120,
             "replace_old_mapping": true,
@@ -17,7 +17,6 @@
             "type": "listen",
             "tag": "server_listen_up",
             "listen_addr": "0.0.0.0:9001",
-            "queue_size": 1024,
             "worker_count": 1,
             "timeout": 120,
             "replace_old_mapping": true,
@@ -32,7 +31,6 @@
             "forwarders": [
                 "127.0.0.1:51866"
             ],
-            "queue_size": 1024,
             "reconnect_interval": 5,
             "connection_check_time": 30,
             "send_keepalive": true,
