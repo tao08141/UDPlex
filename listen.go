@@ -31,7 +31,7 @@ type ListenComponent struct {
 	mappingsRead *map[string]*AddrMapping
 	stopCh       chan struct{}
 	stopped      bool
-	sendQueue    chan Packet
+	sendQueue    chan packetDestination
 }
 
 // NewListenComponent creates a new listen component
@@ -48,7 +48,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 
 	workerCount := cfg.WorkerCount
 	if workerCount <= 0 {
-		workerCount = 1 // Default worker count
+		workerCount = 4
 	}
 
 	return &ListenComponent{
@@ -63,8 +63,13 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		mappings:          make(map[string]*AddrMapping),
 		mappingsRead:      &map[string]*AddrMapping{},
 		stopCh:            make(chan struct{}),
-		sendQueue:         make(chan Packet, queueSize),
+		sendQueue:         make(chan packetDestination, queueSize),
 	}
+}
+
+type packetDestination struct {
+	packet Packet
+	addr   net.Addr
 }
 
 // GetTag returns the component's tag
@@ -98,18 +103,15 @@ func (l *ListenComponent) sendWorker() {
 		select {
 		case <-l.stopCh:
 			return
-		case packet, ok := <-l.sendQueue:
+		case pd, ok := <-l.sendQueue:
 			if !ok {
 				return // Channel closed
 			}
 
-			for _, mapping := range *l.mappingsRead {
-				if _, err := l.conn.WriteTo(packet.buffer, mapping.addr); err != nil {
-					log.Printf("%s: Error writing to %s: %v", l.tag, mapping.addr, err)
-				}
+			if _, err := l.conn.WriteTo(pd.packet.buffer[:pd.packet.length], pd.addr); err != nil {
+				log.Printf("%s: Error writing to %s: %v", l.tag, pd.addr, err)
 			}
-
-			packet.Release(1)
+			pd.packet.Release(1)
 
 		}
 	}
@@ -222,7 +224,7 @@ func (l *ListenComponent) handlePackets() {
 			}
 
 			packet := Packet{
-				buffer:  buffer[:length],
+				buffer:  buffer,
 				length:  length,
 				srcAddr: addr,
 				srcTag:  l.tag,
@@ -240,18 +242,26 @@ func (l *ListenComponent) handlePackets() {
 
 // HandlePacket processes packets from other components
 func (l *ListenComponent) HandlePacket(packet Packet) error {
+	defer packet.Release(1)
+
 	droppedCount := 0
 
-	select {
-	case l.sendQueue <- packet:
+	mappings := *l.mappingsRead
 
-	default:
-		packet.Release(1)
-		droppedCount++
+	packet.AddRef(int32(len(mappings)))
+
+	for _, mapping := range mappings {
+		select {
+		case l.sendQueue <- packetDestination{packet: packet, addr: mapping.addr}:
+
+		default:
+			droppedCount++
+			packet.Release(1)
+		}
 	}
 
 	if droppedCount > 0 {
-		log.Printf("%s: Queue full, dropped %d packets", l.tag, droppedCount)
+		//log.Printf("%s: Queue full, dropped %d packets", l.tag, droppedCount)
 	}
 
 	return nil

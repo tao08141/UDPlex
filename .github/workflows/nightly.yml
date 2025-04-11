@@ -1,9 +1,9 @@
-name: goreleaser
+name: nightly-build
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -26,14 +26,22 @@ jobs:
           go-version: '1.24'
           cache: true
 
+      - name: Set build date
+        id: build_date
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Set commit short hash
+        id: commit_hash
+        run: echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           # either 'goreleaser' (default) or 'goreleaser-pro':
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean
+          args: release --snapshot --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
+          VERSION: nightly-${{ steps.build_date.outputs.date }}-${{ steps.commit_hash.outputs.hash }}
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}

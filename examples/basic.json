@@ -11,7 +11,6 @@
             "replace_old_mapping": true,
             "detour": [
                 "client_forward"
-
             ]
         },
         {
@@ -23,19 +22,7 @@
             "queue_size": 10240,
             "reconnect_interval": 5,
             "connection_check_time": 30,
-            "detour": [
-                "client_listen"
-            ]
-        },
-        {
-            "type": "forward",
-            "tag": "client_forward2",
-            "forwarders": [
-                "127.0.0.1:5203"
-            ],
-            "queue_size": 10240,
-            "reconnect_interval": 5,
-            "connection_check_time": 30,
+            "send_keepalive": true,
             "detour": [
                 "client_listen"
             ]

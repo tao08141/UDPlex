@@ -27,7 +27,7 @@ type ForwardComponent struct {
 	reconnectInterval   time.Duration
 	connectionCheckTime time.Duration
 	detour              []string
-	sendKeepalive       bool // New field to control sending keepalive packets
+	sendKeepalive       bool
 
 	router          *Router
 	forwardConns    map[string]*ForwardConn
@@ -58,7 +58,6 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		connectionCheckTime = 30 * time.Second // Default connection check interval
 	}
 
-	// Default to true if not specified
 	sendKeepalive := true
 	if cfg.SendKeepalive != nil {
 		sendKeepalive = *cfg.SendKeepalive
@@ -295,7 +294,7 @@ func (f *ForwardComponent) HandlePacket(packet Packet) error {
 			case conn.sendQueue <- packet:
 
 			default:
-				log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+				//log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
 				packet.Release(1)
 			}
 		} else {

@@ -9,6 +9,7 @@
             "queue_size": 1024,
             "worker_count": 1,
             "replace_old_mapping": true,
+            "send_keepalive": true,
             "detour": [
                 "client_forward"
             ]
@@ -23,6 +24,7 @@
             "queue_size": 1024,
             "reconnect_interval": 5,
             "connection_check_time": 30,
+            "send_keepalive": true,
             "detour": [
                 "client_listen"
             ]

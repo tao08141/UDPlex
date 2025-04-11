@@ -30,43 +30,6 @@ go build
 ./UDPlex -c /path/to/config.json
 ```
 
-## 配置说明
-
-配置文件使用 JSON 格式，包含多个组件配置：
-
-### 监听组件 (listen)
-
-```json
-{
-    "type": "listen",
-    "tag": "client_listen",
-    "listen_addr": "0.0.0.0:6000",
-    "timeout": 120,
-    "replace_old_mapping": true,
-    "detour": [
-        "client_forward"
-    ]
-}
-```
-
-### 转发组件 (forward)
-
-```json
-{
-    "type": "forward",
-    "tag": "client_forward",
-    "forwarders": [
-        "a.com:1111",
-        "b.com:2222"
-    ],
-    "queue_size": 1024,
-    "reconnect_interval": 5,
-    "connection_check_time": 30,
-    "detour": [
-        "client_listen"
-    ]
-}
-```
 
 ## 参数详解
 
