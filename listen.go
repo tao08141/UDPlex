@@ -48,7 +48,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 
 	workerCount := cfg.WorkerCount
 	if workerCount <= 0 {
-		workerCount = 4 // Default worker count
+		workerCount = 1 // Default worker count
 	}
 
 	return &ListenComponent{

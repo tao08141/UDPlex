@@ -77,6 +77,8 @@ go build
 | `type` | 组件类型: `listen` |
 | `tag` | 组件唯一标识 |
 | `listen_addr` | 监听地址和端口 |
+| `queue_size` | 队列大小 |
+| `worker_count` | 工作池数量 |
 | `timeout` | 连接超时时间 (秒) |
 | `replace_old_mapping` | 是否替换旧连接  |
 | `detour` | 转发路径，指定接收返回数据的组件 |
