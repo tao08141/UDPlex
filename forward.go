@@ -231,7 +231,7 @@ func (f *ForwardComponent) sendRoutine(conn *ForwardConn) {
 			if packet.buffer == nil {
 				_, err = currentConn.Write([]byte{0})
 			} else {
-				_, err = currentConn.Write(packet.buffer[:packet.length])
+				_, err = currentConn.Write(packet.buffer)
 				packet.Release(1)
 			}
 
@@ -267,7 +267,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 			}
 
 			packet := Packet{
-				buffer:  buffer,
+				buffer:  buffer[:length],
 				length:  length,
 				srcAddr: conn.udpAddr,
 				srcTag:  f.tag,
@@ -293,11 +293,15 @@ func (f *ForwardComponent) HandlePacket(packet Packet) error {
 		if atomic.LoadInt32(&conn.isConnected) == 1 {
 			select {
 			case conn.sendQueue <- packet:
-				// Successfully queued
+
 			default:
-				//log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+				log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+				packet.Release(1)
 			}
+		} else {
+			packet.Release(1)
 		}
+
 	}
 
 	packet.Release(1)

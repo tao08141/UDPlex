@@ -31,7 +31,7 @@ type ListenComponent struct {
 	mappingsRead *map[string]*AddrMapping
 	stopCh       chan struct{}
 	stopped      bool
-	sendQueue    chan packetDestination
+	sendQueue    chan Packet
 }
 
 // NewListenComponent creates a new listen component
@@ -63,14 +63,8 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		mappings:          make(map[string]*AddrMapping),
 		mappingsRead:      &map[string]*AddrMapping{},
 		stopCh:            make(chan struct{}),
-		sendQueue:         make(chan packetDestination, queueSize),
+		sendQueue:         make(chan Packet, queueSize),
 	}
-}
-
-// Add new struct for queued packets
-type packetDestination struct {
-	packet Packet
-	addr   net.Addr
 }
 
 // GetTag returns the component's tag
@@ -92,7 +86,7 @@ func (l *ListenComponent) Start() error {
 	go l.handlePackets()
 
 	// Start worker goroutines to process send queue
-	for i := 0; i < l.workerCount; i++ {
+	for range l.workerCount {
 		go l.sendWorker()
 	}
 
@@ -104,16 +98,18 @@ func (l *ListenComponent) sendWorker() {
 		select {
 		case <-l.stopCh:
 			return
-		case pd, ok := <-l.sendQueue:
+		case packet, ok := <-l.sendQueue:
 			if !ok {
 				return // Channel closed
 			}
 
-			data := pd.packet.buffer[:pd.packet.length]
-			if _, err := l.conn.WriteTo(data, pd.addr); err != nil {
-				log.Printf("%s: Error writing to %s: %v", l.tag, pd.addr, err)
+			for _, mapping := range *l.mappingsRead {
+				if _, err := l.conn.WriteTo(packet.buffer, mapping.addr); err != nil {
+					log.Printf("%s: Error writing to %s: %v", l.tag, mapping.addr, err)
+				}
 			}
-			pd.packet.Release(1)
+
+			packet.Release(1)
 
 		}
 	}
@@ -226,7 +222,7 @@ func (l *ListenComponent) handlePackets() {
 			}
 
 			packet := Packet{
-				buffer:  buffer,
+				buffer:  buffer[:length],
 				length:  length,
 				srcAddr: addr,
 				srcTag:  l.tag,
@@ -244,19 +240,14 @@ func (l *ListenComponent) handlePackets() {
 
 // HandlePacket processes packets from other components
 func (l *ListenComponent) HandlePacket(packet Packet) error {
-	defer packet.Release(1)
-
 	droppedCount := 0
 
-	mappings := *l.mappingsRead
+	select {
+	case l.sendQueue <- packet:
 
-	for _, mapping := range mappings {
-		select {
-		case l.sendQueue <- packetDestination{packet: packet, addr: mapping.addr}:
-			packet.AddRef(1)
-		default:
-			droppedCount++
-		}
+	default:
+		packet.Release(1)
+		droppedCount++
 	}
 
 	if droppedCount > 0 {

@@ -22,13 +22,14 @@ type Component interface {
 // Router manages all components and routes packets between them
 type Router struct {
 	components map[string]Component
-	mu         sync.RWMutex
 	bufferPool sync.Pool
+	config     Config
 }
 
 // NewRouter creates a new router
 func NewRouter(config Config) *Router {
 	return &Router{
+		config:     config,
 		components: make(map[string]Component),
 		bufferPool: sync.Pool{
 			New: func() any {
@@ -46,14 +47,12 @@ func (r *Router) GetBuffer() []byte {
 
 // PutBuffer returns a buffer to the pool
 func (r *Router) PutBuffer(buf []byte) {
+	buf = buf[:r.config.BufferSize]
 	r.bufferPool.Put(&buf)
 }
 
 // Register adds a component to the router
 func (r *Router) Register(c Component) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	tag := c.GetTag()
 	if tag == "" {
 		return fmt.Errorf("component has empty tag")
@@ -69,8 +68,6 @@ func (r *Router) Register(c Component) error {
 
 // GetComponent returns a component by its tag
 func (r *Router) GetComponent(tag string) (Component, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	c, exists := r.components[tag]
 	return c, exists
 }
@@ -100,9 +97,6 @@ func (r *Router) Route(packet Packet, destTags []string) error {
 
 // StartAll starts all registered components
 func (r *Router) StartAll() error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	for tag, component := range r.components {
 		log.Printf("Starting component: %s", tag)
 		if err := component.Start(); err != nil {
@@ -114,8 +108,6 @@ func (r *Router) StartAll() error {
 
 // StopAll stops all registered components
 func (r *Router) StopAll() {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 
 	for tag, component := range r.components {
 		log.Printf("Stopping component: %s", tag)
