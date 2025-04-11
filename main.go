@@ -68,7 +68,7 @@ func NewRouter(config Config) *Router {
 
 // startWorkers initializes the worker goroutines for packet routing
 func (r *Router) startWorkers() {
-	for i := 0; i < r.config.WorkerCount; i++ {
+	for i := range r.config.WorkerCount {
 		r.wg.Add(1)
 		go func(workerID int) {
 			defer r.wg.Done()
