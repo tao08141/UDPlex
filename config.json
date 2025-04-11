@@ -29,18 +29,32 @@
         }
     ],
     "protocol_detectors": {
-        "wg_keepalive": {
+        "wg": {
             "signatures": [
                 {
                     "offset": 0,
                     "bytes": "04000000",
-                    "mask": "FFFFFFFF",
                     "hex": true,
-                    "length": { "min": 32, "max": 32 }
+                    "length": { "min": 32, "max": 32 },
+                    "description": "WireGuard Keepalive message"
+                },
+                {
+                    "offset": 0,
+                    "bytes": "01000000",
+                    "hex": true,
+                    "length": { "min": 148, "max": 148 },
+                    "description": "WireGuard Init"
+                },
+                {
+                    "offset": 0,
+                    "bytes": "02000000",
+                    "hex": true,
+                    "length": { "min": 92, "max": 92 },
+                    "description": "WireGuard Response"
                 }
             ],
-            "match_logic": "AND",
-            "description": "WireGuard Keepalive message"
+            "match_logic": "OR",
+            "description": "WireGuard Protocol"
         }
     }
 }

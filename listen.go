@@ -224,7 +224,7 @@ func (l *ListenComponent) handlePackets() {
 			}
 
 			packet := Packet{
-				buffer:  buffer,
+				buffer:  buffer[:length],
 				length:  length,
 				srcAddr: addr,
 				srcTag:  l.tag,
@@ -261,7 +261,7 @@ func (l *ListenComponent) HandlePacket(packet Packet) error {
 	}
 
 	if droppedCount > 0 {
-		//log.Printf("%s: Queue full, dropped %d packets", l.tag, droppedCount)
+		log.Printf("%s: Queue full, dropped %d packets", l.tag, droppedCount)
 	}
 
 	return nil
