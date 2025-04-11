@@ -20,7 +20,6 @@
             "worker_count": 1,
             "timeout": 120,
             "replace_old_mapping": true,
-            "send_keepalive": true,
             "detour": [
                 "server_forward"
             ]
@@ -33,7 +32,7 @@
             ],
             "reconnect_interval": 5,
             "connection_check_time": 30,
-            "send_keepalive": true,
+            "send_keepalive": false,
             "detour": [
                 "server_listen_up"
             ]

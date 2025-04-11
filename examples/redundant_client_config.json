@@ -9,7 +9,6 @@
             "timeout": 120,
             "worker_count": 1,
             "replace_old_mapping": true,
-            "send_keepalive": true,
             "detour": [
                 "client_forward"
             ]

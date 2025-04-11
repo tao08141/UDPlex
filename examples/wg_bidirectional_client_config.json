@@ -27,7 +27,7 @@
             ],
             "reconnect_interval": 5,
             "connection_check_time": 30,
-            "send_keepalive": true,
+            "send_keepalive": false,
             "detour": [
                 "client_listen"
             ]
@@ -41,7 +41,7 @@
             ],
             "reconnect_interval": 5,
             "connection_check_time": 30,
-            "send_keepalive": true,
+            "send_keepalive": false,
             "detour": [
                 "client_listen"
             ]
