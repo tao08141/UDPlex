@@ -24,11 +24,23 @@ type Router struct {
 	components map[string]Component
 	bufferPool sync.Pool
 	config     Config
+	routeTasks chan routeTask
+	wg         sync.WaitGroup
+}
+
+type routeTask struct {
+	packet   Packet
+	destTags []string
 }
 
 // NewRouter creates a new router
 func NewRouter(config Config) *Router {
-	return &Router{
+	// Set default worker count if not specified
+	if config.WorkerCount <= 0 {
+		config.WorkerCount = 4 // Default to 4 workers
+	}
+
+	r := &Router{
 		config:     config,
 		components: make(map[string]Component),
 		bufferPool: sync.Pool{
@@ -37,6 +49,52 @@ func NewRouter(config Config) *Router {
 				return &buf // Return pointer to slice
 			},
 		},
+		routeTasks: make(chan routeTask, config.QueueSize), // Buffer size for tasks
+	}
+
+	// Start the worker pool
+	r.startWorkers()
+
+	return r
+}
+
+// startWorkers initializes the worker goroutines for packet routing
+func (r *Router) startWorkers() {
+	for i := 0; i < r.config.WorkerCount; i++ {
+		r.wg.Add(1)
+		go func(workerID int) {
+			defer r.wg.Done()
+			log.Printf("Starting router worker %d", workerID)
+
+			for task := range r.routeTasks {
+				r.processRouteTask(task)
+			}
+
+			log.Printf("Router worker %d stopped", workerID)
+		}(i)
+	}
+}
+
+// processRouteTask handles the actual routing of packets
+func (r *Router) processRouteTask(task routeTask) {
+	packet := task.packet
+	defer packet.Release(1) // Release our reference when done
+
+	for _, tag := range task.destTags {
+		if tag == packet.srcTag {
+			continue // Don't route back to source
+		}
+
+		c, exists := r.GetComponent(tag)
+		if !exists {
+			log.Printf("Warning: trying to route to non-existing component: %s", tag)
+			continue
+		}
+
+		packet.AddRef(1)
+		if err := c.HandlePacket(packet); err != nil {
+			log.Printf("Error routing to %s: %v", tag, err)
+		}
 	}
 }
 
@@ -72,26 +130,17 @@ func (r *Router) GetComponent(tag string) (Component, bool) {
 	return c, exists
 }
 
-// Route sends a packet to components specified by their tags
+// Route asynchronously sends a packet to components specified by their tags
 func (r *Router) Route(packet Packet, destTags []string) error {
-	packet.AddRef(1)
-	for _, tag := range destTags {
-		if tag == packet.srcTag {
-			continue // Don't route back to source
-		}
+	packet.AddRef(1) // Add reference for the worker
 
-		c, exists := r.GetComponent(tag)
-		if !exists {
-			log.Printf("Warning: trying to route to non-existing component: %s", tag)
-			continue
-		}
-
-		packet.AddRef(1)
-		if err := c.HandlePacket(packet); err != nil {
-			log.Printf("Error routing to %s: %v", tag, err)
-		}
+	select {
+	case r.routeTasks <- routeTask{packet: packet, destTags: destTags}:
+		// Task successfully queued
+	default:
+		packet.Release(1) // Release reference if queue is full
+		return fmt.Errorf("routing queue is full, packet dropped")
 	}
-	packet.Release(1)
 	return nil
 }
 
@@ -106,15 +155,20 @@ func (r *Router) StartAll() error {
 	return nil
 }
 
-// StopAll stops all registered components
+// StopAll stops all registered components and worker pool
 func (r *Router) StopAll() {
-
+	// Stop components
 	for tag, component := range r.components {
 		log.Printf("Stopping component: %s", tag)
 		if err := component.Stop(); err != nil {
 			log.Printf("Error stopping component %s: %v", tag, err)
 		}
 	}
+
+	// Close task channel and wait for workers to complete
+	close(r.routeTasks)
+	r.wg.Wait()
+	log.Printf("All router workers stopped")
 }
 
 func main() {

@@ -1,5 +1,6 @@
 {
     "buffer_size": 1500,
+    "queue_size": 10240,
     "services":[
         {
             "type": "listen",
