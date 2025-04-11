@@ -11,7 +11,6 @@ import (
 // ForwardConn represents a connection to a forwarder
 type ForwardConn struct {
 	conn                 *net.UDPConn
-	sendQueue            chan Packet
 	isConnected          int32 // Atomic flag: 0=disconnected, 1=connected
 	remoteAddr           string
 	udpAddr              *net.UDPAddr
@@ -23,7 +22,6 @@ type ForwardComponent struct {
 	tag                 string
 	forwarders          []string
 	bufferSize          int
-	queueSize           int
 	reconnectInterval   time.Duration
 	connectionCheckTime time.Duration
 	detour              []string
@@ -38,15 +36,6 @@ type ForwardComponent struct {
 
 // NewForwardComponent creates a new forward component
 func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent {
-	bufferSize := cfg.BufferSize
-	if bufferSize <= 0 {
-		bufferSize = 1500 // Default buffer size
-	}
-
-	queueSize := cfg.QueueSize
-	if queueSize <= 0 {
-		queueSize = 1024 // Default queue size
-	}
 
 	reconnectInterval := time.Duration(cfg.ReconnectInterval) * time.Second
 	if reconnectInterval == 0 {
@@ -66,8 +55,6 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 	return &ForwardComponent{
 		tag:                 cfg.Tag,
 		forwarders:          cfg.Forwarders,
-		bufferSize:          bufferSize,
-		queueSize:           queueSize,
 		reconnectInterval:   reconnectInterval,
 		connectionCheckTime: connectionCheckTime,
 		detour:              cfg.Detour,
@@ -115,7 +102,6 @@ func (f *ForwardComponent) Stop() error {
 		if conn.conn != nil {
 			conn.conn.Close()
 		}
-		close(conn.sendQueue)
 	}
 
 	return nil
@@ -135,12 +121,7 @@ func (f *ForwardComponent) connectionChecker() {
 				if atomic.LoadInt32(&conn.isConnected) == 0 {
 					go f.tryReconnect(conn)
 				} else if f.sendKeepalive {
-					// Send keepalive only if enabled
-					select {
-					case conn.sendQueue <- Packet{buffer: nil, length: 0, router: f.router}:
-					default:
-						// Queue is full, skip keepalive
-					}
+					conn.conn.Write([]byte{})
 				}
 			}
 		}
@@ -161,15 +142,11 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 
 	forwardConn := &ForwardConn{
 		conn:                 conn,
-		sendQueue:            make(chan Packet, f.queueSize),
 		isConnected:          1,
 		remoteAddr:           remoteAddr,
 		udpAddr:              udpAddr,
 		lastReconnectAttempt: time.Now(),
 	}
-
-	// Start goroutine to handle sending packets
-	go f.sendRoutine(forwardConn)
 
 	// Start goroutine to handle receiving packets
 	go f.readFromForwarder(forwardConn)
@@ -203,44 +180,6 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 	log.Printf("%s: Successfully reconnected to %s", f.tag, conn.remoteAddr)
 
 	go f.readFromForwarder(conn)
-}
-
-// sendRoutine handles sending packets to a forwarder
-func (f *ForwardComponent) sendRoutine(conn *ForwardConn) {
-	for {
-		select {
-		case <-f.stopCh:
-			return
-		case packet, ok := <-conn.sendQueue:
-			if !ok {
-				return // Channel closed
-			}
-
-			if atomic.LoadInt32(&conn.isConnected) == 0 {
-				continue
-			}
-
-			currentConn := conn.conn
-			if currentConn == nil {
-				continue
-			}
-
-			var err error
-
-			if packet.buffer == nil {
-				_, err = currentConn.Write([]byte{0})
-			} else {
-				_, err = currentConn.Write(packet.buffer)
-				packet.Release(1)
-			}
-
-			if err != nil {
-				log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
-				atomic.StoreInt32(&conn.isConnected, 0)
-			}
-
-		}
-	}
 }
 
 // readFromForwarder handles receiving packets from a forwarder
@@ -285,25 +224,27 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 
 // HandlePacket processes packets from other components
 func (f *ForwardComponent) HandlePacket(packet Packet) error {
-	// Forward the packet to all connected forwarders
-	packet.AddRef(int32(len(f.forwardConnList)))
 
 	for _, conn := range f.forwardConnList {
 		if atomic.LoadInt32(&conn.isConnected) == 1 {
-			select {
-			case conn.sendQueue <- packet:
 
-			default:
-				//log.Printf("%s: Queue full for %s, dropping packet", f.tag, conn.remoteAddr)
-				packet.Release(1)
+			currentConn := conn.conn
+			if currentConn == nil {
+				continue
 			}
-		} else {
-			packet.Release(1)
-		}
 
+			_, err := currentConn.Write(packet.buffer)
+
+			if err != nil {
+				log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
+				atomic.StoreInt32(&conn.isConnected, 0)
+			}
+
+		} else {
+
+		}
 	}
 
 	packet.Release(1)
-
 	return nil
 }
