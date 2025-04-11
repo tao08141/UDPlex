@@ -5,7 +5,7 @@ type Config struct {
 	BufferSize        int                           `json:"buffer_size"`
 	QueueSize         int                           `json:"queue_size"`
 	WorkerCount       int                           `json:"worker_count"`
-	Services          []map[string]interface{}      `json:"services"`
+	Services          []map[string]any              `json:"services"`
 	ProtocolDetectors map[string]ProtocolDefinition `json:"protocol_detectors"`
 }
 

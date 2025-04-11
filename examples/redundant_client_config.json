@@ -1,13 +1,13 @@
 {
     "buffer_size": 1500,
     "queue_size": 10240,
+    "worker_count": 4,
     "services":[
         {
             "type": "listen",
             "tag": "client_listen",
             "listen_addr": "0.0.0.0:7000",
             "timeout": 120,
-            "worker_count": 1,
             "replace_old_mapping": true,
             "detour": [
                 "client_forward"

@@ -1,12 +1,12 @@
 {
     "buffer_size": 1500,
     "queue_size": 10240,
+    "worker_count": 4,
     "services":[
         {
             "type": "listen",
             "tag": "server_listen_down",
             "listen_addr": "0.0.0.0:9000",
-            "worker_count": 1,
             "timeout": 120,
             "replace_old_mapping": true,
             "detour": [
@@ -17,7 +17,6 @@
             "type": "listen",
             "tag": "server_listen_up",
             "listen_addr": "0.0.0.0:9001",
-            "worker_count": 1,
             "timeout": 120,
             "replace_old_mapping": true,
             "detour": [

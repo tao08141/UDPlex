@@ -1,22 +1,30 @@
 {
     "buffer_size": 1500,
     "queue_size": 10240,
+    "worker_count": 4,
     "services": [{
             "type": "listen",
             "tag": "client_listen",
             "listen_addr": "0.0.0.0:7000",
             "timeout": 120,
-            "worker_count": 1,
             "replace_old_mapping": true,
             "detour": [
-                "client_forward_up"
+                "client_filter_wg"
             ]
         },
         {
             "type": "filter",
             "tag": "client_filter_wg",
             "use_proto_detectors": ["wg"],
-            "detour": ["client_forward_down"]
+            "detour": {
+                "wg": [
+                    "client_forward_down",
+                    "client_forward_up"
+                ]
+            },
+            "detour_miss": [
+                "client_forward_up"
+            ]
         },
         {
             "type": "forward",
@@ -45,17 +53,19 @@
             "detour": [
                 "client_listen"
             ]
-	}
+        }
     ],
     "protocol_detectors": {
         "wg": {
-            "signatures": [
-                {
+            "signatures": [{
                     "offset": 0,
                     "bytes": "04000000",
                     "mask": "FFFFFFFF",
                     "hex": true,
-                    "length": { "min": 32, "max": 32 },
+                    "length": {
+                        "min": 32,
+                        "max": 32
+                    },
                     "description": "WireGuard Keepalive message"
                 },
                 {
@@ -63,7 +73,10 @@
                     "bytes": "01000000",
                     "mask": "FFFFFFFF",
                     "hex": true,
-                    "length": { "min": 148, "max": 148 },
+                    "length": {
+                        "min": 148,
+                        "max": 148
+                    },
                     "description": "WireGuard Init"
                 },
                 {
@@ -71,7 +84,10 @@
                     "bytes": "02000000",
                     "mask": "FFFFFFFF",
                     "hex": true,
-                    "length": { "min": 92, "max": 92 },
+                    "length": {
+                        "min": 92,
+                        "max": 92
+                    },
                     "description": "WireGuard Response"
                 }
             ],

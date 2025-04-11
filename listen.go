@@ -58,11 +58,6 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	}
 }
 
-type packetDestination struct {
-	packet Packet
-	addr   net.Addr
-}
-
 // GetTag returns the component's tag
 func (l *ListenComponent) GetTag() string {
 	return l.tag

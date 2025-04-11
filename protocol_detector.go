@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"log"
-	"slices"
 )
 
 // BytesMatch represents a byte pattern to match at a specific offset
@@ -131,17 +130,13 @@ func NewProtocolDetector(protoDefs map[string]ProtocolDefinition) *ProtocolDetec
 func (pd *ProtocolDetector) DetectProtocol(data []byte, length int, useProtoDetectors []string) string {
 	// Process protocols in priority order (if specified)
 	// For simplicity, we'll just iterate through the map for now
-	for protoName, protoDef := range pd.protocols {
-
-		found := slices.Contains(useProtoDetectors, protoName)
-		if !found {
-			continue // Skip this protocol if not in the list
-		}
-
-		if pd.matchProtocol(data, length, protoDef) {
+	// for useProtoDetectors
+	for _, protoName := range useProtoDetectors {
+		if pd.matchProtocol(data, length, pd.protocols[protoName]) {
 			return protoName
 		}
 	}
+
 	return "" // No protocol matched
 }
 

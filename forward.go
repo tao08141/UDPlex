@@ -21,7 +21,6 @@ type ForwardConn struct {
 type ForwardComponent struct {
 	tag                 string
 	forwarders          []string
-	bufferSize          int
 	reconnectInterval   time.Duration
 	connectionCheckTime time.Duration
 	detour              []string

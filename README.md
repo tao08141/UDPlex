@@ -30,36 +30,99 @@ go build
 ./UDPlex -c /path/to/config.json
 ```
 
+# UDPlex 参数详解
 
-## 参数详解
+## 全局配置
+
+| 参数 | 说明 |
+|------|------|
+| `buffer_size` | UDP数据包缓冲区大小（字节），建议设置为MTU大小，通常为1500 |
+| `queue_size` | 组件间数据包队列大小，高流量场景建议增大此值 |
+| `worker_count` | 工作线程数量，影响并发处理能力 |
+| `services` | 组件配置数组，定义系统中所有的处理组件 |
+| `protocol_detectors` | 协议检测器配置，用于识别和过滤特定协议的数据包 |
+
+## 服务组件参数
 
 ### listen 组件参数
 
 | 参数 | 说明 |
 |------|------|
-| `type` | 组件类型: `listen` |
-| `tag` | 组件唯一标识 |
-| `listen_addr` | 监听地址和端口 |
-| `timeout` | 连接超时时间 (秒) |
-| `replace_old_mapping` | 是否替换旧连接  |
-| `detour` | 转发路径，指定接收返回数据的组件 |
+| `type` | 组件类型: `listen`，表示监听组件 |
+| `tag` | 组件唯一标识，用于在detour中引用 |
+| `listen_addr` | 监听地址和端口，格式为"IP:端口"，如"0.0.0.0:9000" |
+| `timeout` | 连接超时时间（秒），超过此时间无数据传输则清除映射 |
+| `replace_old_mapping` | 是否替换旧映射，当为true时新映射会替换同地址的旧映射 |
+| `detour` | 转发路径，指定接收数据的组件标识列表 |
 
 ### forward 组件参数
 
 | 参数 | 说明 |
 |------|------|
-| `type` | `forward` |
-| `tag` | 组件唯一标识 |
-| `forwarders` | 转发目标地址列表 |
-| `reconnect_interval` | 重连间隔时间 (秒)  |
-| `connection_check_time` | 连接检查间隔 (秒)  |
-| `send_keepalive` | 是否发送空数据当心跳包 |
-| `detour` | 转发路径，指定接收返回数据的组件 |
+| `type` | 组件类型: `forward`，表示转发组件 |
+| `tag` | 组件唯一标识，用于在detour中引用 |
+| `forwarders` | 转发目标地址列表，可配置多个目标进行并行转发 |
+| `reconnect_interval` | 重连间隔时间（秒），断开连接后尝试重连的等待时间 |
+| `connection_check_time` | 连接检查间隔（秒），定期检查连接状态的时间间隔 |
+| `send_keepalive` | 是否发送空数据包作为心跳包来保持连接活跃 |
+| `detour` | 转发路径，指定接收返回数据的组件标识列表 |
  
+### filter 组件参数
+
+| 参数 | 说明 |
+|------|------|
+| `type` | 组件类型: `filter`，表示过滤组件 |
+| `tag` | 组件唯一标识，用于在detour中引用 |
+| `use_proto_detectors` | 使用的协议检测器列表，指定要应用的协议检测器名称 |
+| `detour` | 转发路径对象，键为检测器名称，值为匹配成功后的目标组件标识列表 |
+| `detour_miss` | 未匹配任何协议时的转发路径，指定组件标识列表 |
+
+## 协议检测器配置
+
+```json
+"protocol_detectors": {
+    "名称": {
+        "signatures": [
+            {
+                "offset": 数据包偏移量,
+                "bytes": "匹配字节序列",
+                "mask": "应用的位掩码",
+                "hex": true/false,  // bytes是否为十六进制格式
+                "length": { "min": 最小长度, "max": 最大长度 },
+                "contains": "包含的字节序列",
+                "description": "特征描述"
+            }
+        ],
+        "match_logic": "AND/OR",  // 多个签名的匹配逻辑
+        "description": "协议检测器描述"
+    }
+}
+```
+
+### 协议签名参数
+
+| 参数 | 说明 |
+|------|------|
+| `offset` | 在数据包中开始匹配的字节偏移量 |
+| `bytes` | 要匹配的字节序列，可以是十六进制或ASCII格式 |
+| `mask` | 应用于匹配的位掩码，用十六进制表示 |
+| `hex` | 指定bytes是否为十六进制格式，true为十六进制，false为ASCII |
+| `length` | 数据包长度限制，包含min（最小长度）和max（最大长度） |
+| `contains` | 数据包中必须包含的字节序列，用于进一步过滤 |
+| `description` | 签名描述，说明此签名匹配的协议特征 |
+
+### 协议检测器参数
+
+| 参数 | 说明 |
+|------|------|
+| `signatures` | 协议签名数组，定义识别特定协议的特征 |
+| `match_logic` | 多个签名间的逻辑关系，"AND"表示全部匹配，"OR"表示任一匹配 |
+| `description` | 协议检测器描述 |
+
 
 
 ## 开发计划
-- [ ] 支持包过滤和选择性转发
+- [X] 支持包过滤和选择性转发
 - [ ] 支持鉴权、加密、去重等功能
 - [ ] 支持更复杂的负载均衡算法
 - [ ] 支持UDP Over TCP的转发
@@ -88,6 +151,7 @@ go build
 - **listen.go** - 实现监听组件(ListenComponent)，负责监听UDP端口接收数据包
 - **forward.go** - 实现转发组件(ForwardComponent)，负责将数据包转发到目标服务器
 - **config.json** - 主配置文件，定义系统监听地址和转发目标
+- **filter.go** - 定义过滤器(FilterComponent)，用于选择性转发数据包
 - **go.mod** - Go模块定义文件
 
 ### 配置示例
@@ -99,7 +163,6 @@ examples目录包含多种使用场景的配置示例：
 - **redundant_server_config.json** - UDP冗余服务端配置，接收客户端流量并转发
 - **wg_bidirectional_client_config.json** - WireGuard UDP上下行分离通信客户端配置
 - **wg_bidirectional_server_config.json** - WireGuard UDP上下行分离通信服务端配置
-
 
 
 ## 性能测试
