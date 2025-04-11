@@ -38,13 +38,3 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          files: dist/*
-          body: |
-            Auto-generated release for version ${{ github.ref_name }}
-            Contains both server and client binaries for multiple platforms.
