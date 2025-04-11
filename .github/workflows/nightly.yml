@@ -45,3 +45,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: nightly-${{ steps.build_date.outputs.date }}-${{ steps.commit_hash.outputs.hash }}
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      - name: Upload assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: UDPlex
+          path: UDPlex/dist/*
