@@ -22,7 +22,6 @@ type ListenComponent struct {
 	timeout           time.Duration
 	replaceOldMapping bool
 	detour            []string
-	queueSize         int
 	workerCount       int
 
 	conn         net.PacketConn
@@ -31,7 +30,6 @@ type ListenComponent struct {
 	mappingsRead *map[string]*AddrMapping
 	stopCh       chan struct{}
 	stopped      bool
-	sendQueue    chan packetDestination
 }
 
 // NewListenComponent creates a new listen component
@@ -39,11 +37,6 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	timeout := time.Duration(cfg.Timeout) * time.Second
 	if timeout == 0 {
 		timeout = 120 * time.Second // Default timeout
-	}
-
-	queueSize := cfg.QueueSize
-	if queueSize <= 0 {
-		queueSize = 1024 // Default queue size
 	}
 
 	workerCount := cfg.WorkerCount
@@ -57,13 +50,11 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		timeout:           timeout,
 		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
-		queueSize:         queueSize,
 		workerCount:       workerCount,
 		router:            router,
 		mappings:          make(map[string]*AddrMapping),
 		mappingsRead:      &map[string]*AddrMapping{},
 		stopCh:            make(chan struct{}),
-		sendQueue:         make(chan packetDestination, queueSize),
 	}
 }
 
@@ -90,31 +81,7 @@ func (l *ListenComponent) Start() error {
 	// Start packet handling routine (which now also handles cleanup)
 	go l.handlePackets()
 
-	// Start worker goroutines to process send queue
-	for range l.workerCount {
-		go l.sendWorker()
-	}
-
 	return nil
-}
-
-func (l *ListenComponent) sendWorker() {
-	for {
-		select {
-		case <-l.stopCh:
-			return
-		case pd, ok := <-l.sendQueue:
-			if !ok {
-				return // Channel closed
-			}
-
-			if _, err := l.conn.WriteTo(pd.packet.buffer[:pd.packet.length], pd.addr); err != nil {
-				log.Printf("%s: Error writing to %s: %v", l.tag, pd.addr, err)
-			}
-			pd.packet.Release(1)
-
-		}
-	}
 }
 
 // Stop closes the listener
@@ -125,7 +92,6 @@ func (l *ListenComponent) Stop() error {
 
 	l.stopped = true
 	close(l.stopCh)
-	close(l.sendQueue)
 	return l.conn.Close()
 }
 
@@ -244,24 +210,10 @@ func (l *ListenComponent) handlePackets() {
 func (l *ListenComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
-	droppedCount := 0
-
-	mappings := *l.mappingsRead
-
-	packet.AddRef(int32(len(mappings)))
-
-	for _, mapping := range mappings {
-		select {
-		case l.sendQueue <- packetDestination{packet: packet, addr: mapping.addr}:
-
-		default:
-			droppedCount++
-			packet.Release(1)
+	for _, mapping := range *l.mappingsRead {
+		if _, err := l.conn.WriteTo(packet.buffer[:packet.length], mapping.addr); err != nil {
+			log.Printf("%s: Error writing to %s: %v", l.tag, mapping.addr, err)
 		}
-	}
-
-	if droppedCount > 0 {
-		log.Printf("%s: Queue full, dropped %d packets", l.tag, droppedCount)
 	}
 
 	return nil

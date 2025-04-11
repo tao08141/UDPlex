@@ -40,6 +40,14 @@ func NewRouter(config Config) *Router {
 		config.WorkerCount = 4 // Default to 4 workers
 	}
 
+	if config.BufferSize <= 0 {
+		config.BufferSize = 1500 // Default buffer size
+	}
+
+	if config.QueueSize <= 0 {
+		config.QueueSize = 10240 // Default queue size
+	}
+
 	r := &Router{
 		config:     config,
 		components: make(map[string]Component),

@@ -40,8 +40,6 @@ go build
 | `type` | 组件类型: `listen` |
 | `tag` | 组件唯一标识 |
 | `listen_addr` | 监听地址和端口 |
-| `queue_size` | 队列大小 |
-| `worker_count` | 工作池数量 |
 | `timeout` | 连接超时时间 (秒) |
 | `replace_old_mapping` | 是否替换旧连接  |
 | `detour` | 转发路径，指定接收返回数据的组件 |
@@ -53,7 +51,6 @@ go build
 | `type` | `forward` |
 | `tag` | 组件唯一标识 |
 | `forwarders` | 转发目标地址列表 |
-| `queue_size` | 队列大小 |
 | `reconnect_interval` | 重连间隔时间 (秒)  |
 | `connection_check_time` | 连接检查间隔 (秒)  |
 | `send_keepalive` | 是否发送空数据当心跳包 |

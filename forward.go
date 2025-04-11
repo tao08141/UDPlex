@@ -224,6 +224,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 
 // HandlePacket processes packets from other components
 func (f *ForwardComponent) HandlePacket(packet Packet) error {
+	defer packet.Release(1)
 
 	for _, conn := range f.forwardConnList {
 		if atomic.LoadInt32(&conn.isConnected) == 1 {
@@ -245,6 +246,5 @@ func (f *ForwardComponent) HandlePacket(packet Packet) error {
 		}
 	}
 
-	packet.Release(1)
 	return nil
 }
