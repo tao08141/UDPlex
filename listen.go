@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"maps"
 	"net"
 	"time"
@@ -64,7 +63,7 @@ func (l *ListenComponent) Start() error {
 	}
 
 	l.conn = conn
-	log.Printf("%s is listening on %s", l.tag, conn.LocalAddr())
+	logger.Infof("%s is listening on %s", l.tag, conn.LocalAddr())
 
 	// Start packet handling routine (which now also handles cleanup)
 	go l.handlePackets()
@@ -94,7 +93,7 @@ func (l *ListenComponent) performCleanup() {
 		if now.Sub(mapping.lastActive) > l.timeout {
 			delete(l.mappings, addrString)
 			isSync = true
-			log.Printf("%s: Removed inactive mapping: %s", l.tag, addrString)
+			logger.Warnf("%s: Removed inactive mapping: %s", l.tag, addrString)
 		}
 	}
 
@@ -125,7 +124,7 @@ func (l *ListenComponent) SendPacket(packet Packet, metadata any) error {
 
 	_, err := l.conn.WriteTo(packet.buffer, addr)
 	if err != nil {
-		log.Printf("%s: Failed to send packet: %v", l.tag, err)
+		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
 		return err
 	}
 
@@ -152,7 +151,7 @@ func (l *ListenComponent) handlePackets() {
 
 			// Set a shorter read deadline to ensure we check for cleanup regularly
 			if err := l.conn.SetReadDeadline(time.Now().Add(shortDeadline)); err != nil {
-				log.Printf("%s: Error setting read deadline: %v", l.tag, err)
+				logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
 			}
 
 			buffer := l.router.GetBuffer()
@@ -166,7 +165,7 @@ func (l *ListenComponent) handlePackets() {
 				if l.stopped {
 					return
 				}
-				log.Printf("%s: Read error: %v", l.tag, err)
+				logger.Warnf("%s: Read error: %v", l.tag, err)
 				l.router.PutBuffer(buffer)
 				continue
 			}
@@ -181,14 +180,14 @@ func (l *ListenComponent) handlePackets() {
 
 					for key, mapping := range l.mappings {
 						if mapping.addr.(*net.UDPAddr).IP.String() == addrIP {
-							log.Printf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
+							logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
 							delete(l.mappings, key)
 						}
 					}
 				}
 
 				// Add the new mapping
-				log.Printf("%s: New mapping: %s", l.tag, addr.String())
+				logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
 				l.mappings[addrKey] = &AddrMapping{addr: addr, lastActive: time.Now()}
 				l.syncMapping()
 			} else {
@@ -207,7 +206,7 @@ func (l *ListenComponent) handlePackets() {
 
 			// Forward the packet to detour components
 			if err := l.router.Route(packet, l.detour); err != nil {
-				log.Printf("%s: Error routing: %v", l.tag, err)
+				logger.Infof("%s: Error routing: %v", l.tag, err)
 			}
 		}
 	}
@@ -218,11 +217,9 @@ func (l *ListenComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
 	for _, mapping := range *l.mappingsRead {
-
 		if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
-			log.Printf("%s: Failed to queue packet for sending: %v", l.tag, err)
+			logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
 		}
-
 	}
 
 	return nil

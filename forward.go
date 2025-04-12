@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"sync/atomic"
 	"time"
@@ -75,12 +74,14 @@ func (f *ForwardComponent) Start() error {
 	for _, addr := range f.forwarders {
 		conn, err := f.setupForwarder(addr)
 		if err != nil {
-			log.Printf("%s: Failed to initialize forwarder %s: %v", f.tag, addr, err)
+			logger.Errorf("%s: Failed to initialize forwarder %s: %v", f.tag, addr, err)
 			continue
 		}
 		f.forwardConns[addr] = conn
 		f.forwardConnList = append(f.forwardConnList, conn)
 	}
+
+	logger.Infof("%s: Forwarding to %v", f.tag, f.forwarders)
 
 	// Start connection checker routine
 	go f.connectionChecker()
@@ -166,17 +167,17 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 		conn.conn = nil
 	}
 
-	log.Printf("%s: Attempting to reconnect to %s", f.tag, conn.remoteAddr)
+	logger.Infof("%s: Attempting to reconnect to %s", f.tag, conn.remoteAddr)
 
 	newConn, err := net.DialUDP("udp", nil, conn.udpAddr)
 	if err != nil {
-		log.Printf("%s: Reconnection to %s failed: %v", f.tag, conn.remoteAddr, err)
+		logger.Infof("%s: Reconnection to %s failed: %v", f.tag, conn.remoteAddr, err)
 		return
 	}
 
 	conn.conn = newConn
 	atomic.StoreInt32(&conn.isConnected, 1)
-	log.Printf("%s: Successfully reconnected to %s", f.tag, conn.remoteAddr)
+	logger.Infof("%s: Successfully reconnected to %s", f.tag, conn.remoteAddr)
 
 	go f.readFromForwarder(conn)
 }
@@ -198,7 +199,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 					continue
 				}
 
-				log.Printf("%s: Error reading from %s: %v", f.tag, conn.remoteAddr, err)
+				logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.remoteAddr, err)
 				atomic.StoreInt32(&conn.isConnected, 0)
 				return
 			}
@@ -214,7 +215,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 
 			// Forward to detour components
 			if err := f.router.Route(packet, f.detour); err != nil {
-				log.Printf("%s: Error routing: %v", f.tag, err)
+				logger.Infof("%s: Error routing: %v", f.tag, err)
 			}
 		}
 
@@ -233,7 +234,7 @@ func (f *ForwardComponent) SendPacket(packet Packet, metadata any) error {
 
 	_, err := conn.conn.Write(packet.buffer)
 	if err != nil {
-		log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
+		logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
 		atomic.StoreInt32(&conn.isConnected, 0)
 		return err
 	}
@@ -249,7 +250,7 @@ func (f *ForwardComponent) HandlePacket(packet Packet) error {
 		if atomic.LoadInt32(&conn.isConnected) == 1 {
 			// Use the send queue instead of direct writing
 			if err := f.router.SendPacket(f, packet, conn); err != nil {
-				log.Printf("%s: Failed to queue packet for sending: %v", f.tag, err)
+				logger.Infof("%s: Failed to queue packet for sending: %v", f.tag, err)
 			}
 		}
 	}

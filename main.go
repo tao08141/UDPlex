@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"sync"
+
+	"go.uber.org/zap"
 )
 
 // Component is the interface that all network components must implement
@@ -81,23 +82,23 @@ func (r *Router) startWorkers() {
 		r.wg.Add(1)
 		go func(workerID int) {
 			defer r.wg.Done()
-			log.Printf("Starting router worker %d", workerID)
+			logger.Infof("Starting router worker %d", workerID)
 
 			for {
 				select {
 				case task, ok := <-r.routeTasks:
 					if !ok {
-						log.Printf("Router worker %d: route tasks channel closed", workerID)
+						logger.Warnf("Router worker %d: route tasks channel closed", workerID)
 						return
 					}
 					r.processRouteTask(task)
 				case task, ok := <-r.sendTasks:
 					if !ok {
-						log.Printf("Router worker %d: send tasks channel closed", workerID)
+						logger.Warnf("Router worker %d: send tasks channel closed", workerID)
 						return
 					}
 					if err := task.component.SendPacket(task.packet, task.metadata); err != nil {
-						log.Printf("Error sending packet via %s: %v", task.component.GetTag(), err)
+						logger.Warnf("Error sending packet via %s: %v", task.component.GetTag(), err)
 					}
 					task.packet.Release(1)
 				}
@@ -118,13 +119,13 @@ func (r *Router) processRouteTask(task routeTask) {
 
 		c, exists := r.GetComponent(tag)
 		if !exists {
-			log.Printf("Warning: trying to route to non-existing component: %s", tag)
+			logger.Warnf("Warning: trying to route to non-existing component: %s", tag)
 			continue
 		}
 
 		packet.AddRef(1)
 		if err := c.HandlePacket(packet); err != nil {
-			log.Printf("Error routing to %s: %v", tag, err)
+			logger.Warnf("Error routing to %s: %v", tag, err)
 		}
 	}
 }
@@ -192,7 +193,7 @@ func (r *Router) Route(packet Packet, destTags []string) error {
 // StartAll starts all registered components
 func (r *Router) StartAll() error {
 	for tag, component := range r.components {
-		log.Printf("Starting component: %s", tag)
+		logger.Infof("Starting component: %s", tag)
 		if err := component.Start(); err != nil {
 			return fmt.Errorf("failed to start component %s: %w", tag, err)
 		}
@@ -204,20 +205,21 @@ func (r *Router) StartAll() error {
 func (r *Router) StopAll() {
 	// Stop components
 	for tag, component := range r.components {
-		log.Printf("Stopping component: %s", tag)
+		logger.Infof("Stopping component: %s", tag)
 		if err := component.Stop(); err != nil {
-			log.Printf("Error stopping component %s: %v", tag, err)
+			logger.Warnf("Error stopping component %s: %v", tag, err)
 		}
 	}
 
 	// Close task channel and wait for workers to complete
 	close(r.routeTasks)
 	r.wg.Wait()
-	log.Printf("All router workers stopped")
+	logger.Infof("All router workers stopped")
 }
 
 func main() {
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+	defaultLogger, _ := zap.NewProduction()
+	logger = defaultLogger.Sugar()
 
 	configPath := flag.String("c", "config.json", "Path to configuration file")
 	flag.Parse()
@@ -225,13 +227,17 @@ func main() {
 	// Load configuration
 	configData, err := os.ReadFile(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to read config: %v", err)
+		logger.Fatalf("Failed to read config: %v", err)
 	}
 
 	var config Config
 	if err := json.Unmarshal(configData, &config); err != nil {
-		log.Fatalf("Failed to parse config: %v", err)
+		logger.Fatalf("Failed to parse config: %v", err)
 	}
+
+	// Initialize the real logger with config
+	initLogger(config.Logging)
+	logger.Info("Logger initialized")
 
 	// Initialize router with buffer pool
 	router := NewRouter(config)
@@ -244,14 +250,14 @@ func main() {
 		// Get component type
 		typeVal, ok := cfgMap["type"].(string)
 		if !ok {
-			log.Printf("Component missing type field, skipping")
+			logger.Warnf("Component missing type field, skipping")
 			continue
 		}
 
 		// Convert generic config to specific config based on type
 		cfgBytes, err := json.Marshal(cfgMap)
 		if err != nil {
-			log.Printf("Failed to marshal component config: %v", err)
+			logger.Warnf("Failed to marshal component config: %v", err)
 			continue
 		}
 
@@ -261,7 +267,7 @@ func main() {
 		case "listen":
 			var cfg ComponentConfig
 			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
-				log.Printf("Failed to unmarshal listen config: %v", err)
+				logger.Warnf("Failed to unmarshal listen config: %v", err)
 				continue
 			}
 			component = NewListenComponent(cfg, router)
@@ -269,7 +275,7 @@ func main() {
 		case "forward":
 			var cfg ComponentConfig
 			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
-				log.Printf("Failed to unmarshal forward config: %v", err)
+				logger.Warnf("Failed to unmarshal forward config: %v", err)
 				continue
 			}
 			component = NewForwardComponent(cfg, router)
@@ -277,26 +283,27 @@ func main() {
 		case "filter":
 			var cfg FilterComponentConfig
 			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
-				log.Printf("Failed to unmarshal filter config: %v", err)
+				logger.Warnf("Failed to unmarshal filter config: %v", err)
 				continue
 			}
 			component = NewFilterComponent(cfg, router, protocolDetector)
 
 		default:
-			log.Printf("Unknown component type: %s", typeVal)
+			logger.Warnf("Unknown component type: %s", typeVal)
 			continue
 		}
 
 		if err := router.Register(component); err != nil {
-			log.Printf("Failed to register component: %v", err)
+			logger.Warnf("Failed to register component: %v", err)
 		}
 	}
 
 	// Start all components
 	if err := router.StartAll(); err != nil {
-		log.Fatalf("Failed to start components: %v", err)
+		logger.Fatalf("Failed to start components: %v", err)
 	}
 
-	// Wait indefinitely
+	logger.Info("UDPlex started and ready")
+
 	select {}
 }

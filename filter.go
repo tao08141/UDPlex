@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 )
 
 // FilterComponent implements protocol-based packet filtering
@@ -39,7 +38,7 @@ func (f *FilterComponent) GetTag() string {
 
 // Start initializes the filter component
 func (f *FilterComponent) Start() error {
-	log.Printf("%s: Starting filter component", f.tag)
+	logger.Infof("%s: Starting filter component", f.tag)
 	return nil
 }
 

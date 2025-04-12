@@ -7,6 +7,7 @@ type Config struct {
 	WorkerCount       int                           `json:"worker_count"`
 	Services          []map[string]any              `json:"services"`
 	ProtocolDetectors map[string]ProtocolDefinition `json:"protocol_detectors"`
+	Logging           LoggingConfig                 `json:"logging"`
 }
 
 // ComponentConfig represents the common configuration for all components
@@ -30,4 +31,12 @@ type FilterComponentConfig struct {
 	Detour            map[string][]string `json:"detour"`
 	DetourMiss        []string            `json:"detour_miss"`
 	UseProtoDetectors []string            `json:"use_proto_detectors"`
+}
+
+// LoggingConfig holds all logging-related configuration
+type LoggingConfig struct {
+	Level      string `json:"level"`       // debug, info, warn, error, dpanic, panic, fatal
+	Format     string `json:"format"`      // json or console
+	OutputPath string `json:"output_path"` // file path or "stdout"
+	Caller     bool   `json:"caller"`      // include caller information
 }
