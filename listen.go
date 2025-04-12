@@ -113,6 +113,25 @@ func (l *ListenComponent) syncMapping() error {
 	return nil
 }
 
+func (l *ListenComponent) SendPacket(packet Packet, metadata any) error {
+	addr, ok := metadata.(net.Addr)
+	if !ok {
+		return fmt.Errorf("%s: Invalid address type", l.tag)
+	}
+
+	if addr == nil {
+		return fmt.Errorf("%s: Address is nil", l.tag)
+	}
+
+	_, err := l.conn.WriteTo(packet.buffer, addr)
+	if err != nil {
+		log.Printf("%s: Failed to send packet: %v", l.tag, err)
+		return err
+	}
+
+	return nil
+}
+
 // handlePackets processes incoming UDP packets and handles cleanup
 func (l *ListenComponent) handlePackets() {
 	cleanupInterval := l.timeout / 2
@@ -199,9 +218,11 @@ func (l *ListenComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
 	for _, mapping := range *l.mappingsRead {
-		if _, err := l.conn.WriteTo(packet.buffer, mapping.addr); err != nil {
-			log.Printf("%s: Error writing to %s: %v", l.tag, mapping.addr, err)
+
+		if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
+			log.Printf("%s: Failed to queue packet for sending: %v", l.tag, err)
 		}
+
 	}
 
 	return nil

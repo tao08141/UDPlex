@@ -17,6 +17,7 @@ type Component interface {
 	// HandlePacket processes packets coming from other components
 	// srcTag is the tag of the component that sent the packet
 	HandlePacket(packet Packet) error
+	SendPacket(packet Packet, metadata any) error
 }
 
 // Router manages all components and routes packets between them
@@ -25,12 +26,19 @@ type Router struct {
 	bufferPool sync.Pool
 	config     Config
 	routeTasks chan routeTask
+	sendTasks  chan sendTask
 	wg         sync.WaitGroup
 }
 
 type routeTask struct {
 	packet   Packet
 	destTags []string
+}
+
+type sendTask struct {
+	component Component
+	packet    Packet
+	metadata  any
 }
 
 // NewRouter creates a new router
@@ -57,10 +65,11 @@ func NewRouter(config Config) *Router {
 				return &buf // Return pointer to slice
 			},
 		},
-		routeTasks: make(chan routeTask, config.QueueSize), // Buffer size for tasks
+		routeTasks: make(chan routeTask, config.QueueSize),
+		sendTasks:  make(chan sendTask, config.QueueSize), // Initialize send queue
 	}
 
-	// Start the worker pool
+	// Start the worker pools
 	r.startWorkers()
 
 	return r
@@ -74,11 +83,25 @@ func (r *Router) startWorkers() {
 			defer r.wg.Done()
 			log.Printf("Starting router worker %d", workerID)
 
-			for task := range r.routeTasks {
-				r.processRouteTask(task)
+			for {
+				select {
+				case task, ok := <-r.routeTasks:
+					if !ok {
+						log.Printf("Router worker %d: route tasks channel closed", workerID)
+						return
+					}
+					r.processRouteTask(task)
+				case task, ok := <-r.sendTasks:
+					if !ok {
+						log.Printf("Router worker %d: send tasks channel closed", workerID)
+						return
+					}
+					if err := task.component.SendPacket(task.packet, task.metadata); err != nil {
+						log.Printf("Error sending packet via %s: %v", task.component.GetTag(), err)
+					}
+					task.packet.Release(1)
+				}
 			}
-
-			log.Printf("Router worker %d stopped", workerID)
 		}(i)
 	}
 }
@@ -104,6 +127,20 @@ func (r *Router) processRouteTask(task routeTask) {
 			log.Printf("Error routing to %s: %v", tag, err)
 		}
 	}
+}
+
+// SendPacket adds a packet to the send queue
+func (r *Router) SendPacket(component Component, packet Packet, metadata any) error {
+	packet.AddRef(1) // Add reference for the worker
+
+	select {
+	case r.sendTasks <- sendTask{component: component, packet: packet, metadata: metadata}:
+		// Task successfully queued
+	default:
+		packet.Release(1) // Release reference if queue is full
+		return fmt.Errorf("send queue is full, packet dropped")
+	}
+	return nil
 }
 
 // GetBuffer retrieves a buffer from the pool

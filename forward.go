@@ -221,27 +221,36 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 	}
 }
 
+func (f *ForwardComponent) SendPacket(packet Packet, metadata any) error {
+	conn, ok := metadata.(*ForwardConn)
+	if !ok || conn == nil {
+		return fmt.Errorf("invalid connection type")
+	}
+
+	if atomic.LoadInt32(&conn.isConnected) == 0 || conn.conn == nil {
+		return nil // Connection isn't available, just skip
+	}
+
+	_, err := conn.conn.Write(packet.buffer)
+	if err != nil {
+		log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
+		atomic.StoreInt32(&conn.isConnected, 0)
+		return err
+	}
+
+	return nil
+}
+
 // HandlePacket processes packets from other components
 func (f *ForwardComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
 	for _, conn := range f.forwardConnList {
 		if atomic.LoadInt32(&conn.isConnected) == 1 {
-
-			currentConn := conn.conn
-			if currentConn == nil {
-				continue
+			// Use the send queue instead of direct writing
+			if err := f.router.SendPacket(f, packet, conn); err != nil {
+				log.Printf("%s: Failed to queue packet for sending: %v", f.tag, err)
 			}
-
-			_, err := currentConn.Write(packet.buffer)
-
-			if err != nil {
-				log.Printf("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
-				atomic.StoreInt32(&conn.isConnected, 0)
-			}
-
-		} else {
-
 		}
 	}
 
