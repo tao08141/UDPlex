@@ -62,7 +62,7 @@ func NewRouter(config Config) *Router {
 		components: make(map[string]Component),
 		bufferPool: sync.Pool{
 			New: func() any {
-				buf := make([]byte, config.BufferSize)
+				buf := make([]byte, config.BufferSize+128)
 				return &buf // Return pointer to slice
 			},
 		},
@@ -151,7 +151,7 @@ func (r *Router) GetBuffer() []byte {
 
 // PutBuffer returns a buffer to the pool
 func (r *Router) PutBuffer(buf []byte) {
-	buf = buf[:r.config.BufferSize]
+	buf = buf[:r.config.BufferSize+128]
 	r.bufferPool.Put(&buf)
 }
 

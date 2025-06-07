@@ -12,16 +12,26 @@ type Config struct {
 
 // ComponentConfig represents the common configuration for all components
 type ComponentConfig struct {
-	Type                string   `json:"type"`
-	Tag                 string   `json:"tag"`
-	ListenAddr          string   `json:"listen_addr"`
-	Timeout             int      `json:"timeout"`
-	ReplaceOldMapping   bool     `json:"replace_old_mapping"`
-	Forwarders          []string `json:"forwarders"`
-	ReconnectInterval   int      `json:"reconnect_interval"`
-	ConnectionCheckTime int      `json:"connection_check_time"`
-	Detour              []string `json:"detour"`
-	SendKeepalive       *bool    `json:"send_keepalive"`
+	Type                string      `json:"type"`
+	Tag                 string      `json:"tag"`
+	ListenAddr          string      `json:"listen_addr"`
+	Timeout             int         `json:"timeout"`
+	ReplaceOldMapping   bool        `json:"replace_old_mapping"`
+	Forwarders          []string    `json:"forwarders"`
+	ReconnectInterval   int         `json:"reconnect_interval"`
+	ConnectionCheckTime int         `json:"connection_check_time"`
+	Detour              []string    `json:"detour"`
+	SendKeepalive       *bool       `json:"send_keepalive"`
+	Auth                *AuthConfig `json:"auth,omitempty"`
+}
+
+// AuthConfig represents authentication and encryption settings
+type AuthConfig struct {
+	Enabled           bool   `json:"enabled"`
+	Secret            string `json:"secret"`
+	EnableEncryption  bool   `json:"enable_encryption"`
+	HeartbeatInterval int    `json:"heartbeat_interval"` // seconds
+	AuthTimeout       int    `json:"auth_timeout"`       // seconds
 }
 
 // FilterComponentConfig represents the configuration for a filter component
