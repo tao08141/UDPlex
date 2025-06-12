@@ -372,17 +372,16 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		if packet.offset > TimestampSize {
 			// Shift existing data to make space for timestamp
 			packet.offset -= TimestampSize
-			packet.length += TimestampSize
 		} else {
 			newBuffer := am.router.GetBuffer()
 			copy(newBuffer[TimestampSize:], packet.GetData())
 			packet.SetBuffer(newBuffer[:packet.length])
 			packet.offset = 0
-			packet.length += TimestampSize
 		}
 
 		timestamp := time.Now().UnixMilli()
 		binary.BigEndian.PutUint64(packet.buffer[packet.offset:], uint64(timestamp))
+		packet.length += TimestampSize
 
 		// Get a new buffer for the wrapped packet
 		buffer := am.router.GetBuffer()
@@ -416,18 +415,17 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		if packet.offset >= HeaderSize {
 			// Shift header before existing data
 			packet.offset -= HeaderSize
-			WriteHeader(packet.buffer[packet.offset:], MsgTypeData, uint16(packet.length))
-			packet.length += HeaderSize
 		} else {
 			// Need new buffer
 			buffer := packet.router.GetBuffer()
-			WriteHeader(buffer, MsgTypeData, uint16(packet.length))
 			copy(buffer[HeaderSize:], packet.buffer[packet.offset:packet.offset+packet.length])
 
 			packet.SetBuffer(buffer)
 			packet.offset = 0
-			packet.length += HeaderSize
 		}
+
+		WriteHeader(packet.buffer[packet.offset:], MsgTypeData, uint16(packet.length))
+		packet.length += HeaderSize
 	}
 
 	return nil

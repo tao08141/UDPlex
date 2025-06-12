@@ -3,7 +3,7 @@ package main
 // Config represents the top-level configuration structure
 type Config struct {
 	BufferSize        int                           `json:"buffer_size"`
-	BufferOffer       int                           `json:"buffer_offer"`
+	BufferOffset      int                           `json:"buffer_offset"`
 	QueueSize         int                           `json:"queue_size"`
 	WorkerCount       int                           `json:"worker_count"`
 	Services          []map[string]any              `json:"services"`

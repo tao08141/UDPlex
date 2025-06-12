@@ -20,8 +20,8 @@ func NewRouter(config Config) *Router {
 		config.QueueSize = 10240 // Default queue size
 	}
 
-	if config.BufferOffer <= 0 {
-		config.BufferOffer = 64 // Default buffer offer size
+	if config.BufferOffset <= 0 {
+		config.BufferOffset = 64 // Default buffer offer size
 	}
 
 	r := &Router{
@@ -29,7 +29,7 @@ func NewRouter(config Config) *Router {
 		components: make(map[string]Component),
 		bufferPool: sync.Pool{
 			New: func() any {
-				buf := make([]byte, config.BufferSize+config.BufferOffer)
+				buf := make([]byte, config.BufferSize+config.BufferOffset)
 				return &buf // Return pointer to slice
 			},
 		},
@@ -129,7 +129,7 @@ func (r *Router) GetBuffer() []byte {
 func (r *Router) GetPacket(srcTag string) Packet {
 	return Packet{
 		buffer:  r.GetBuffer(),
-		offset:  r.config.BufferOffer,
+		offset:  r.config.BufferOffset,
 		length:  0,
 		srcAddr: nil,
 		srcTag:  srcTag,
@@ -142,7 +142,7 @@ func (r *Router) GetPacket(srcTag string) Packet {
 
 // PutBuffer returns a buffer to the pool
 func (r *Router) PutBuffer(buf []byte) {
-	buf = buf[:r.config.BufferSize+r.config.BufferOffer]
+	buf = buf[:r.config.BufferSize+r.config.BufferOffset]
 	r.bufferPool.Put(&buf)
 }
 

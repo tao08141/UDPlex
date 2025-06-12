@@ -2,6 +2,7 @@
     "buffer_size": 1600,
     "queue_size": 10240,
     "worker_count": 4,
+    
     "logging": {
         "level": "debug",
         "format": "console",
