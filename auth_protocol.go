@@ -50,7 +50,6 @@ type FrameTracker struct {
 	frameID    [FrameIDSize]byte
 	bitmap     []uint64
 	lastAccess time.Time
-	mu         sync.RWMutex
 }
 
 // DeduplicationManager manages frame tracking and deduplication
@@ -127,9 +126,6 @@ func (dm *DeduplicationManager) isDuplicate(nonce [NonceSize]byte) bool {
 		dm.frames[frameID] = tracker
 	}
 
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-
 	// Update last access time
 	tracker.lastAccess = time.Now()
 
@@ -176,9 +172,7 @@ func (dm *DeduplicationManager) cleanupExpiredFrames() {
 	cutoff := time.Now().Add(-FrameTimeout)
 
 	for frameID, tracker := range dm.frames {
-		tracker.mu.RLock()
 		expired := tracker.lastAccess.Before(cutoff)
-		tracker.mu.RUnlock()
 
 		if expired {
 			delete(dm.frames, frameID)
