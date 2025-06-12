@@ -43,7 +43,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	}
 
 	// Initialize auth manager
-	authManager, err := NewAuthManager(cfg.Auth)
+	authManager, err := NewAuthManager(cfg.Auth, router)
 	if err != nil {
 		logger.Errorf("Failed to create auth manager: %v", err)
 		return nil
@@ -131,7 +131,7 @@ func (l *ListenComponent) SendPacket(packet Packet, metadata any) error {
 		return fmt.Errorf("%s: Address is nil", l.tag)
 	}
 
-	_, err := l.conn.WriteTo(packet.buffer, addr)
+	_, err := l.conn.WriteTo(packet.GetData(), addr)
 	if err != nil {
 		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
 		return err
@@ -141,11 +141,7 @@ func (l *ListenComponent) SendPacket(packet Packet, metadata any) error {
 }
 
 // handleAuthMessage processes authentication messages
-func (l *ListenComponent) handleAuthMessage(buffer []byte, length int, addr net.Addr) error {
-	header, err := ParseHeader(buffer[:length])
-	if err != nil {
-		return err
-	}
+func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byte, addr net.Addr) error {
 
 	addrKey := addr.String()
 
@@ -240,71 +236,55 @@ func (l *ListenComponent) handlePackets() {
 				logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
 			}
 
-			buffer := l.router.GetBuffer()
-			length, addr, err := l.conn.ReadFrom(buffer)
+			packet := l.router.GetPacket(l.tag)
+			defer packet.Release(1)
+
+			length, addr, err := l.conn.ReadFrom(packet.buffer[packet.offset:])
 
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				l.router.PutBuffer(buffer)
 				continue
 			} else if err != nil {
 				if l.stopped {
 					return
 				}
 				logger.Warnf("%s: Read error: %v", l.tag, err)
-				l.router.PutBuffer(buffer)
 				continue
 			}
+
+			packet.length = length
 
 			// Handle authentication if enabled
 			if l.authManager != nil {
 				if length < HeaderSize {
-					l.router.PutBuffer(buffer)
 					continue
 				}
 
-				header, err := ParseHeader(buffer[:length])
+				header, err := l.authManager.UnwrapData(&packet)
 				if err != nil {
-					l.router.PutBuffer(buffer)
+					logger.Warnf("%s: Failed to unwrap data: %v", l.tag, err)
 					continue
 				}
 
 				// Handle auth messages
 				if header.MsgType != MsgTypeData {
-					l.handleAuthMessage(buffer, length, addr)
-					l.router.PutBuffer(buffer)
+					l.handleAuthMessage(header, packet.GetData(), addr)
 					continue
 				}
-
-				logger.Debugf("%s: Received data from %s", l.tag, addr.String())
 
 				// For data messages, check authentication
 				addrKey := addr.String()
 				mapping, exists := l.mappings[addrKey]
 				if !exists || mapping.authState == nil || !mapping.authState.IsAuthenticated() {
 					// Not authenticated - silently drop
-					l.router.PutBuffer(buffer)
 					continue
 				}
-
-				// Unwrap data
-				unwrappedData, err := l.authManager.UnwrapData(buffer[:length], l.router.GetBuffer())
-				if err != nil {
-					logger.Warnf("%s: Failed to unwrap data: %v", l.tag, err)
-					l.router.PutBuffer(buffer)
-					continue
-				}
-
-				// Create new buffer with unwrapped data
-				l.router.PutBuffer(buffer)
-				buffer = unwrappedData
-				length = len(unwrappedData)
 
 				mapping.lastActive = time.Now()
 			}
 
 			// Handle address mapping for non-auth mode
-			addrKey := addr.String()
 			if l.authManager == nil {
+				addrKey := addr.String()
 				// Check if this is a new mapping
 				if _, exists := l.mappings[addrKey]; !exists {
 					// If we should replace old connections with the same IP
@@ -329,9 +309,7 @@ func (l *ListenComponent) handlePackets() {
 				}
 			}
 
-			packet := NewPacket(buffer[:length], length, addr, l.tag, l.router)
-
-			defer packet.Release(1)
+			packet.srcAddr = addr
 
 			// Forward the packet to detour components
 			if err := l.router.Route(packet, l.detour); err != nil {
@@ -345,24 +323,8 @@ func (l *ListenComponent) handlePackets() {
 func (l *ListenComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
-	var packetToSend Packet
-
 	if l.authManager != nil {
-
-		buffer := l.router.GetBuffer()
-		length, err := l.authManager.WrapData(buffer, packet.buffer)
-		if err != nil {
-			l.router.PutBuffer(buffer)
-			logger.Infof("%s: Failed to wrap packet: %v", l.tag, err)
-			return err
-		}
-
-		wrappedPacket := NewPacket(buffer[:length], length, packet.srcAddr, l.tag, l.router)
-		packetToSend = wrappedPacket
-		defer packetToSend.Release(1)
-
-	} else {
-		packetToSend = packet
+		l.authManager.WrapData(&packet)
 	}
 
 	for _, mapping := range *l.mappingsRead {
@@ -371,7 +333,7 @@ func (l *ListenComponent) HandlePacket(packet Packet) error {
 			continue
 		}
 
-		if err := l.router.SendPacket(l, packetToSend, mapping.addr); err != nil {
+		if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
 			logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
 		}
 	}

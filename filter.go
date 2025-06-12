@@ -62,7 +62,7 @@ func (f *FilterComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
 	// Detect protocol
-	proto := f.protocolDetector.DetectProtocol(packet.buffer, packet.length, f.useProtoDetectors)
+	proto := f.protocolDetector.DetectProtocol(packet.GetData(), f.useProtoDetectors)
 
 	// Store detected protocol in packet
 	packet.proto = proto

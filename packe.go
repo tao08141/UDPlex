@@ -7,6 +7,7 @@ import (
 
 type Packet struct {
 	buffer  []byte
+	offset  int
 	length  int
 	srcAddr net.Addr
 	srcTag  string
@@ -15,7 +16,7 @@ type Packet struct {
 	router  *Router
 }
 
-func NewPacket(buffer []byte, length int, srcAddr net.Addr, srcTag string, router *Router) Packet {
+func NewPacket(buffer []byte, length int, srcAddr net.Addr, srcTag string, router *Router, offset int) Packet {
 	return Packet{
 		buffer:  buffer,
 		length:  length,
@@ -23,7 +24,19 @@ func NewPacket(buffer []byte, length int, srcAddr net.Addr, srcTag string, route
 		srcTag:  srcTag,
 		count:   1, // Initial reference count
 		router:  router,
+		offset:  offset,
 	}
+}
+
+func (p *Packet) GetData() []byte {
+	return p.buffer[p.offset : p.offset+p.length]
+}
+
+// 替换buffer的地址
+func (p *Packet) SetBuffer(buffer []byte) {
+	p.router.PutBuffer(p.buffer)
+	p.buffer = buffer
+	p.length = len(buffer)
 }
 
 func (p *Packet) AddRef(count int32) {

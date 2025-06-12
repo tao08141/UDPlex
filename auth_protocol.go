@@ -61,11 +61,12 @@ type AuthManager struct {
 	heartbeatInterval time.Duration
 	authTimeout       time.Duration
 	dataTimeout       time.Duration
+	router            *Router
 	gcm               cipher.AEAD // Shared GCM cipher for performance
 }
 
 // NewAuthManager creates a new authentication manager
-func NewAuthManager(config *AuthConfig) (*AuthManager, error) {
+func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 	if config == nil || !config.Enabled {
 		return nil, nil
 	}
@@ -109,6 +110,7 @@ func NewAuthManager(config *AuthConfig) (*AuthManager, error) {
 		authTimeout:       authTimeout,
 		dataTimeout:       DefaultDataTimeout,
 		gcm:               gcm,
+		router:            router,
 	}, nil
 }
 
@@ -211,87 +213,140 @@ func CreateHeartbeat(buffer []byte) int {
 }
 
 // WrapData wraps data in protocol format with optional encryption
-func (am *AuthManager) WrapData(buffer []byte, data []byte) (int, error) {
-
-	offset := HeaderSize
-	var dataLen uint16
-
+func (am *AuthManager) WrapData(packet *Packet) error {
 	if am.enableEncryption && am.gcm != nil {
-		// Encrypted data format: Nonce(12) + EncryptedData(timestamp(8) + data)
+		// Encrypted data format: Header + Nonce(12) + EncryptedData(timestamp(8) + originalData)
+
+		// Prepare plaintext: timestamp + original data
+
+		offset := HeaderSize
+		if packet.offset > TimestampSize {
+			// Shift existing data to make space for timestamp
+			packet.offset -= TimestampSize
+			packet.length += TimestampSize
+		} else {
+			newBuffer := packet.router.GetBuffer()
+			copy(newBuffer[TimestampSize:], packet.GetData())
+			packet.SetBuffer(newBuffer[:packet.length])
+			packet.offset = 0
+			packet.length += TimestampSize
+		}
+
+		timestamp := time.Now().UnixMilli()
+		binary.BigEndian.PutUint64(packet.buffer[packet.offset:], uint64(timestamp))
+
+		// Get a new buffer for the wrapped packet
+		buffer := packet.router.GetBuffer()
+
+		// Generate nonce
 		nonce := buffer[offset : offset+NonceSize]
 		if _, err := rand.Read(nonce); err != nil {
-			return 0, err
+			return err
 		}
 		offset += NonceSize
 
-		// Prepare plaintext: timestamp + data
-		timestamp := time.Now().UnixMilli()
-		plaintextLen := TimestampSize + len(data)
-		plaintext := make([]byte, plaintextLen)
-		binary.BigEndian.PutUint64(plaintext[:TimestampSize], uint64(timestamp))
-		copy(plaintext[TimestampSize:], data)
+		// 打印packet.GetData()前32个字节
 
-		// Encrypt in place
-		ciphertext := am.gcm.Seal(buffer[offset:offset], nonce, plaintext, nil)
-		dataLen = NonceSize + uint16(len(ciphertext))
+		// Encrypt
+		ciphertext := am.gcm.Seal(buffer[offset:offset], nonce, packet.GetData(), nil)
+		if len(ciphertext) == 0 {
+			return errors.New("encryption failed, ciphertext is empty")
+		}
+
+		totalDataLen := NonceSize + len(ciphertext)
+		WriteHeader(buffer, MsgTypeData, uint16(totalDataLen))
+
+		packet.SetBuffer(buffer[:HeaderSize+totalDataLen])
+		packet.offset = 0
+		packet.length = HeaderSize + totalDataLen
+
 	} else {
-		// Unencrypted data - direct copy
-		// TODO zero-copy optimization
-		copy(buffer[offset:], data)
-		dataLen = uint16(len(data))
+		// Unencrypted data: just add header
+		if packet.offset >= HeaderSize {
+			// Shift header before existing data
+			packet.offset -= HeaderSize
+			WriteHeader(packet.buffer[packet.offset:], MsgTypeData, uint16(packet.length))
+			packet.length += HeaderSize
+		} else {
+			// Need new buffer
+			buffer := packet.router.GetBuffer()
+			WriteHeader(buffer, MsgTypeData, uint16(packet.length))
+			copy(buffer[HeaderSize:], packet.buffer[packet.offset:packet.offset+packet.length])
+
+			packet.SetBuffer(buffer)
+			packet.offset = 0
+			packet.length += HeaderSize
+		}
 	}
 
-	// Write header
-	WriteHeader(buffer, MsgTypeData, dataLen)
-	return HeaderSize + int(dataLen), nil
+	return nil
 }
 
 // UnwrapData unwraps protocol data with optional decryption
-func (am *AuthManager) UnwrapData(buffer []byte, unwrappedData []byte) ([]byte, error) {
+func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
+	if packet.length < HeaderSize {
+		return nil, errors.New("packet too small for header")
+	}
 
-	header, err := ParseHeader(buffer)
+	header, err := ParseHeader(packet.buffer[packet.offset:])
 	if err != nil {
-		return nil, err
+		return header, err
 	}
 
 	if header.Version != ProtocolVersion {
-		return nil, errors.New("unsupported protocol version")
+		return header, errors.New("unsupported protocol version")
 	}
 
 	if header.MsgType != MsgTypeData {
-		return nil, errors.New("not a data message")
+		return header, nil
 	}
 
-	data := buffer[HeaderSize : HeaderSize+header.Length]
+	dataOffset := packet.offset + HeaderSize
+	dataLen := int(header.Length)
+
+	if packet.length != HeaderSize+dataLen {
+		return header, errors.New("packet too small for declared data length " + fmt.Sprintf("%d < %d", packet.length, HeaderSize+dataLen))
+	}
+
+	data := packet.buffer[dataOffset : dataOffset+dataLen]
 
 	if am.enableEncryption && am.gcm != nil {
 		if len(data) < NonceSize+TimestampSize+am.gcm.Overhead() {
-			return nil, errors.New("encrypted data too short")
+			return header, errors.New("encrypted data too short")
 		}
 
 		nonce := data[:NonceSize]
 		ciphertext := data[NonceSize:]
 
-		// Decrypt in place to avoid allocation
-		plaintext, err := am.gcm.Open(unwrappedData[:0], nonce, ciphertext, nil)
+		plaintext := am.router.GetBuffer()
+
+		// Decrypt
+		plaintext, err := am.gcm.Open(plaintext[:0], nonce, ciphertext, nil)
 		if err != nil {
-			return nil, fmt.Errorf("decryption failed: %w", err)
+			return header, fmt.Errorf("decryption failed: %w", err)
 		}
 
 		if len(plaintext) < TimestampSize {
-			return nil, errors.New("decrypted data too short")
+			return header, errors.New("decrypted data too short")
 		}
 
 		// Verify timestamp
 		timestamp := int64(binary.BigEndian.Uint64(plaintext[:TimestampSize]))
 		if time.Since(time.UnixMilli(timestamp)) > am.dataTimeout {
-			return nil, errors.New("data timestamp expired")
+			return header, errors.New("data timestamp expired " + fmt.Sprintf("%d %d ", timestamp, time.Now().UnixMilli()))
 		}
 
-		return plaintext[TimestampSize:], nil
+		packet.SetBuffer(plaintext)
+		packet.offset = TimestampSize
+		packet.length = len(plaintext) - TimestampSize
+
+	} else {
+		// Unencrypted: just skip header
+		packet.offset = dataOffset
+		packet.length = dataLen
 	}
 
-	return data, nil
+	return header, nil
 }
 
 // IsAuthenticated checks if connection is authenticated

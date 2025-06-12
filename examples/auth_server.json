@@ -21,7 +21,7 @@
             "auth": {
                 "secret": "your-secret-key-here",
                 "enabled": true,
-                "enable_encryption": false,
+                "enable_encryption": true,
                 "heartbeat_interval": 30,
                 "auth_timeout": 10
             }

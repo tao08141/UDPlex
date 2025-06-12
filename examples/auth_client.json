@@ -26,7 +26,7 @@
                 "127.0.0.1:5203"
             ],
             "reconnect_interval": 5,
-            "connection_check_time": 30,
+            "connection_check_time": 10,
             "send_keepalive": true,
             "detour": [
                 "client_listen"
@@ -34,7 +34,7 @@
             "auth": {
                 "secret": "your-secret-key-here",
                 "enabled": true,
-                "enable_encryption": false,
+                "enable_encryption": true,
                 "heartbeat_interval": 30,
                 "auth_timeout": 10
             }

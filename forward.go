@@ -59,7 +59,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 	}
 
 	// Initialize auth manager
-	authManager, err := NewAuthManager(cfg.Auth)
+	authManager, err := NewAuthManager(cfg.Auth, router)
 	if err != nil {
 		logger.Errorf("Failed to create auth manager: %v", err)
 		return nil
@@ -224,6 +224,7 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 	if conn.heartbeatMissCount >= 5 {
 		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.remoteAddr)
 		atomic.StoreInt32(&conn.isConnected, 0)
+		atomic.StoreInt32(&conn.authState.authenticated, 0)
 		conn.heartbeatMissCount = 0
 	}
 }
@@ -307,64 +308,45 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 			return
 		default:
 			conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
-			buffer := f.router.GetBuffer()
-			length, err := conn.conn.Read(buffer)
+			packet := f.router.GetPacket(f.tag)
+			defer packet.Release(1)
+			length, err := conn.conn.Read(packet.buffer[packet.offset:])
 
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					f.router.PutBuffer(buffer)
 					continue
 				}
 
 				logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.remoteAddr, err)
 				atomic.StoreInt32(&conn.isConnected, 0)
-				f.router.PutBuffer(buffer)
 				return
 			}
+
+			packet.length = length
 
 			// Handle authentication if enabled
 			if f.authManager != nil {
 				if length < HeaderSize {
-					f.router.PutBuffer(buffer)
 					continue
 				}
 
-				header, err := ParseHeader(buffer[:length])
+				header, err := f.authManager.UnwrapData(&packet)
 				if err != nil {
-					f.router.PutBuffer(buffer)
 					continue
 				}
 
 				// Handle auth messages
 				if header.MsgType != MsgTypeData {
-					f.handleAuthMessage(buffer, length, conn)
-					f.router.PutBuffer(buffer)
+					f.handleAuthMessage(header, packet.GetData(), conn)
 					continue
 				}
 
 				// For data messages, check authentication
 				if !conn.authState.IsAuthenticated() {
-					f.router.PutBuffer(buffer)
 					continue
 				}
 
-				newBuffer := f.router.GetBuffer()
-
-				// Unwrap data
-				unwrappedData, err := f.authManager.UnwrapData(buffer[:length], newBuffer)
-				if err != nil {
-					logger.Warnf("%s: Failed to unwrap data: %v", f.tag, err)
-					f.router.PutBuffer(buffer)
-					continue
-				}
-
-				f.router.PutBuffer(buffer)
-				buffer = unwrappedData
-				length = len(unwrappedData)
 			}
-
-			packet := NewPacket(buffer[:length], length, conn.udpAddr, f.tag, f.router)
-			defer packet.Release(1)
 
 			// Forward to detour components
 			if err := f.router.Route(packet, f.detour); err != nil {
@@ -375,11 +357,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 }
 
 // handleAuthMessage processes authentication messages
-func (f *ForwardComponent) handleAuthMessage(buffer []byte, length int, conn *ForwardConn) {
-	header, err := ParseHeader(buffer[:length])
-	if err != nil {
-		return
-	}
+func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []byte, conn *ForwardConn) {
 
 	switch header.MsgType {
 	case MsgTypeAuthResponse:
@@ -418,7 +396,7 @@ func (f *ForwardComponent) SendPacket(packet Packet, metadata any) error {
 		return nil // Connection isn't available, just skip
 	}
 
-	_, err := conn.conn.Write(packet.buffer)
+	_, err := conn.conn.Write(packet.GetData())
 	if err != nil {
 		logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
 		atomic.StoreInt32(&conn.isConnected, 0)
@@ -432,24 +410,14 @@ func (f *ForwardComponent) SendPacket(packet Packet, metadata any) error {
 func (f *ForwardComponent) HandlePacket(packet Packet) error {
 	defer packet.Release(1)
 
-	var packetToSend Packet
-
 	if f.authManager != nil {
 
-		buffer := f.router.GetBuffer()
-		length, err := f.authManager.WrapData(buffer, packet.buffer)
+		err := f.authManager.WrapData(&packet)
 		if err != nil {
-			f.router.PutBuffer(buffer)
 			logger.Infof("%s: Failed to wrap packet: %v", f.tag, err)
 			return err
 		}
 
-		wrappedPacket := NewPacket(buffer[:length], length, packet.srcAddr, packet.srcTag, f.router)
-		packetToSend = wrappedPacket
-		defer packetToSend.Release(1)
-
-	} else {
-		packetToSend = packet
 	}
 
 	for _, conn := range f.forwardConnList {
@@ -459,7 +427,7 @@ func (f *ForwardComponent) HandlePacket(packet Packet) error {
 				continue
 			}
 
-			if err := f.router.SendPacket(f, packetToSend, conn); err != nil {
+			if err := f.router.SendPacket(f, packet, conn); err != nil {
 				logger.Infof("%s: Failed to queue packet for sending: %v", f.tag, err)
 			}
 		}

@@ -113,12 +113,12 @@ func NewProtocolDetector(protoDefs map[string]ProtocolDefinition) *ProtocolDetec
 }
 
 // DetectProtocol identifies the protocol of a UDP packet
-func (pd *ProtocolDetector) DetectProtocol(data []byte, length int, useProtoDetectors []string) string {
+func (pd *ProtocolDetector) DetectProtocol(data []byte, useProtoDetectors []string) string {
 	// Process protocols in priority order (if specified)
 	// For simplicity, we'll just iterate through the map for now
 	// for useProtoDetectors
 	for _, protoName := range useProtoDetectors {
-		if pd.matchProtocol(data, length, pd.protocols[protoName]) {
+		if pd.matchProtocol(data, len(data), pd.protocols[protoName]) {
 			return protoName
 		}
 	}
