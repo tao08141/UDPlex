@@ -105,8 +105,8 @@ func (dm *DeduplicationManager) generateNextNonce() ([NonceSize]byte, error) {
 	return nonce, nil
 }
 
-// isDuplicate checks if a nonce represents a duplicate packet
-func (dm *DeduplicationManager) isDuplicate(nonce [NonceSize]byte) bool {
+// markAsUsed marks a nonce as used after validation
+func (dm *DeduplicationManager) markAsUsed(nonce [NonceSize]byte) {
 	var frameID [FrameIDSize]byte
 	copy(frameID[:], nonce[:FrameIDSize])
 
@@ -131,6 +131,34 @@ func (dm *DeduplicationManager) isDuplicate(nonce [NonceSize]byte) bool {
 
 	// Check if sequence number is within our bitmap range
 	if sequence >= BitmapSize {
+		return // Sequence too large, ignore
+	}
+
+	// Calculate which uint64 and which bit within that uint64
+	wordIndex := sequence / 64
+	bitIndex := sequence % 64
+
+	// Mark this sequence number as used
+	tracker.bitmap[wordIndex] |= (1 << bitIndex)
+}
+
+// isDuplicate checks if a nonce represents a duplicate packet without marking it as used
+func (dm *DeduplicationManager) isDuplicate(nonce [NonceSize]byte) bool {
+	var frameID [FrameIDSize]byte
+	copy(frameID[:], nonce[:FrameIDSize])
+
+	sequence := binary.BigEndian.Uint32(nonce[FrameIDSize:])
+
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	tracker, exists := dm.frames[frameID]
+	if !exists {
+		return false // New frame, not a duplicate
+	}
+
+	// Check if sequence number is within our bitmap range
+	if sequence >= BitmapSize {
 		return false // Sequence too large, consider it new
 	}
 
@@ -139,14 +167,7 @@ func (dm *DeduplicationManager) isDuplicate(nonce [NonceSize]byte) bool {
 	bitIndex := sequence % 64
 
 	// Check if this sequence number has been used
-	if tracker.bitmap[wordIndex]&(1<<bitIndex) != 0 {
-		return true // Duplicate found
-	}
-
-	// Mark this sequence number as used
-	tracker.bitmap[wordIndex] |= (1 << bitIndex)
-
-	return false
+	return tracker.bitmap[wordIndex]&(1<<bitIndex) != 0
 }
 
 // cleanupRoutine periodically removes expired frames
@@ -393,8 +414,6 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		}
 		copy(buffer[offset:offset+NonceSize], nonce[:])
 
-		am.deduplicationMgr.isDuplicate(nonce)
-
 		offset += NonceSize
 
 		// Encrypt
@@ -402,6 +421,9 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		if len(ciphertext) == 0 {
 			return errors.New("encryption failed, ciphertext is empty")
 		}
+
+		// Only mark nonce as used after successful encryption
+		am.deduplicationMgr.markAsUsed(nonce)
 
 		totalDataLen := NonceSize + len(ciphertext)
 		WriteHeader(buffer, MsgTypeData, uint16(totalDataLen))
@@ -467,7 +489,7 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 		var nonce [NonceSize]byte
 		copy(nonce[:], data[:NonceSize])
 
-		// Check for duplicates
+		// Check for duplicates without marking as used
 		if am.deduplicationMgr.isDuplicate(nonce) {
 			return header, errors.New("duplicate packet detected")
 		}
@@ -491,6 +513,9 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 		if time.Since(time.UnixMilli(timestamp)) > am.dataTimeout {
 			return header, errors.New("data timestamp expired " + fmt.Sprintf("%d %d ", timestamp, time.Now().UnixMilli()))
 		}
+
+		// Only mark nonce as used after successful decryption and validation
+		am.deduplicationMgr.markAsUsed(nonce)
 
 		packet.SetBuffer(plaintext)
 		packet.offset = TimestampSize
