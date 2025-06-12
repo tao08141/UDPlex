@@ -54,6 +54,69 @@ type AuthState struct {
 	mu            sync.RWMutex
 }
 
+// NonceCache caches nonces to prevent replay attacks
+type NonceCache struct {
+	mu     sync.Mutex
+	nonces map[[NonceSize]byte]int64 // nonce -> unixMilli timestamp
+	ttl    int64                     // ms
+	stopCh chan struct{}             // 用于停止清理协程
+}
+
+// NewNonceCache creates a new nonce cache
+func NewNonceCache(ttl time.Duration) *NonceCache {
+	nc := &NonceCache{
+		nonces: make(map[[NonceSize]byte]int64),
+		ttl:    int64(ttl / time.Millisecond),
+		stopCh: make(chan struct{}),
+	}
+	go nc.cleanupLoop()
+	return nc
+}
+
+func (nc *NonceCache) Close() {
+	close(nc.stopCh)
+}
+
+func (nc *NonceCache) cleanupLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now().UnixMilli()
+			nc.mu.Lock()
+			for k, t := range nc.nonces {
+				if now-t > nc.ttl {
+					delete(nc.nonces, k)
+				}
+			}
+			nc.mu.Unlock()
+		case <-nc.stopCh:
+			return
+		}
+	}
+}
+
+// Add returns true if nonce is new, false if already exists
+func (nc *NonceCache) Add(nonce []byte) bool {
+	if len(nonce) != NonceSize {
+		return false
+	}
+	var key [NonceSize]byte
+	copy(key[:], nonce)
+	now := time.Now().UnixMilli()
+
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+
+	// Check duplicate
+	if _, exists := nc.nonces[key]; exists {
+		return false
+	}
+	nc.nonces[key] = now
+	return true
+}
+
 // AuthManager manages authentication and encryption
 type AuthManager struct {
 	secret            []byte
@@ -63,6 +126,7 @@ type AuthManager struct {
 	dataTimeout       time.Duration
 	router            *Router
 	gcm               cipher.AEAD // Shared GCM cipher for performance
+	nonceCache        *NonceCache // Nonce filter
 }
 
 // NewAuthManager creates a new authentication manager
@@ -103,6 +167,12 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 		authTimeout = DefaultAuthTimeout
 	}
 
+	var nonceCache *NonceCache
+	if config.EnableEncryption {
+		// 2分钟过期，最大10万条（约1.2MB），可根据实际流量调整
+		nonceCache = NewNonceCache(1 * time.Minute)
+	}
+
 	return &AuthManager{
 		secret:            secret,
 		enableEncryption:  config.EnableEncryption,
@@ -111,6 +181,7 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 		dataTimeout:       DefaultDataTimeout,
 		gcm:               gcm,
 		router:            router,
+		nonceCache:        nonceCache,
 	}, nil
 }
 
@@ -237,7 +308,6 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 
 		// Get a new buffer for the wrapped packet
 		buffer := am.router.GetBuffer()
-		
 
 		// Generate nonce
 		nonce := buffer[offset : offset+NonceSize]
@@ -245,6 +315,11 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 			return err
 		}
 		offset += NonceSize
+
+		// 加入nonce缓存
+		if am.nonceCache != nil {
+			am.nonceCache.Add(nonce)
+		}
 
 		// Encrypt
 		ciphertext := am.gcm.Seal(buffer[offset:offset], nonce, packet.GetData(), nil)
@@ -316,6 +391,11 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 
 		nonce := data[:NonceSize]
 		ciphertext := data[NonceSize:]
+
+		// 检查nonce是否重复
+		if am.nonceCache != nil && !am.nonceCache.Add(nonce) {
+			return header, errors.New("replay nonce detected")
+		}
 
 		plaintext := am.router.GetBuffer()
 
