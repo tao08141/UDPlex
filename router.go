@@ -20,12 +20,16 @@ func NewRouter(config Config) *Router {
 		config.QueueSize = 10240 // Default queue size
 	}
 
+	if config.BufferOffer <= 0 {
+		config.BufferOffer = 64 // Default buffer offer size
+	}
+
 	r := &Router{
 		config:     config,
 		components: make(map[string]Component),
 		bufferPool: sync.Pool{
 			New: func() any {
-				buf := make([]byte, config.BufferSize+128)
+				buf := make([]byte, config.BufferSize+config.BufferOffer)
 				return &buf // Return pointer to slice
 			},
 		},
@@ -104,7 +108,7 @@ func (r *Router) processRouteTask(task routeTask) {
 }
 
 // SendPacket adds a packet to the send queue
-func (r *Router) SendPacket(component Component, packet Packet, metadata any) error {
+func (r *Router) SendPacket(component Component, packet *Packet, metadata any) error {
 	packet.AddRef(1) // Add reference for the worker
 
 	select {
@@ -123,10 +127,9 @@ func (r *Router) GetBuffer() []byte {
 }
 
 func (r *Router) GetPacket(srcTag string) Packet {
-	buf := r.GetBuffer()
 	return Packet{
-		buffer:  buf,
-		offset:  64,
+		buffer:  r.GetBuffer(),
+		offset:  r.config.BufferOffer,
 		length:  0,
 		srcAddr: nil,
 		srcTag:  srcTag,
@@ -139,7 +142,7 @@ func (r *Router) GetPacket(srcTag string) Packet {
 
 // PutBuffer returns a buffer to the pool
 func (r *Router) PutBuffer(buf []byte) {
-	buf = buf[:r.config.BufferSize+128]
+	buf = buf[:r.config.BufferSize+r.config.BufferOffer]
 	r.bufferPool.Put(&buf)
 }
 
@@ -165,7 +168,7 @@ func (r *Router) GetComponent(tag string) (Component, bool) {
 }
 
 // Route asynchronously sends a packet to components specified by their tags
-func (r *Router) Route(packet Packet, destTags []string) error {
+func (r *Router) Route(packet *Packet, destTags []string) error {
 	packet.AddRef(1) // Add reference for the worker
 
 	select {

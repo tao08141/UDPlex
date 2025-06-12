@@ -225,7 +225,7 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 			packet.offset -= TimestampSize
 			packet.length += TimestampSize
 		} else {
-			newBuffer := packet.router.GetBuffer()
+			newBuffer := am.router.GetBuffer()
 			copy(newBuffer[TimestampSize:], packet.GetData())
 			packet.SetBuffer(newBuffer[:packet.length])
 			packet.offset = 0
@@ -236,7 +236,8 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		binary.BigEndian.PutUint64(packet.buffer[packet.offset:], uint64(timestamp))
 
 		// Get a new buffer for the wrapped packet
-		buffer := packet.router.GetBuffer()
+		buffer := am.router.GetBuffer()
+		
 
 		// Generate nonce
 		nonce := buffer[offset : offset+NonceSize]
@@ -244,8 +245,6 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 			return err
 		}
 		offset += NonceSize
-
-		// 打印packet.GetData()前32个字节
 
 		// Encrypt
 		ciphertext := am.gcm.Seal(buffer[offset:offset], nonce, packet.GetData(), nil)

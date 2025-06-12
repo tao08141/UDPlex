@@ -308,50 +308,54 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 			return
 		default:
 			conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
-			packet := f.router.GetPacket(f.tag)
-			defer packet.Release(1)
-			length, err := conn.conn.Read(packet.buffer[packet.offset:])
 
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
+			func() {
+				packet := f.router.GetPacket(f.tag)
+				defer packet.Release(1)
 
-				logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.remoteAddr, err)
-				atomic.StoreInt32(&conn.isConnected, 0)
-				return
-			}
+				length, err := conn.conn.Read(packet.buffer[packet.offset:])
 
-			packet.length = length
-
-			// Handle authentication if enabled
-			if f.authManager != nil {
-				if length < HeaderSize {
-					continue
-				}
-
-				header, err := f.authManager.UnwrapData(&packet)
 				if err != nil {
-					continue
+					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+						return
+					}
+
+					logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.remoteAddr, err)
+					atomic.StoreInt32(&conn.isConnected, 0)
+					return
 				}
 
-				// Handle auth messages
-				if header.MsgType != MsgTypeData {
-					f.handleAuthMessage(header, packet.GetData(), conn)
-					continue
+				packet.length = length
+
+				// Handle authentication if enabled
+				if f.authManager != nil {
+					if length < HeaderSize {
+						return
+					}
+
+					header, err := f.authManager.UnwrapData(&packet)
+					if err != nil {
+						return
+					}
+
+					// Handle auth messages
+					if header.MsgType != MsgTypeData {
+						f.handleAuthMessage(header, packet.GetData(), conn)
+						return
+					}
+
+					// For data messages, check authentication
+					if !conn.authState.IsAuthenticated() {
+						return
+					}
+
 				}
 
-				// For data messages, check authentication
-				if !conn.authState.IsAuthenticated() {
-					continue
+				// Forward to detour components
+				if err := f.router.Route(&packet, f.detour); err != nil {
+					logger.Infof("%s: Error routing: %v", f.tag, err)
 				}
-
-			}
-
-			// Forward to detour components
-			if err := f.router.Route(packet, f.detour); err != nil {
-				logger.Infof("%s: Error routing: %v", f.tag, err)
-			}
+			}()
 		}
 	}
 }
@@ -386,7 +390,7 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 	}
 }
 
-func (f *ForwardComponent) SendPacket(packet Packet, metadata any) error {
+func (f *ForwardComponent) SendPacket(packet *Packet, metadata any) error {
 	conn, ok := metadata.(*ForwardConn)
 	if !ok || conn == nil {
 		return fmt.Errorf("invalid connection type")
@@ -407,12 +411,11 @@ func (f *ForwardComponent) SendPacket(packet Packet, metadata any) error {
 }
 
 // HandlePacket processes packets from other components
-func (f *ForwardComponent) HandlePacket(packet Packet) error {
+func (f *ForwardComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
 	if f.authManager != nil {
-
-		err := f.authManager.WrapData(&packet)
+		err := f.authManager.WrapData(packet)
 		if err != nil {
 			logger.Infof("%s: Failed to wrap packet: %v", f.tag, err)
 			return err

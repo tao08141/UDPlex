@@ -1,9 +1,9 @@
 {
-    "buffer_size": 65535,
+    "buffer_size": 1500,
     "queue_size": 10240,
     "worker_count": 4,
     "logging": {
-        "level": "warn",
+        "level": "debug",
         "format": "console",
         "output_path": "stdout",
         "caller": true

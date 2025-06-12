@@ -53,12 +53,12 @@ func (f *FilterComponent) Stop() error {
 	return nil
 }
 
-func (f *FilterComponent) SendPacket(packet Packet, addr any) error {
+func (f *FilterComponent) SendPacket(packet *Packet, addr any) error {
 	return nil
 }
 
 // HandlePacket processes and routes packets based on detected protocol
-func (f *FilterComponent) HandlePacket(packet Packet) error {
+func (f *FilterComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
 	// Detect protocol

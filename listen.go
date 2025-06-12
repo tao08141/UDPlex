@@ -121,7 +121,7 @@ func (l *ListenComponent) syncMapping() error {
 	return nil
 }
 
-func (l *ListenComponent) SendPacket(packet Packet, metadata any) error {
+func (l *ListenComponent) SendPacket(packet *Packet, metadata any) error {
 	addr, ok := metadata.(net.Addr)
 	if !ok {
 		return fmt.Errorf("%s: Invalid address type", l.tag)
@@ -225,106 +225,109 @@ func (l *ListenComponent) handlePackets() {
 			return
 		default:
 			// Check if it's time to do cleanup
-			now := time.Now()
-			if now.Sub(lastCleanupTime) >= cleanupInterval {
-				l.performCleanup()
-				lastCleanupTime = now
+			if l.stopped {
+				return
 			}
+			func() {
+				now := time.Now()
+				if now.Sub(lastCleanupTime) >= cleanupInterval {
+					l.performCleanup()
+					lastCleanupTime = now
+				}
 
-			// Set read deadline
-			if err := l.conn.SetReadDeadline(time.Now().Add(shortDeadline)); err != nil {
-				logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
-			}
+				// Set read deadline
+				if err := l.conn.SetReadDeadline(time.Now().Add(shortDeadline)); err != nil {
+					logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
+				}
 
-			packet := l.router.GetPacket(l.tag)
-			defer packet.Release(1)
+				packet := l.router.GetPacket(l.tag)
+				defer packet.Release(1)
 
-			length, addr, err := l.conn.ReadFrom(packet.buffer[packet.offset:])
+				length, addr, err := l.conn.ReadFrom(packet.buffer[packet.offset:])
 
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			} else if err != nil {
-				if l.stopped {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					return
+				} else if err != nil {
+					logger.Warnf("%s: Read error: %v", l.tag, err)
 					return
 				}
-				logger.Warnf("%s: Read error: %v", l.tag, err)
-				continue
-			}
 
-			packet.length = length
+				packet.length = length
 
-			// Handle authentication if enabled
-			if l.authManager != nil {
-				if length < HeaderSize {
-					continue
-				}
-
-				header, err := l.authManager.UnwrapData(&packet)
-				if err != nil {
-					logger.Warnf("%s: Failed to unwrap data: %v", l.tag, err)
-					continue
-				}
-
-				// Handle auth messages
-				if header.MsgType != MsgTypeData {
-					l.handleAuthMessage(header, packet.GetData(), addr)
-					continue
-				}
-
-				// For data messages, check authentication
-				addrKey := addr.String()
-				mapping, exists := l.mappings[addrKey]
-				if !exists || mapping.authState == nil || !mapping.authState.IsAuthenticated() {
-					// Not authenticated - silently drop
-					continue
-				}
-
-				mapping.lastActive = time.Now()
-			}
-
-			// Handle address mapping for non-auth mode
-			if l.authManager == nil {
-				addrKey := addr.String()
-				// Check if this is a new mapping
-				if _, exists := l.mappings[addrKey]; !exists {
-					// If we should replace old connections with the same IP
-					if l.replaceOldMapping {
-						addrIP := addr.(*net.UDPAddr).IP.String()
-
-						for key, mapping := range l.mappings {
-							if mapping.addr.(*net.UDPAddr).IP.String() == addrIP {
-								logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
-								delete(l.mappings, key)
-							}
-						}
+				// Handle authentication if enabled
+				if l.authManager != nil {
+					if length < HeaderSize {
+						return
 					}
 
-					// Add the new mapping
-					logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
-					l.mappings[addrKey] = &AddrMapping{addr: addr, lastActive: time.Now()}
-					l.syncMapping()
-				} else {
-					// Update the last active time for existing mapping
-					l.mappings[addrKey].lastActive = time.Now()
+					header, err := l.authManager.UnwrapData(&packet)
+					if err != nil {
+						logger.Warnf("%s: Failed to unwrap data: %v", l.tag, err)
+						return
+					}
+
+					// Handle auth messages
+					if header.MsgType != MsgTypeData {
+						l.handleAuthMessage(header, packet.GetData(), addr)
+						return
+					}
+
+					// For data messages, check authentication
+					addrKey := addr.String()
+					mapping, exists := l.mappings[addrKey]
+					if !exists || mapping.authState == nil || !mapping.authState.IsAuthenticated() {
+						// Not authenticated - silently drop
+						return
+					}
+
+					mapping.lastActive = time.Now()
 				}
-			}
 
-			packet.srcAddr = addr
+				// Handle address mapping for non-auth mode
+				if l.authManager == nil {
+					addrKey := addr.String()
+					// Check if this is a new mapping
+					if _, exists := l.mappings[addrKey]; !exists {
+						// If we should replace old connections with the same IP
+						if l.replaceOldMapping {
+							addrIP := addr.(*net.UDPAddr).IP.String()
 
-			// Forward the packet to detour components
-			if err := l.router.Route(packet, l.detour); err != nil {
-				logger.Infof("%s: Error routing: %v", l.tag, err)
-			}
+							for key, mapping := range l.mappings {
+								if mapping.addr.(*net.UDPAddr).IP.String() == addrIP {
+									logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
+									delete(l.mappings, key)
+								}
+							}
+						}
+
+						// Add the new mapping
+						logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
+						l.mappings[addrKey] = &AddrMapping{addr: addr, lastActive: time.Now()}
+						l.syncMapping()
+					} else {
+						// Update the last active time for existing mapping
+						l.mappings[addrKey].lastActive = time.Now()
+					}
+				}
+
+				packet.srcAddr = addr
+
+				// Forward the packet to detour components
+				if err := l.router.Route(&packet, l.detour); err != nil {
+					logger.Infof("%s: Error routing: %v", l.tag, err)
+				}
+			}()
+
 		}
 	}
 }
 
 // HandlePacket processes packets from other components
-func (l *ListenComponent) HandlePacket(packet Packet) error {
+func (l *ListenComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
 	if l.authManager != nil {
-		l.authManager.WrapData(&packet)
+		l.authManager.WrapData(packet)
 	}
 
 	for _, mapping := range *l.mappingsRead {
