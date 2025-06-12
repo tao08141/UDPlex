@@ -87,7 +87,7 @@ func (dm *DeduplicationManager) generateNextNonce() ([NonceSize]byte, error) {
 	var nonce [NonceSize]byte
 
 	// Check if we need a new frame (sequence exhausted)
-	if dm.currentSeq == 0xFFFFFFFF {
+	if dm.currentSeq > BitmapSize-1 {
 		// Generate new frame ID
 		if _, err := rand.Read(dm.currentFrame[:]); err != nil {
 			return nonce, err
