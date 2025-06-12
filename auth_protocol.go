@@ -33,10 +33,163 @@ const (
 	ResponseSize  = 32
 	NonceSize     = 12
 
+	// Deduplication constants
+	FrameIDSize     = 8               // First 8 bytes of nonce
+	SequenceSize    = 4               // Last 4 bytes of nonce
+	BitmapSize      = 65535           // 2^32 bits for sequence numbers
+	FrameTimeout    = 2 * time.Minute // Frame expiry time
+	CleanupInterval = 1 * time.Minute // Cleanup frequency
+
 	// Timeouts
-	DefaultAuthTimeout = 5 * time.Minute
+	DefaultAuthTimeout = 30 * time.Second
 	DefaultDataTimeout = 30 * time.Second
 )
+
+// FrameTracker tracks used sequence numbers for a frame
+type FrameTracker struct {
+	frameID    [FrameIDSize]byte
+	bitmap     []uint64
+	lastAccess time.Time
+	mu         sync.RWMutex
+}
+
+// DeduplicationManager manages frame tracking and deduplication
+type DeduplicationManager struct {
+	frames       map[[FrameIDSize]byte]*FrameTracker
+	mu           sync.RWMutex
+	currentFrame [FrameIDSize]byte
+	currentSeq   uint32
+	seqMu        sync.Mutex
+	stopCleanup  chan struct{}
+}
+
+// NewDeduplicationManager creates a new deduplication manager
+func NewDeduplicationManager() *DeduplicationManager {
+	dm := &DeduplicationManager{
+		frames:      make(map[[FrameIDSize]byte]*FrameTracker),
+		stopCleanup: make(chan struct{}),
+	}
+
+	// Generate initial frame ID
+	rand.Read(dm.currentFrame[:])
+
+	// Start cleanup routine
+	go dm.cleanupRoutine()
+
+	return dm
+}
+
+// generateNextNonce generates the next nonce with frame ID and sequence
+func (dm *DeduplicationManager) generateNextNonce() ([NonceSize]byte, error) {
+	dm.seqMu.Lock()
+	defer dm.seqMu.Unlock()
+
+	var nonce [NonceSize]byte
+
+	// Check if we need a new frame (sequence exhausted)
+	if dm.currentSeq == 0xFFFFFFFF {
+		// Generate new frame ID
+		if _, err := rand.Read(dm.currentFrame[:]); err != nil {
+			return nonce, err
+		}
+		dm.currentSeq = 0
+	}
+
+	// Copy frame ID (first 8 bytes)
+	copy(nonce[:FrameIDSize], dm.currentFrame[:])
+
+	// Set sequence number (last 4 bytes)
+	binary.BigEndian.PutUint32(nonce[FrameIDSize:], dm.currentSeq)
+
+	dm.currentSeq++
+
+	return nonce, nil
+}
+
+// isDuplicate checks if a nonce represents a duplicate packet
+func (dm *DeduplicationManager) isDuplicate(nonce [NonceSize]byte) bool {
+	var frameID [FrameIDSize]byte
+	copy(frameID[:], nonce[:FrameIDSize])
+
+	sequence := binary.BigEndian.Uint32(nonce[FrameIDSize:])
+
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	tracker, exists := dm.frames[frameID]
+	if !exists {
+		// New frame, create tracker
+		tracker = &FrameTracker{
+			frameID:    frameID,
+			bitmap:     make([]uint64, (BitmapSize+63)/64),
+			lastAccess: time.Now(),
+		}
+		dm.frames[frameID] = tracker
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	// Update last access time
+	tracker.lastAccess = time.Now()
+
+	// Check if sequence number is within our bitmap range
+	if sequence >= BitmapSize {
+		return false // Sequence too large, consider it new
+	}
+
+	// Calculate which uint64 and which bit within that uint64
+	wordIndex := sequence / 64
+	bitIndex := sequence % 64
+
+	// Check if this sequence number has been used
+	if tracker.bitmap[wordIndex]&(1<<bitIndex) != 0 {
+		return true // Duplicate found
+	}
+
+	// Mark this sequence number as used
+	tracker.bitmap[wordIndex] |= (1 << bitIndex)
+
+	return false
+}
+
+// cleanupRoutine periodically removes expired frames
+func (dm *DeduplicationManager) cleanupRoutine() {
+	ticker := time.NewTicker(CleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			dm.cleanupExpiredFrames()
+		case <-dm.stopCleanup:
+			return
+		}
+	}
+}
+
+// cleanupExpiredFrames removes frames that haven't been accessed recently
+func (dm *DeduplicationManager) cleanupExpiredFrames() {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	cutoff := time.Now().Add(-FrameTimeout)
+
+	for frameID, tracker := range dm.frames {
+		tracker.mu.RLock()
+		expired := tracker.lastAccess.Before(cutoff)
+		tracker.mu.RUnlock()
+
+		if expired {
+			delete(dm.frames, frameID)
+		}
+	}
+}
+
+// Stop stops the deduplication manager
+func (dm *DeduplicationManager) Stop() {
+	close(dm.stopCleanup)
+}
 
 // ProtocolHeader represents the protocol header
 type ProtocolHeader struct {
@@ -54,69 +207,6 @@ type AuthState struct {
 	mu            sync.RWMutex
 }
 
-// NonceCache caches nonces to prevent replay attacks
-type NonceCache struct {
-	mu     sync.Mutex
-	nonces map[[NonceSize]byte]int64 // nonce -> unixMilli timestamp
-	ttl    int64                     // ms
-	stopCh chan struct{}             // 用于停止清理协程
-}
-
-// NewNonceCache creates a new nonce cache
-func NewNonceCache(ttl time.Duration) *NonceCache {
-	nc := &NonceCache{
-		nonces: make(map[[NonceSize]byte]int64),
-		ttl:    int64(ttl / time.Millisecond),
-		stopCh: make(chan struct{}),
-	}
-	go nc.cleanupLoop()
-	return nc
-}
-
-func (nc *NonceCache) Close() {
-	close(nc.stopCh)
-}
-
-func (nc *NonceCache) cleanupLoop() {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			now := time.Now().UnixMilli()
-			nc.mu.Lock()
-			for k, t := range nc.nonces {
-				if now-t > nc.ttl {
-					delete(nc.nonces, k)
-				}
-			}
-			nc.mu.Unlock()
-		case <-nc.stopCh:
-			return
-		}
-	}
-}
-
-// Add returns true if nonce is new, false if already exists
-func (nc *NonceCache) Add(nonce []byte) bool {
-	if len(nonce) != NonceSize {
-		return false
-	}
-	var key [NonceSize]byte
-	copy(key[:], nonce)
-	now := time.Now().UnixMilli()
-
-	nc.mu.Lock()
-	defer nc.mu.Unlock()
-
-	// Check duplicate
-	if _, exists := nc.nonces[key]; exists {
-		return false
-	}
-	nc.nonces[key] = now
-	return true
-}
-
 // AuthManager manages authentication and encryption
 type AuthManager struct {
 	secret            []byte
@@ -126,7 +216,7 @@ type AuthManager struct {
 	dataTimeout       time.Duration
 	router            *Router
 	gcm               cipher.AEAD // Shared GCM cipher for performance
-	nonceCache        *NonceCache // Nonce filter
+	deduplicationMgr  *DeduplicationManager
 }
 
 // NewAuthManager creates a new authentication manager
@@ -167,12 +257,6 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 		authTimeout = DefaultAuthTimeout
 	}
 
-	var nonceCache *NonceCache
-	if config.EnableEncryption {
-		// 2分钟过期，最大10万条（约1.2MB），可根据实际流量调整
-		nonceCache = NewNonceCache(1 * time.Minute)
-	}
-
 	return &AuthManager{
 		secret:            secret,
 		enableEncryption:  config.EnableEncryption,
@@ -181,7 +265,7 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 		dataTimeout:       DefaultDataTimeout,
 		gcm:               gcm,
 		router:            router,
-		nonceCache:        nonceCache,
+		deduplicationMgr:  NewDeduplicationManager(),
 	}, nil
 }
 
@@ -309,20 +393,19 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		// Get a new buffer for the wrapped packet
 		buffer := am.router.GetBuffer()
 
-		// Generate nonce
-		nonce := buffer[offset : offset+NonceSize]
-		if _, err := rand.Read(nonce); err != nil {
+		// Generate nonce with deduplication
+		nonce, err := am.deduplicationMgr.generateNextNonce()
+		if err != nil {
 			return err
 		}
+		copy(buffer[offset:offset+NonceSize], nonce[:])
+
+		am.deduplicationMgr.isDuplicate(nonce)
+
 		offset += NonceSize
 
-		// 加入nonce缓存
-		if am.nonceCache != nil {
-			am.nonceCache.Add(nonce)
-		}
-
 		// Encrypt
-		ciphertext := am.gcm.Seal(buffer[offset:offset], nonce, packet.GetData(), nil)
+		ciphertext := am.gcm.Seal(buffer[offset:offset], nonce[:], packet.GetData(), nil)
 		if len(ciphertext) == 0 {
 			return errors.New("encryption failed, ciphertext is empty")
 		}
@@ -389,18 +472,20 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 			return header, errors.New("encrypted data too short")
 		}
 
-		nonce := data[:NonceSize]
-		ciphertext := data[NonceSize:]
+		var nonce [NonceSize]byte
+		copy(nonce[:], data[:NonceSize])
 
-		// 检查nonce是否重复
-		if am.nonceCache != nil && !am.nonceCache.Add(nonce) {
-			return header, errors.New("replay nonce detected")
+		// Check for duplicates
+		if am.deduplicationMgr.isDuplicate(nonce) {
+			return header, errors.New("duplicate packet detected")
 		}
+
+		ciphertext := data[NonceSize:]
 
 		plaintext := am.router.GetBuffer()
 
 		// Decrypt
-		plaintext, err := am.gcm.Open(plaintext[:0], nonce, ciphertext, nil)
+		plaintext, err := am.gcm.Open(plaintext[:0], nonce[:], ciphertext, nil)
 		if err != nil {
 			return header, fmt.Errorf("decryption failed: %w", err)
 		}
