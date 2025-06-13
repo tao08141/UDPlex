@@ -167,6 +167,23 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 			return nil
 		}
 
+		if l.replaceOldMapping {
+			addrIP := addr.(*net.UDPAddr).IP.String()
+			isSync := false
+
+			for key, mapping := range l.mappings {
+				if mapping.addr.(*net.UDPAddr).IP.String() == addrIP && key != addrKey {
+					logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
+					delete(l.mappings, key)
+					isSync = true
+				}
+			}
+
+			if isSync {
+				l.syncMapping()
+			}
+		}
+
 		// Create response
 		responseBuffer := l.router.GetBuffer()
 		l.router.PutBuffer(responseBuffer)
