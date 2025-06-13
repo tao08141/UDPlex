@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"os"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -30,6 +33,77 @@ type sendTask struct {
 	metadata  any
 }
 
+// stripJSONComments removes single-line (//) and multi-line (/* */) comments from JSON
+func stripJSONComments(data []byte) ([]byte, error) {
+	var result bytes.Buffer
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+
+	inMultiLineComment := false
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if inMultiLineComment {
+			// Look for end of multi-line comment
+			if idx := strings.Index(line, "*/"); idx != -1 {
+				inMultiLineComment = false
+				line = line[idx+2:]
+			} else {
+				continue
+			}
+		}
+
+		// Process the line character by character
+		var cleanLine strings.Builder
+		inString := false
+		escaped := false
+
+		for i := 0; i < len(line); i++ {
+			char := line[i]
+
+			if escaped {
+				cleanLine.WriteByte(char)
+				escaped = false
+				continue
+			}
+
+			if char == '\\' && inString {
+				cleanLine.WriteByte(char)
+				escaped = true
+				continue
+			}
+
+			if char == '"' {
+				inString = !inString
+				cleanLine.WriteByte(char)
+				continue
+			}
+
+			if !inString {
+				// Check for single-line comment
+				if i < len(line)-1 && line[i:i+2] == "//" {
+					break
+				}
+
+				// Check for multi-line comment start
+				if i < len(line)-1 && line[i:i+2] == "/*" {
+					inMultiLineComment = true
+					i++ // Skip the '*'
+					continue
+				}
+			}
+
+			cleanLine.WriteByte(char)
+		}
+
+		if cleanLine.Len() > 0 || !inMultiLineComment {
+			result.WriteString(strings.TrimSpace(cleanLine.String()) + "\n")
+		}
+	}
+
+	return result.Bytes(), scanner.Err()
+}
+
 func main() {
 	defaultLogger, _ := zap.NewProduction()
 	logger = defaultLogger.Sugar()
@@ -43,8 +117,14 @@ func main() {
 		logger.Fatalf("Failed to read config: %v", err)
 	}
 
+	// Strip comments from JSON
+	cleanConfigData, err := stripJSONComments(configData)
+	if err != nil {
+		logger.Fatalf("Failed to process config comments: %v", err)
+	}
+
 	var config Config
-	if err := json.Unmarshal(configData, &config); err != nil {
+	if err := json.Unmarshal(cleanConfigData, &config); err != nil {
 		logger.Fatalf("Failed to parse config: %v", err)
 	}
 
