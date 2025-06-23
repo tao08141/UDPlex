@@ -140,23 +140,14 @@ go build
 - 仅支持 UDP 协议，不支持 TCP
 
 
-## 目录结构
 
-### 核心文件
-
-- **main.go** - 程序入口点，包含配置解析、组件路由系统和主函数
-- **packe.go** - 定义数据包结构体(Packet)，用于在组件间传递UDP数据
-- **listen.go** - 实现监听组件(ListenComponent)，负责监听UDP端口接收数据包
-- **forward.go** - 实现转发组件(ForwardComponent)，负责将数据包转发到目标服务器
-- **config.json** - 主配置文件，定义系统监听地址和转发目标
-- **filter.go** - 定义过滤器(FilterComponent)，用于选择性转发数据包
-- **go.mod** - Go模块定义文件
-
-### 配置示例
+## 配置示例
 
 examples目录包含多种使用场景的配置示例：
 
 - **basic.json** - UDP转发的基本配置示例
+- **auth_client.json** - 带鉴权的UDP客户端配置
+- **auth_server.json** - 带鉴权的UDP服务端配置
 - **redundant_client_config.json** - UDP冗余客户端配置，将流量同时发送到多个服务器
 - **redundant_server_config.json** - UDP冗余服务端配置，接收客户端流量并转发
 - **wg_bidirectional_client_config.json** - WireGuard UDP上下行分离通信客户端配置

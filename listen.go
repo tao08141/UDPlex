@@ -13,6 +13,7 @@ type AddrMapping struct {
 	addr       net.Addr
 	lastActive time.Time
 	authState  *AuthState // Authentication state for this connection
+	connID     string     // Unique connection identifier
 }
 
 // ListenComponent implements a UDP listener with authentication
@@ -23,6 +24,7 @@ type ListenComponent struct {
 	timeout           time.Duration
 	replaceOldMapping bool
 	detour            []string
+	broadcastMode     bool
 
 	conn         net.PacketConn
 	router       *Router
@@ -49,6 +51,11 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		return nil
 	}
 
+	broadcastMode := true
+	if cfg.BroadcastMode != nil && !*cfg.BroadcastMode {
+		broadcastMode = false
+	}
+
 	return &ListenComponent{
 		tag:               cfg.Tag,
 		listenAddr:        cfg.ListenAddr,
@@ -60,6 +67,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		mappingsRead:      &map[string]*AddrMapping{},
 		stopCh:            make(chan struct{}),
 		authManager:       authManager,
+		broadcastMode:     broadcastMode,
 	}
 }
 
@@ -93,6 +101,10 @@ func (l *ListenComponent) Stop() error {
 	l.stopped = true
 	close(l.stopCh)
 	return l.conn.Close()
+}
+
+func (l *ListenComponent) generateConnID(addr *net.UDPAddr) string {
+	return addr.String()
 }
 
 // performCleanup handles the cleaning of inactive mappings
@@ -270,6 +282,7 @@ func (l *ListenComponent) handlePackets() {
 				}
 
 				packet.length = length
+				packet.connID = l.generateConnID(addr.(*net.UDPAddr))
 
 				// Handle authentication if enabled
 				if l.authManager != nil {
@@ -279,7 +292,7 @@ func (l *ListenComponent) handlePackets() {
 
 					header, err := l.authManager.UnwrapData(&packet)
 					if err != nil {
-						logger.Warnf("%s: Failed to unwrap data: %v", l.tag, err)
+						logger.Infof("%s: %s Failed to unwrap data: %v", l.tag, addr.String(), err)
 						return
 					}
 
@@ -347,15 +360,41 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 		l.authManager.WrapData(packet)
 	}
 
-	for _, mapping := range *l.mappingsRead {
-		// Check authentication if required
-		if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
-			continue
+	if l.broadcastMode {
+		for _, mapping := range *l.mappingsRead {
+			// Check authentication if required
+			if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
+				continue
+			}
+
+			if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
+				logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
+			}
+		}
+	} else {
+		// Direct mode: send only to the specific connection ID
+		if packet.connID == "" {
+			logger.Infof("%s: Packet has no connection ID, dropping", l.tag)
+			return nil
+		}
+		// Find the mapping that matches the connection ID
+		for _, mapping := range *l.mappingsRead {
+			if mapping.connID == packet.connID {
+				// Check authentication if required
+				if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
+					logger.Debugf("%s: Connection not authenticated, dropping packet", l.tag)
+					return nil
+				}
+
+				if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
+					logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
+				}
+				return nil
+			}
 		}
 
-		if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
-			logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
-		}
+		logger.Debugf("%s: No mapping found for connection ID: %s", l.tag, packet.connID)
+
 	}
 
 	return nil
