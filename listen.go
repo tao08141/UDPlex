@@ -13,7 +13,7 @@ type AddrMapping struct {
 	addr       net.Addr
 	lastActive time.Time
 	authState  *AuthState // Authentication state for this connection
-	connID     ConnID    // Unique connection identifier
+	connID     ConnID     // Unique connection identifier
 }
 
 // ListenComponent implements a UDP listener with authentication
@@ -31,7 +31,6 @@ type ListenComponent struct {
 	mappings     map[string]*AddrMapping
 	mappingsRead *map[string]*AddrMapping
 	stopCh       chan struct{}
-	stopped      bool
 
 	// Authentication
 	authManager *AuthManager
@@ -89,11 +88,6 @@ func (l *ListenComponent) Start() error {
 
 // Stop closes the listener
 func (l *ListenComponent) Stop() error {
-	if l.stopped {
-		return nil
-	}
-
-	l.stopped = true
 	close(l.stopCh)
 	return l.conn.Close()
 }
@@ -168,7 +162,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		data := buffer[HeaderSize : HeaderSize+header.Length]
 		err := l.authManager.ProcessAuthChallenge(data, mapping.authState)
 		if err != nil {
-			// Authentication failed - silently drop packet
+			logger.Infof("%s: %s Authentication challenge failed: %v", l.tag, addr.String(), err)
 			return nil
 		}
 
@@ -193,7 +187,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		// Create response
 		responseBuffer := l.router.GetBuffer()
 		l.router.PutBuffer(responseBuffer)
-		responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse)
+		responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, ForwardID{}, PoolID{})
 		if err != nil {
 			logger.Warnf("%s: Failed to create auth challenge response: %v", l.tag, err)
 		}
@@ -248,10 +242,6 @@ func (l *ListenComponent) handlePackets() {
 		case <-l.stopCh:
 			return
 		default:
-			// Check if it's time to do cleanup
-			if l.stopped {
-				return
-			}
 			func() {
 				now := time.Now()
 				if now.Sub(lastCleanupTime) >= cleanupInterval {
@@ -281,6 +271,7 @@ func (l *ListenComponent) handlePackets() {
 				// Handle authentication if enabled
 				if l.authManager != nil {
 					if length < HeaderSize {
+						logger.Infof("%s: %s Packet too short for header: %d bytes", l.tag, addr.String(), length)
 						return
 					}
 

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 
 	// Message Types
 	MsgTypeAuthChallenge = 1
@@ -24,7 +24,7 @@ const (
 	MsgTypeDisconnect    = 6
 
 	// Protocol header size
-	HeaderSize = 6
+	HeaderSize = 8
 
 	// Auth message sizes
 	ChallengeSize = 32
@@ -32,6 +32,8 @@ const (
 	MACSize       = 32
 	ResponseSize  = 32
 	NonceSize     = 12
+	ForwardIDSize = 8
+	PoolIDSize    = 8
 	ConnIDSize    = 8
 
 	// Deduplication constants
@@ -212,7 +214,7 @@ type ProtocolHeader struct {
 	Version  uint8
 	MsgType  uint8
 	Reserved uint16
-	Length   uint16
+	Length   uint32
 }
 
 // AuthState represents the authentication state for a connection
@@ -295,20 +297,20 @@ func ParseHeader(buffer []byte) (*ProtocolHeader, error) {
 		Version:  buffer[0],
 		MsgType:  buffer[1],
 		Reserved: binary.BigEndian.Uint16(buffer[2:4]),
-		Length:   binary.BigEndian.Uint16(buffer[4:6]),
+		Length:   binary.BigEndian.Uint32(buffer[4:8]),
 	}, nil
 }
 
 // WriteHeader writes protocol header to buffer
-func WriteHeader(buffer []byte, msgType uint8, dataLen uint16) {
+func WriteHeader(buffer []byte, msgType uint8, dataLen uint32) {
 	buffer[0] = ProtocolVersion
 	buffer[1] = msgType
 	binary.BigEndian.PutUint16(buffer[2:4], 0) // Reserved
-	binary.BigEndian.PutUint16(buffer[4:6], dataLen)
+	binary.BigEndian.PutUint32(buffer[4:8], dataLen)
 }
 
 // CreateAuthChallenge creates an authentication challenge message
-func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8) (int, error) {
+func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8, forwardID ForwardID, poolID PoolID) (int, error) {
 	// Generate challenge
 	challenge := make([]byte, ChallengeSize)
 	if _, err := rand.Read(challenge); err != nil {
@@ -323,17 +325,23 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8) (int, e
 	// Calculate HMAC
 	h := hmac.New(sha256.New, am.secret)
 	h.Write(challenge)
+	h.Write(forwardID[:])
+	h.Write(poolID[:])
 	h.Write(timestampBytes)
 	mac := h.Sum(nil)
 
 	// Write header
-	dataLen := ChallengeSize + TimestampSize + MACSize
-	WriteHeader(buffer, msgType, uint16(dataLen))
+	dataLen := ChallengeSize + TimestampSize + ForwardIDSize + PoolIDSize + MACSize
+	WriteHeader(buffer, msgType, uint32(dataLen))
 
 	// Write data
 	offset := HeaderSize
 	copy(buffer[offset:], challenge)
 	offset += ChallengeSize
+	copy(buffer[offset:], forwardID[:])
+	offset += ForwardIDSize
+	copy(buffer[offset:], poolID[:])
+	offset += PoolIDSize
 	copy(buffer[offset:], timestampBytes)
 	offset += TimestampSize
 	copy(buffer[offset:], mac)
@@ -344,13 +352,15 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8) (int, e
 
 // ProcessAuthChallenge processes an authentication challenge (server side)
 func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) error {
-	if len(data) < ChallengeSize+TimestampSize+MACSize {
+	if len(data) < ChallengeSize+TimestampSize+ForwardIDSize+PoolIDSize+MACSize {
 		return errors.New("invalid challenge data length")
 	}
 
 	challenge := data[:ChallengeSize]
-	timestampBytes := data[ChallengeSize : ChallengeSize+TimestampSize]
-	receivedMAC := data[ChallengeSize+TimestampSize : ChallengeSize+TimestampSize+MACSize]
+	ForwardID := ForwardIDFromBytes(data[ChallengeSize : ChallengeSize+ForwardIDSize])
+	poolID := ForwardIDFromBytes(data[ChallengeSize+ForwardIDSize : ChallengeSize+ForwardIDSize+PoolIDSize])
+	timestampBytes := data[ChallengeSize+ForwardIDSize+PoolIDSize : ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize]
+	receivedMAC := data[ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize : ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize+MACSize]
 
 	// Verify timestamp
 	timestamp := int64(binary.BigEndian.Uint64(timestampBytes))
@@ -361,17 +371,13 @@ func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) e
 	// Verify HMAC
 	h := hmac.New(sha256.New, am.secret)
 	h.Write(challenge)
+	h.Write(ForwardID[:])
+	h.Write(poolID[:])
 	h.Write(timestampBytes)
 	expectedMAC := h.Sum(nil)
 
 	if !hmac.Equal(receivedMAC, expectedMAC) {
 		return errors.New("invalid challenge MAC")
-	}
-
-	// Generate response
-	response := make([]byte, ResponseSize)
-	if _, err := rand.Read(response); err != nil {
-		return err
 	}
 
 	return nil
@@ -402,12 +408,9 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 			packet.offset = 0
 		}
 
-		// Add connID before timestamp
-		binary.BigEndian.PutUint64(packet.buffer[packet.offset:], packet.connID.ToUint64())
-
-		// Add timestamp after connID
 		timestamp := time.Now().UnixMilli()
-		binary.BigEndian.PutUint64(packet.buffer[packet.offset+ConnIDSize:], uint64(timestamp))
+		binary.BigEndian.PutUint64(packet.buffer[packet.offset:], uint64(timestamp))
+		binary.BigEndian.PutUint64(packet.buffer[packet.offset+TimestampSize:], packet.connID.ToUint64())
 
 		packet.length += neededSpace
 
@@ -433,7 +436,7 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		am.deduplicationMgr.markAsUsed(nonce)
 
 		totalDataLen := NonceSize + len(ciphertext)
-		WriteHeader(buffer, MsgTypeData, uint16(totalDataLen))
+		WriteHeader(buffer, MsgTypeData, uint32(totalDataLen))
 
 		packet.SetBuffer(buffer[:HeaderSize+totalDataLen])
 		packet.offset = 0
@@ -455,7 +458,7 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		}
 
 		// Add header
-		WriteHeader(packet.buffer[packet.offset:], MsgTypeData, uint16(packet.length+ConnIDSize))
+		WriteHeader(packet.buffer[packet.offset:], MsgTypeData, uint32(packet.length+ConnIDSize))
 
 		// Add connID after header
 		binary.BigEndian.PutUint64(packet.buffer[packet.offset+HeaderSize:], packet.connID.ToUint64())
@@ -485,12 +488,14 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 		return header, nil
 	}
 
+	totalExpectedLen := HeaderSize + int(header.Length)
+	if packet.length < totalExpectedLen {
+		return header, fmt.Errorf("packet too small for declared data length (got %d, need %d)",
+			packet.length, totalExpectedLen)
+	}
+
 	dataOffset := packet.offset + HeaderSize
 	dataLen := int(header.Length)
-
-	if packet.length != HeaderSize+dataLen {
-		return header, errors.New("packet too small for declared data length " + fmt.Sprintf("%d < %d", packet.length, HeaderSize+dataLen))
-	}
 
 	data := packet.buffer[dataOffset : dataOffset+dataLen]
 
@@ -521,15 +526,15 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 			return header, errors.New("decrypted data too short")
 		}
 
-		// Extract connID
-		connIDVal := binary.BigEndian.Uint64(plaintext[:ConnIDSize])
-		packet.connID = ConnIDFromUint64(connIDVal)
-
 		// Verify timestamp
-		timestamp := int64(binary.BigEndian.Uint64(plaintext[ConnIDSize : ConnIDSize+TimestampSize]))
+		timestamp := int64(binary.BigEndian.Uint64(plaintext[:TimestampSize]))
 		if time.Since(time.UnixMilli(timestamp)) > am.dataTimeout {
 			return header, errors.New("data timestamp expired " + fmt.Sprintf("%d %d ", timestamp, time.Now().UnixMilli()))
 		}
+
+		// Extract connID
+		connIDVal := binary.BigEndian.Uint64(plaintext[TimestampSize : ConnIDSize+TimestampSize])
+		packet.connID = ConnIDFromUint64(connIDVal)
 
 		// Only mark nonce as used after successful decryption and validation
 		am.deduplicationMgr.markAsUsed(nonce)

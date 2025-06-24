@@ -159,6 +159,14 @@ func main() {
 			}
 			component = NewFilterComponent(cfg, router, protocolDetector)
 
+		case "tcp_tunnel_listen":
+			var cfg ComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal tcp_tunnel_listen config: %v", err)
+				continue
+			}
+			component = NewTcpTunnelListenComponent(cfg, router)
+
 		default:
 			logger.Warnf("Unknown component type: %s", typeVal)
 			continue

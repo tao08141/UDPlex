@@ -24,7 +24,8 @@ type ComponentConfig struct {
 	Detour              []string    `json:"detour"`
 	SendKeepalive       *bool       `json:"send_keepalive"`
 	Auth                *AuthConfig `json:"auth,omitempty"`
-	BroadcastMode       *bool       `json:"broadcast_mode"` // When false, only send to the specific connection ID
+	BroadcastMode       *bool       `json:"broadcast_mode"`       // When false, only send to the specific connection ID
+	ConnectionPoolSize  int         `json:"connection_pool_size"` // Number of connections in the pool
 }
 
 // AuthConfig represents authentication and encryption settings

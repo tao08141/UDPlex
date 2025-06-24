@@ -6,6 +6,8 @@ import (
 )
 
 type ConnID [8]byte
+type PoolID [8]byte
+type ForwardID [8]byte
 
 func (c ConnID) ToUint64() uint64 {
 	return binary.BigEndian.Uint64(c[:])
@@ -15,6 +17,26 @@ func (c ConnID) ToUint64() uint64 {
 func ConnIDFromUint64(val uint64) ConnID {
 	var id ConnID
 	binary.BigEndian.PutUint64(id[:], val)
+	return id
+}
+
+func ForwardIDFromBytes(data []byte) ForwardID {
+	var id ForwardID
+	if len(data) < len(id) {
+		copy(id[:], data)
+	} else {
+		copy(id[:], data[:len(id)])
+	}
+	return id
+}
+
+func PoolIDFromBytes(data []byte) PoolID {
+	var id PoolID
+	if len(data) < len(id) {
+		copy(id[:], data)
+	} else {
+		copy(id[:], data[:len(id)])
+	}
 	return id
 }
 

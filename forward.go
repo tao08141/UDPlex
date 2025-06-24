@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -20,6 +21,7 @@ type ForwardConn struct {
 	authRetryCount     int
 	heartbeatMissCount int
 	lastHeartbeatSent  time.Time
+	poolID             PoolID
 }
 
 // ForwardComponent implements a UDP forwarder with authentication
@@ -35,7 +37,7 @@ type ForwardComponent struct {
 	forwardConns    map[string]*ForwardConn
 	forwardConnList []*ForwardConn
 	stopCh          chan struct{}
-	stopped         bool
+	forwardID       ForwardID
 
 	// Authentication
 	authManager *AuthManager
@@ -65,6 +67,10 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		return nil
 	}
 
+	forwardID := ForwardID{}
+
+	rand.Read(forwardID[:])
+
 	return &ForwardComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router),
 
@@ -76,6 +82,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		forwardConns:        make(map[string]*ForwardConn),
 		authManager:         authManager,
 		stopCh:              make(chan struct{}),
+		forwardID:           forwardID,
 	}
 }
 
@@ -107,11 +114,6 @@ func (f *ForwardComponent) Start() error {
 
 // Stop closes all forwarder connections
 func (f *ForwardComponent) Stop() error {
-	if f.stopped {
-		return nil
-	}
-
-	f.stopped = true
 	close(f.stopCh)
 
 	for _, conn := range f.forwardConnList {
@@ -183,7 +185,7 @@ func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
 	buffer := f.router.GetBuffer()
 	defer f.router.PutBuffer(buffer)
 
-	length, err := f.authManager.CreateAuthChallenge(buffer, MsgTypeAuthChallenge)
+	length, err := f.authManager.CreateAuthChallenge(buffer, MsgTypeAuthChallenge, f.forwardID, conn.poolID)
 	if err != nil {
 		logger.Warnf("%s: Failed to create auth challenge: %v", f.tag, err)
 		return
