@@ -351,36 +351,36 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8, forward
 }
 
 // ProcessAuthChallenge processes an authentication challenge (server side)
-func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) error {
+func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (error, ForwardID, PoolID) {
 	if len(data) < ChallengeSize+TimestampSize+ForwardIDSize+PoolIDSize+MACSize {
-		return errors.New("invalid challenge data length")
+		return errors.New("invalid challenge data length"), ForwardID{}, PoolID{}
 	}
 
 	challenge := data[:ChallengeSize]
-	ForwardID := ForwardIDFromBytes(data[ChallengeSize : ChallengeSize+ForwardIDSize])
-	poolID := ForwardIDFromBytes(data[ChallengeSize+ForwardIDSize : ChallengeSize+ForwardIDSize+PoolIDSize])
+	forwardID := ForwardIDFromBytes(data[ChallengeSize : ChallengeSize+ForwardIDSize])
+	poolID := PoolIDFromBytes(data[ChallengeSize+ForwardIDSize : ChallengeSize+ForwardIDSize+PoolIDSize])
 	timestampBytes := data[ChallengeSize+ForwardIDSize+PoolIDSize : ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize]
 	receivedMAC := data[ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize : ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize+MACSize]
 
 	// Verify timestamp
 	timestamp := int64(binary.BigEndian.Uint64(timestampBytes))
 	if time.Since(time.UnixMilli(timestamp)) > am.authTimeout {
-		return errors.New("challenge timestamp expired")
+		return errors.New("challenge timestamp expired"), ForwardID{}, PoolID{}
 	}
 
 	// Verify HMAC
 	h := hmac.New(sha256.New, am.secret)
 	h.Write(challenge)
-	h.Write(ForwardID[:])
+	h.Write(forwardID[:])
 	h.Write(poolID[:])
 	h.Write(timestampBytes)
 	expectedMAC := h.Sum(nil)
 
 	if !hmac.Equal(receivedMAC, expectedMAC) {
-		return errors.New("invalid challenge MAC")
+		return errors.New("invalid challenge MAC"), ForwardID{}, PoolID{}
 	}
 
-	return nil
+	return nil, forwardID, poolID
 }
 
 // CreateHeartbeat creates a heartbeat message

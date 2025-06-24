@@ -4,8 +4,28 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+type ConnPool struct {
+	// 当时发送到的索引
+	index uint32
+	conns []*TcpConnection
+}
+
+func (p *ConnPool) AddConnection(conn *TcpConnection) {
+	p.conns = append(p.conns, conn)
+}
+
+func (p *ConnPool) RemoveConnection(conn *TcpConnection) {
+	for i, c := range p.conns {
+		if c == conn {
+			p.conns = append(p.conns[:i], p.conns[i+1:]...)
+			return
+		}
+	}
+}
 
 type TcpTunnelListenComponent struct {
 	BaseComponent
@@ -18,7 +38,7 @@ type TcpTunnelListenComponent struct {
 
 	stopCh chan struct{}
 
-	connections      map[ConnID]*TcpConnection
+	connections      map[ForwardID]map[PoolID]*ConnPool
 	connectionsMutex sync.RWMutex
 
 	authManager *AuthManager
@@ -58,7 +78,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		stopCh:            make(chan struct{}),
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
-		connections:       make(map[ConnID]*TcpConnection),
+		connections:       make(map[ForwardID]map[PoolID]*ConnPool),
 	}
 }
 
@@ -91,24 +111,6 @@ func (l *TcpTunnelListenComponent) handleConn(conn net.Conn) {
 	authDeadline := time.Now().Add(l.authManager.authTimeout)
 
 	authState.lastHeartbeat = time.Now()
-	connID := l.generateConnID()
-	tcpConn := &TcpConnection{
-		conn:       conn,
-		authState:  authState,
-		connID:     connID,
-		lastActive: time.Now(),
-	}
-
-	l.connectionsMutex.Lock()
-	l.connections[connID] = tcpConn
-	l.connectionsMutex.Unlock()
-
-	// Make sure to clean up when we're done
-	defer func() {
-		l.connectionsMutex.Lock()
-		delete(l.connections, connID)
-		l.connectionsMutex.Unlock()
-	}()
 
 	// Buffer to accumulate incoming data
 	buffer := l.router.GetBuffer()
@@ -194,7 +196,7 @@ func (l *TcpTunnelListenComponent) handleConn(conn net.Conn) {
 					// Handle authentication
 					if header.MsgType == MsgTypeAuthChallenge {
 						data := messageBuffer[HeaderSize:totalMessageSize]
-						err := l.authManager.ProcessAuthChallenge(data, authState)
+						err, forwardID, poolID := l.authManager.ProcessAuthChallenge(data, authState)
 						if err != nil {
 							logger.Infof("%s: %s Failed to process auth challenge: %v", l.tag, conn.RemoteAddr(), err)
 							return
@@ -202,7 +204,7 @@ func (l *TcpTunnelListenComponent) handleConn(conn net.Conn) {
 
 						// Send auth response
 						responseBuffer := l.router.GetBuffer()
-						responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, ForwardID{}, PoolID{})
+						responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, forwardID, poolID)
 						if err != nil {
 							logger.Warnf("%s: Failed to create auth challenge response: %v", l.tag, err)
 							l.router.PutBuffer(responseBuffer)
@@ -215,8 +217,56 @@ func (l *TcpTunnelListenComponent) handleConn(conn net.Conn) {
 							return
 						}
 
+						tcpConn := &TcpConnection{
+							conn:       conn,
+							authState:  authState,
+							lastActive: time.Now(),
+						}
+
+						l.connectionsMutex.Lock()
+
+						if _, exists := l.connections[forwardID]; !exists {
+							l.connections[forwardID] = make(map[PoolID]*ConnPool)
+						}
+
+						if _, exists := l.connections[forwardID][poolID]; !exists {
+							l.connections[forwardID][poolID] = &ConnPool{
+								index: 0,
+								conns: []*TcpConnection{},
+							}
+						}
+
+						// addrKey := fmt.Sprintf("%s:%d", conn.RemoteAddr().(*net.TCPAddr).IP, conn.RemoteAddr().(*net.TCPAddr).Port)
+						// if _, exists := l.connections[forwardID][poolID].conns[addrKey]; !exists {
+						// 	logger.Errorf("%s: %s Connection already exists for %s in forwardID %s, poolID %s", l.tag, conn.RemoteAddr(), addrKey, forwardID, poolID)
+						// 	l.router.PutBuffer(responseBuffer)
+						// 	return
+						// }
+
+						l.connections[forwardID][poolID].AddConnection(tcpConn)
+						l.connectionsMutex.Unlock()
+
+						defer func() {
+							l.connectionsMutex.Lock()
+							if pool, exists := l.connections[forwardID][poolID]; exists {
+								pool.RemoveConnection(tcpConn)
+								if len(pool.conns) == 0 {
+									delete(l.connections[forwardID], poolID)
+									if len(l.connections[forwardID]) == 0 {
+										delete(l.connections, forwardID)
+									}
+								}
+							}
+							if tcpConn != nil {
+								tcpConn.conn.Close()
+								tcpConn = nil
+							}
+							// Release the response buffer back to the router
+
+							l.connectionsMutex.Unlock()
+						}()
+
 						l.router.PutBuffer(responseBuffer)
-						// Mark as authenticated
 						authState.authenticated = 1
 					} else {
 						logger.Infof("%s: %s Received unexpected message type %d before authentication", l.tag, conn.RemoteAddr(), header.MsgType)
@@ -252,44 +302,33 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 	// If broadcasting, send to all authenticated connections
 	if l.broadcastMode {
 		l.connectionsMutex.RLock()
-		for _, conn := range l.connections {
-			if conn.authState == nil || !conn.authState.IsAuthenticated() {
-				continue
+		defer l.connectionsMutex.RUnlock()
+		for _, pools := range l.connections {
+			for _, pool := range pools {
+				for i, n := 0, len(pool.conns); i < n; i++ {
+					index := atomic.AddUint32(&pool.index, 1) % uint32(len(pool.conns))
+
+					if len(pool.conns) == 0 {
+						logger.Infof("%s: No connections available for broadcast", l.tag)
+						break
+					}
+
+					selectedConn := pool.conns[index]
+
+					if selectedConn == nil || selectedConn.conn == nil || !selectedConn.authState.IsAuthenticated() {
+						logger.Infof("%s: Selected connection is nil or closed, skipping", l.tag)
+						continue
+					}
+
+					if err := l.SendPacket(packet, selectedConn.conn); err != nil {
+						logger.Infof("%s: Failed to send packet to %s: %v", l.tag, selectedConn.conn.RemoteAddr(), err)
+						continue
+					}
+
+					break
+				}
 			}
-
-			// Write packet data to connection
-			if err := l.router.SendPacket(l, packet, conn.conn); err != nil {
-				logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
-			}
 		}
-		l.connectionsMutex.RUnlock()
-	} else {
-		// Direct mode: only send to the specific connection ID
-		if packet.connID == (ConnID{}) {
-			logger.Infof("%s: Packet has no connection ID, dropping", l.tag)
-			return nil
-		}
-
-		l.connectionsMutex.RLock()
-		conn, exists := l.connections[packet.connID]
-		l.connectionsMutex.RUnlock()
-
-		if !exists {
-			logger.Debugf("%s: No connection found for ID: %s", l.tag, packet.connID)
-			return nil
-		}
-
-		// Check authentication if required
-		if conn.authState == nil || !conn.authState.IsAuthenticated() {
-			logger.Debugf("%s: Connection not authenticated, dropping packet", l.tag)
-			return nil
-		}
-
-		// Write packet data to connection
-		if err := l.router.SendPacket(l, packet, conn.conn); err != nil {
-			logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
-		}
-
 	}
 
 	return nil

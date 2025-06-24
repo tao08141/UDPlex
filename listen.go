@@ -160,7 +160,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 
 		// Process challenge and send response
 		data := buffer[HeaderSize : HeaderSize+header.Length]
-		err := l.authManager.ProcessAuthChallenge(data, mapping.authState)
+		err, forwardID, poolID := l.authManager.ProcessAuthChallenge(data, mapping.authState)
 		if err != nil {
 			logger.Infof("%s: %s Authentication challenge failed: %v", l.tag, addr.String(), err)
 			return nil
@@ -187,7 +187,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		// Create response
 		responseBuffer := l.router.GetBuffer()
 		l.router.PutBuffer(responseBuffer)
-		responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, ForwardID{}, PoolID{})
+		responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, forwardID, poolID)
 		if err != nil {
 			logger.Warnf("%s: Failed to create auth challenge response: %v", l.tag, err)
 		}

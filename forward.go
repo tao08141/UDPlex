@@ -369,7 +369,7 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 	case MsgTypeAuthResponse:
 
 		data := buffer[HeaderSize : HeaderSize+header.Length]
-		err := f.authManager.ProcessAuthChallenge(data, conn.authState)
+		err, _, _ := f.authManager.ProcessAuthChallenge(data, conn.authState)
 		if err != nil {
 			logger.Warnf("%s: Auth response verification failed: %v", f.tag, err)
 			atomic.StoreInt32(&conn.authState.authenticated, 0)
