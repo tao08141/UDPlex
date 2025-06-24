@@ -1,8 +1,22 @@
 package main
 
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"encoding/binary"
+)
 
 type ConnID [8]byte
+
+func (c ConnID) ToUint64() uint64 {
+	return binary.BigEndian.Uint64(c[:])
+}
+
+// ConnIDFromUint64 creates a ConnID from a uint64 value using big-endian encoding
+func ConnIDFromUint64(val uint64) ConnID {
+	var id ConnID
+	binary.BigEndian.PutUint64(id[:], val)
+	return id
+}
 
 // Component is the interface that all network components must implement
 type Component interface {

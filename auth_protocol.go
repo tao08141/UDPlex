@@ -32,6 +32,7 @@ const (
 	MACSize       = 32
 	ResponseSize  = 32
 	NonceSize     = 12
+	ConnIDSize    = 8
 
 	// Deduplication constants
 	FrameIDSize     = 8               // First 8 bytes of nonce
@@ -385,24 +386,30 @@ func CreateHeartbeat(buffer []byte) int {
 // WrapData wraps data in protocol format with optional encryption
 func (am *AuthManager) WrapData(packet *Packet) error {
 	if am.enableEncryption && am.gcm != nil {
-		// Encrypted data format: Header + Nonce(12) + EncryptedData(timestamp(8) + originalData)
+		// Encrypted data format: Header + Nonce(12) + EncryptedData(connID(8) + timestamp(8) + originalData)
 
-		// Prepare plaintext: timestamp + original data
-
+		// Prepare plaintext: connID + timestamp + original data
+		neededSpace := ConnIDSize + TimestampSize
 		offset := HeaderSize
-		if packet.offset > TimestampSize {
-			// Shift existing data to make space for timestamp
-			packet.offset -= TimestampSize
+
+		if packet.offset > neededSpace {
+			// Shift existing data to make space for connID and timestamp
+			packet.offset -= neededSpace
 		} else {
 			newBuffer := am.router.GetBuffer()
-			copy(newBuffer[TimestampSize:], packet.GetData())
+			copy(newBuffer[neededSpace:], packet.GetData())
 			packet.SetBuffer(newBuffer[:packet.length])
 			packet.offset = 0
 		}
 
+		// Add connID before timestamp
+		binary.BigEndian.PutUint64(packet.buffer[packet.offset:], packet.connID.ToUint64())
+
+		// Add timestamp after connID
 		timestamp := time.Now().UnixMilli()
-		binary.BigEndian.PutUint64(packet.buffer[packet.offset:], uint64(timestamp))
-		packet.length += TimestampSize
+		binary.BigEndian.PutUint64(packet.buffer[packet.offset+ConnIDSize:], uint64(timestamp))
+
+		packet.length += neededSpace
 
 		// Get a new buffer for the wrapped packet
 		buffer := am.router.GetBuffer()
@@ -433,21 +440,27 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		packet.length = HeaderSize + totalDataLen
 
 	} else {
-		// Unencrypted data: just add header
-		if packet.offset >= HeaderSize {
-			// Shift header before existing data
-			packet.offset -= HeaderSize
+		// Unencrypted data format: Header + connID(8) + originalData
+
+		if packet.offset >= HeaderSize+ConnIDSize {
+			// Shift header and connID before existing data
+			packet.offset -= (HeaderSize + ConnIDSize)
 		} else {
 			// Need new buffer
 			buffer := packet.router.GetBuffer()
-			copy(buffer[HeaderSize:], packet.buffer[packet.offset:packet.offset+packet.length])
+			copy(buffer[HeaderSize+ConnIDSize:], packet.buffer[packet.offset:packet.offset+packet.length])
 
 			packet.SetBuffer(buffer)
 			packet.offset = 0
 		}
 
-		WriteHeader(packet.buffer[packet.offset:], MsgTypeData, uint16(packet.length))
-		packet.length += HeaderSize
+		// Add header
+		WriteHeader(packet.buffer[packet.offset:], MsgTypeData, uint16(packet.length+ConnIDSize))
+
+		// Add connID after header
+		binary.BigEndian.PutUint64(packet.buffer[packet.offset+HeaderSize:], packet.connID.ToUint64())
+
+		packet.length += (HeaderSize + ConnIDSize)
 	}
 
 	return nil
@@ -482,7 +495,7 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 	data := packet.buffer[dataOffset : dataOffset+dataLen]
 
 	if am.enableEncryption && am.gcm != nil {
-		if len(data) < NonceSize+TimestampSize+am.gcm.Overhead() {
+		if len(data) < NonceSize+TimestampSize+ConnIDSize+am.gcm.Overhead() {
 			return header, errors.New("encrypted data too short")
 		}
 
@@ -504,12 +517,16 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 			return header, fmt.Errorf("decryption failed: %w", err)
 		}
 
-		if len(plaintext) < TimestampSize {
+		if len(plaintext) < (ConnIDSize + TimestampSize) {
 			return header, errors.New("decrypted data too short")
 		}
 
+		// Extract connID
+		connIDVal := binary.BigEndian.Uint64(plaintext[:ConnIDSize])
+		packet.connID = ConnIDFromUint64(connIDVal)
+
 		// Verify timestamp
-		timestamp := int64(binary.BigEndian.Uint64(plaintext[:TimestampSize]))
+		timestamp := int64(binary.BigEndian.Uint64(plaintext[ConnIDSize : ConnIDSize+TimestampSize]))
 		if time.Since(time.UnixMilli(timestamp)) > am.dataTimeout {
 			return header, errors.New("data timestamp expired " + fmt.Sprintf("%d %d ", timestamp, time.Now().UnixMilli()))
 		}
@@ -518,13 +535,18 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 		am.deduplicationMgr.markAsUsed(nonce)
 
 		packet.SetBuffer(plaintext)
-		packet.offset = TimestampSize
-		packet.length = len(plaintext) - TimestampSize
+		packet.offset = ConnIDSize + TimestampSize // Skip connID and timestamp
+		packet.length = len(plaintext) - (ConnIDSize + TimestampSize)
 
 	} else {
-		// Unencrypted: just skip header
-		packet.offset = dataOffset
-		packet.length = dataLen
+		// Unencrypted: extract connID and skip header and connID
+		if dataLen < ConnIDSize {
+			return header, errors.New("data too short to contain connID")
+		}
+
+		packet.connID = ConnIDFromUint64(binary.BigEndian.Uint64(data[:ConnIDSize]))
+		packet.offset = dataOffset + ConnIDSize // Skip header and connID
+		packet.length = dataLen - ConnIDSize    // Subtract connID size from data length
 	}
 
 	return header, nil
