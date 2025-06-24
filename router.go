@@ -43,6 +43,17 @@ func NewRouter(config Config) *Router {
 	return r
 }
 
+type sendTask struct {
+	component Component
+	packet    *Packet
+	metadata  any
+}
+
+type routeTask struct {
+	packet   *Packet
+	destTags []string
+}
+
 // Router manages all components and routes packets between them
 type Router struct {
 	components map[string]Component
@@ -51,6 +62,30 @@ type Router struct {
 	routeTasks chan routeTask
 	sendTasks  chan sendTask
 	wg         sync.WaitGroup
+	connPool   map[string]map[string]any // connPoll[connId][tag] = any
+}
+
+func (r *Router) GetConnData(connID string, tag string) any {
+	if _, exists := r.connPool[connID]; !exists {
+		r.connPool[connID] = make(map[string]any)
+	}
+	return r.connPool[connID][tag]
+}
+
+func (r *Router) SetConnData(connID string, tag string, data any) {
+	if _, exists := r.connPool[connID]; !exists {
+		r.connPool[connID] = make(map[string]any)
+	}
+	r.connPool[connID][tag] = data
+}
+
+func (r *Router) RemoveConnData(connID string, tag string) {
+	if _, exists := r.connPool[connID]; exists {
+		delete(r.connPool[connID], tag)
+		if len(r.connPool[connID]) == 0 {
+			delete(r.connPool, connID) // Remove empty connection data
+		}
+	}
 }
 
 // startWorkers initializes the worker goroutines for packet routing

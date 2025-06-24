@@ -24,14 +24,14 @@ type ForwardConn struct {
 
 // ForwardComponent implements a UDP forwarder with authentication
 type ForwardComponent struct {
-	tag                 string
+	BaseComponent
+
 	forwarders          []string
 	reconnectInterval   time.Duration
 	connectionCheckTime time.Duration
 	detour              []string
 	sendKeepalive       bool
 
-	router          *Router
 	forwardConns    map[string]*ForwardConn
 	forwardConnList []*ForwardConn
 	stopCh          chan struct{}
@@ -66,13 +66,13 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 	}
 
 	return &ForwardComponent{
-		tag:                 cfg.Tag,
+		BaseComponent: NewBaseComponent(cfg.Tag, router),
+
 		forwarders:          cfg.Forwarders,
 		reconnectInterval:   reconnectInterval,
 		connectionCheckTime: connectionCheckTime,
 		detour:              cfg.Detour,
 		sendKeepalive:       sendKeepalive,
-		router:              router,
 		forwardConns:        make(map[string]*ForwardConn),
 		authManager:         authManager,
 		stopCh:              make(chan struct{}),

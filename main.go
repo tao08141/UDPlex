@@ -11,28 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Component is the interface that all network components must implement
-type Component interface {
-	Start() error
-	Stop() error
-	GetTag() string
-	// HandlePacket processes packets coming from other components
-	// srcTag is the tag of the component that sent the packet
-	HandlePacket(packet *Packet) error
-	SendPacket(packet *Packet, metadata any) error
-}
-
-type routeTask struct {
-	packet   *Packet
-	destTags []string
-}
-
-type sendTask struct {
-	component Component
-	packet    *Packet
-	metadata  any
-}
-
 // stripJSONComments removes single-line (//) and multi-line (/* */) comments from JSON
 func stripJSONComments(data []byte) ([]byte, error) {
 	var result bytes.Buffer

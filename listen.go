@@ -18,7 +18,7 @@ type AddrMapping struct {
 
 // ListenComponent implements a UDP listener with authentication
 type ListenComponent struct {
-	tag string
+	BaseComponent
 
 	listenAddr        string
 	timeout           time.Duration
@@ -26,8 +26,8 @@ type ListenComponent struct {
 	detour            []string
 	broadcastMode     bool
 
-	conn         net.PacketConn
-	router       *Router
+	conn net.PacketConn
+
 	mappings     map[string]*AddrMapping
 	mappingsRead *map[string]*AddrMapping
 	stopCh       chan struct{}
@@ -57,23 +57,18 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	}
 
 	return &ListenComponent{
-		tag:               cfg.Tag,
+		BaseComponent: NewBaseComponent(cfg.Tag, router),
+
 		listenAddr:        cfg.ListenAddr,
 		timeout:           timeout,
 		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
-		router:            router,
 		mappings:          make(map[string]*AddrMapping),
 		mappingsRead:      &map[string]*AddrMapping{},
 		stopCh:            make(chan struct{}),
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
 	}
-}
-
-// GetTag returns the component's tag
-func (l *ListenComponent) GetTag() string {
-	return l.tag
 }
 
 // Start initializes and starts the listener
@@ -103,10 +98,6 @@ func (l *ListenComponent) Stop() error {
 	return l.conn.Close()
 }
 
-func (l *ListenComponent) generateConnID(addr *net.UDPAddr) string {
-	return addr.String()
-}
-
 // performCleanup handles the cleaning of inactive mappings
 func (l *ListenComponent) performCleanup() {
 	now := time.Now()
@@ -116,6 +107,7 @@ func (l *ListenComponent) performCleanup() {
 	for addrString, mapping := range l.mappings {
 		if now.Sub(mapping.lastActive) > l.timeout {
 			delete(l.mappings, addrString)
+			l.RemoveConnData(mapping.connID)
 			isSync = true
 			logger.Warnf("%s: Removed inactive mapping: %s", l.tag, addrString)
 		}
@@ -166,6 +158,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 				addr:       addr,
 				lastActive: time.Now(),
 				authState:  &AuthState{},
+				connID:     l.generateConnID(),
 			}
 			l.mappings[addrKey] = mapping
 			l.syncMapping()
@@ -187,6 +180,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 				if mapping.addr.(*net.UDPAddr).IP.String() == addrIP && key != addrKey {
 					logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
 					delete(l.mappings, key)
+					l.RemoveConnData(mapping.connID)
 					isSync = true
 				}
 			}
@@ -235,6 +229,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 	case MsgTypeDisconnect:
 		// Remove mapping
 		delete(l.mappings, addrKey)
+		l.RemoveConnData(l.mappings[addrKey].connID)
 		l.syncMapping()
 		logger.Infof("%s: Client %s disconnected", l.tag, addr.String())
 	}
@@ -282,7 +277,6 @@ func (l *ListenComponent) handlePackets() {
 				}
 
 				packet.length = length
-				packet.connID = l.generateConnID(addr.(*net.UDPAddr))
 
 				// Handle authentication if enabled
 				if l.authManager != nil {
@@ -326,17 +320,21 @@ func (l *ListenComponent) handlePackets() {
 								if mapping.addr.(*net.UDPAddr).IP.String() == addrIP {
 									logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
 									delete(l.mappings, key)
+									l.RemoveConnData(mapping.connID)
 								}
 							}
 						}
 
 						// Add the new mapping
 						logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
-						l.mappings[addrKey] = &AddrMapping{addr: addr, lastActive: time.Now()}
+						connID := l.generateConnID()
+						l.mappings[addrKey] = &AddrMapping{addr: addr, lastActive: time.Now(), connID: connID}
 						l.syncMapping()
+						packet.connID = connID
 					} else {
 						// Update the last active time for existing mapping
 						l.mappings[addrKey].lastActive = time.Now()
+						packet.connID = l.mappings[addr.String()].connID
 					}
 				}
 

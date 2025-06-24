@@ -6,11 +6,10 @@ import (
 
 // FilterComponent implements protocol-based packet filtering
 type FilterComponent struct {
-	tag               string
+	BaseComponent
 	detour            map[string][]string // Maps protocol names to destination tags
 	detourMiss        []string            // Default detour for undetected protocols
 	protocolDetector  *ProtocolDetector
-	router            *Router
 	useProtoDetectors []string // Protocol detector tags to use
 	stopCh            chan struct{}
 	stopped           bool
@@ -20,11 +19,11 @@ type FilterComponent struct {
 func NewFilterComponent(cfg FilterComponentConfig, router *Router, protoDetector *ProtocolDetector) *FilterComponent {
 
 	return &FilterComponent{
-		tag:               cfg.Tag,
+		BaseComponent: NewBaseComponent(cfg.Tag, router),
+
 		detour:            cfg.Detour,
 		detourMiss:        cfg.DetourMiss,
 		protocolDetector:  protoDetector,
-		router:            router,
 		useProtoDetectors: cfg.UseProtoDetectors,
 		stopped:           false,
 		stopCh:            make(chan struct{}),
