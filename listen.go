@@ -13,7 +13,7 @@ type AddrMapping struct {
 	addr       net.Addr
 	lastActive time.Time
 	authState  *AuthState // Authentication state for this connection
-	connID     string     // Unique connection identifier
+	connID     ConnID    // Unique connection identifier
 }
 
 // ListenComponent implements a UDP listener with authentication
@@ -371,7 +371,7 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 		}
 	} else {
 		// Direct mode: send only to the specific connection ID
-		if packet.connID == "" {
+		if packet.connID == (ConnID{}) {
 			logger.Infof("%s: Packet has no connection ID, dropping", l.tag)
 			return nil
 		}

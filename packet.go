@@ -14,7 +14,7 @@ type Packet struct {
 	count   int32
 	proto   string
 	router  *Router
-	connID  string // Unique connection identifier
+	connID  ConnID // Unique connection identifier
 }
 
 func NewPacket(buffer []byte, length int, srcAddr net.Addr, srcTag string, router *Router, offset int) Packet {
@@ -26,7 +26,7 @@ func NewPacket(buffer []byte, length int, srcAddr net.Addr, srcTag string, route
 		count:   1, // Initial reference count
 		router:  router,
 		offset:  offset,
-		connID:  "", // Will be set by the component that establishes the connection
+		connID:  ConnID{},
 	}
 }
 

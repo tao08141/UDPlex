@@ -62,24 +62,24 @@ type Router struct {
 	routeTasks chan routeTask
 	sendTasks  chan sendTask
 	wg         sync.WaitGroup
-	connPool   map[string]map[string]any // connPoll[connId][tag] = any
+	connPool   map[ConnID]map[string]any // connPoll[connId][tag] = any
 }
 
-func (r *Router) GetConnData(connID string, tag string) any {
+func (r *Router) GetConnData(connID ConnID, tag string) any {
 	if _, exists := r.connPool[connID]; !exists {
 		r.connPool[connID] = make(map[string]any)
 	}
 	return r.connPool[connID][tag]
 }
 
-func (r *Router) SetConnData(connID string, tag string, data any) {
+func (r *Router) SetConnData(connID ConnID, tag string, data any) {
 	if _, exists := r.connPool[connID]; !exists {
 		r.connPool[connID] = make(map[string]any)
 	}
 	r.connPool[connID][tag] = data
 }
 
-func (r *Router) RemoveConnData(connID string, tag string) {
+func (r *Router) RemoveConnData(connID ConnID, tag string) {
 	if _, exists := r.connPool[connID]; exists {
 		delete(r.connPool[connID], tag)
 		if len(r.connPool[connID]) == 0 {

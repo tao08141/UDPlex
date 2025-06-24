@@ -1,5 +1,9 @@
 package main
 
+import "crypto/rand"
+
+type ConnID [8]byte
+
 // Component is the interface that all network components must implement
 type Component interface {
 	Start() error
@@ -31,20 +35,26 @@ func (bc *BaseComponent) GetTag() string {
 }
 
 // GetConnData retrieves connection-specific data for this component
-func (bc *BaseComponent) GetConnData(connID string) any {
+func (bc *BaseComponent) GetConnData(connID ConnID) any {
 	return bc.router.GetConnData(connID, bc.tag)
 }
 
 // SetConnData stores connection-specific data for this component
-func (bc *BaseComponent) SetConnData(connID string, data any) {
+func (bc *BaseComponent) SetConnData(connID ConnID, data any) {
 	bc.router.SetConnData(connID, bc.tag, data)
 }
 
 // RemoveConnData removes connection-specific data for this component
-func (bc *BaseComponent) RemoveConnData(connID string) {
+func (bc *BaseComponent) RemoveConnData(connID ConnID) {
 	bc.router.RemoveConnData(connID, bc.tag)
 }
 
-func (l *BaseComponent) generateConnID() string {
-	return ""
+func (l *BaseComponent) generateConnID() ConnID {
+	connID := ConnID{}
+	if _, err := rand.Read(connID[:]); err != nil {
+		logger.Errorf("Failed to generate connection ID: %v", err)
+		return ConnID{}
+	}
+
+	return connID
 }
