@@ -143,7 +143,9 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						if err == nil {
 							t.GetRouter().Route(&packet, t.GetDetour())
 						} else {
-							logger.Infof("%s: %s Failed to unwrap data: %v", t.GetTag(), c.conn.RemoteAddr(), err)
+							if err.Error() != "duplicate packet detected" {
+								logger.Infof("%s: %s Failed to unwrap data: %v", t.GetTag(), c.conn.RemoteAddr(), err)
+							}
 							packet.Release(1)
 						}
 					} else if header.MsgType == MsgTypeHeartbeat {

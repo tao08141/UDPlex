@@ -335,6 +335,9 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 
 					header, err := f.authManager.UnwrapData(&packet)
 					if err != nil {
+						if err.Error() != "duplicate packet detected" {
+							logger.Infof("%s: %s Failed to unwrap data: %v", f.tag, conn.remoteAddr, err)
+						}
 						return
 					}
 

@@ -275,7 +275,9 @@ func (l *ListenComponent) handlePackets() {
 
 					header, err := l.authManager.UnwrapData(&packet)
 					if err != nil {
-						logger.Infof("%s: %s Failed to unwrap data: %v", l.tag, addr.String(), err)
+						if err.Error() != "duplicate packet detected" {
+							logger.Infof("%s: %s Failed to unwrap data: %v", l.tag, addr.String(), err)
+						}
 						return
 					}
 
