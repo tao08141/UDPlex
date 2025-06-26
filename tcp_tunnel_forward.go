@@ -92,6 +92,11 @@ func (f *TcpTunnelForwardComponent) Start() error {
 		logger.Warnf("%s: No forwarders configured, skipping start", f.tag)
 	}
 
+	if f.authManager == nil {
+		logger.Warnf("%s: AuthManager is nil, cannot start component", f.tag)
+		return fmt.Errorf("%s: AuthManager is nil", f.tag)
+	}
+
 	logger.Infof("%s: Starting TCP tunnel forward component with ID %x", f.tag, f.forwardID)
 
 	f.connectionsMutex.Lock()

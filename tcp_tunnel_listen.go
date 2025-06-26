@@ -58,6 +58,12 @@ func (l *TcpTunnelListenComponent) Start() error {
 		logger.Errorf("%s: Failed to start listening on %s: %v", l.tag, l.listenAddr, err)
 		return err
 	}
+
+	if l.authManager == nil {
+		logger.Warnf("%s: AuthManager is nil, cannot start component", l.tag)
+		return fmt.Errorf("%s: AuthManager is nil", l.tag)
+	}
+
 	logger.Infof("%s: Listening on %s", l.tag, l.listenAddr)
 	go func() {
 		for {
