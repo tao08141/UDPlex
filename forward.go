@@ -36,7 +36,6 @@ type ForwardComponent struct {
 
 	forwardConns    map[string]*ForwardConn
 	forwardConnList []*ForwardConn
-	stopCh          chan struct{}
 	forwardID       ForwardID
 
 	// Authentication
@@ -81,7 +80,6 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		sendKeepalive:       sendKeepalive,
 		forwardConns:        make(map[string]*ForwardConn),
 		authManager:         authManager,
-		stopCh:              make(chan struct{}),
 		forwardID:           forwardID,
 	}
 }
@@ -114,7 +112,7 @@ func (f *ForwardComponent) Start() error {
 
 // Stop closes all forwarder connections
 func (f *ForwardComponent) Stop() error {
-	close(f.stopCh)
+	close(f.GetStopChannel())
 
 	for _, conn := range f.forwardConnList {
 		if conn.conn != nil {
@@ -132,7 +130,7 @@ func (f *ForwardComponent) connectionChecker() {
 
 	for {
 		select {
-		case <-f.stopCh:
+		case <-f.GetStopChannel():
 			return
 		case <-ticker.C:
 			for _, conn := range f.forwardConnList {
@@ -306,7 +304,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 	for atomic.LoadInt32(&conn.isConnected) == 1 {
 		select {
-		case <-f.stopCh:
+		case <-f.GetStopChannel():
 			return
 		default:
 			conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))

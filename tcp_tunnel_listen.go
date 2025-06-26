@@ -4,28 +4,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
-
-type ConnPool struct {
-	// 当时发送到的索引
-	index uint32
-	conns []*TcpConnection
-}
-
-func (p *ConnPool) AddConnection(conn *TcpConnection) {
-	p.conns = append(p.conns, conn)
-}
-
-func (p *ConnPool) RemoveConnection(conn *TcpConnection) {
-	for i, c := range p.conns {
-		if c == conn {
-			p.conns = append(p.conns[:i], p.conns[i+1:]...)
-			return
-		}
-	}
-}
 
 type TcpTunnelListenComponent struct {
 	BaseComponent
@@ -36,19 +16,10 @@ type TcpTunnelListenComponent struct {
 	detour            []string
 	broadcastMode     bool
 
-	stopCh chan struct{}
-
-	connections      map[ForwardID]map[PoolID]*ConnPool
+	connections      map[ForwardID]map[PoolID]*TcpTunnelConnPool
 	connectionsMutex sync.RWMutex
 
 	authManager *AuthManager
-}
-
-type TcpConnection struct {
-	conn       net.Conn
-	authState  *AuthState
-	connID     ConnID
-	lastActive time.Time
 }
 
 func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnelListenComponent {
@@ -75,18 +46,19 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		timeout:           timeout,
 		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
-		stopCh:            make(chan struct{}),
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
-		connections:       make(map[ForwardID]map[PoolID]*ConnPool),
+		connections:       make(map[ForwardID]map[PoolID]*TcpTunnelConnPool),
 	}
 }
 
 func (l *TcpTunnelListenComponent) Start() error {
 	ln, err := net.Listen("tcp", l.listenAddr)
 	if err != nil {
+		logger.Errorf("%s: Failed to start listening on %s: %v", l.tag, l.listenAddr, err)
 		return err
 	}
+	logger.Infof("%s: Listening on %s", l.tag, l.listenAddr)
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -98,205 +70,27 @@ func (l *TcpTunnelListenComponent) Start() error {
 				}
 				continue
 			}
-			go l.handleConn(conn)
+
+			logger.Infof("%s: Accepted connection from %s", l.tag, conn.RemoteAddr())
+			c := &TcpTunnelConn{
+				forwardID:   ForwardID{},
+				poolID:      PoolID{},
+				conn:        conn,
+				authState:   &AuthState{},
+				lastActive:  time.Now(),
+				isConnected: 1,
+			}
+
+			go TcpTunnelLoopRead(c, l, TcpTunnelListenMode)
+
 		}
 	}()
 	return nil
 }
 
-func (l *TcpTunnelListenComponent) handleConn(conn net.Conn) {
-	defer conn.Close()
-
-	authState := &AuthState{}
-	authDeadline := time.Now().Add(l.authManager.authTimeout)
-
-	authState.lastHeartbeat = time.Now()
-
-	// Buffer to accumulate incoming data
-	buffer := l.router.GetBuffer()
-	defer l.router.PutBuffer(buffer)
-	bufferUsed := 0
-
-	for {
-
-		select {
-		case <-l.stopCh:
-			logger.Infof("%s: Stopping connection handling for %s", l.tag, conn.RemoteAddr())
-			return
-		default:
-
-			if !authState.IsAuthenticated() {
-				_ = conn.SetReadDeadline(authDeadline)
-			} else {
-				_ = conn.SetReadDeadline(time.Now().Add(l.timeout))
-			}
-
-			// Read into the unused portion of the buffer
-			n, err := conn.Read(buffer[bufferUsed:])
-			if err != nil {
-				logger.Infof("%s: %s Read error: %v", l.tag, conn.RemoteAddr(), err)
-				return
-			}
-
-			bufferUsed += n
-
-			// Process all complete messages in the buffer
-			processedBytes := 0
-			for processedBytes < bufferUsed {
-				// Need at least a header to continue
-				if bufferUsed-processedBytes < HeaderSize {
-					break
-				}
-
-				// Parse header
-				header, err := ParseHeader(buffer[processedBytes:])
-				if err != nil {
-					logger.Infof("%s: %s Invalid header: %v", l.tag, conn.RemoteAddr(), err)
-					return
-				}
-
-				totalMessageSize := HeaderSize + int(header.Length)
-
-				// If we don't have the full message yet, wait for more data
-				if bufferUsed-processedBytes < totalMessageSize {
-					break
-				}
-
-				// We have a complete message, process it
-				messageBuffer := buffer[processedBytes : processedBytes+totalMessageSize]
-
-				if authState.IsAuthenticated() {
-					// Process authenticated messages
-					if header.MsgType == MsgTypeData {
-						packet := l.router.GetPacket(l.tag)
-						packet.length = totalMessageSize
-						copy(packet.buffer, messageBuffer)
-
-						// Unwrap and route the packet
-						_, err := l.authManager.UnwrapData(&packet)
-						if err == nil {
-							l.router.Route(&packet, l.detour)
-						} else {
-							logger.Infof("%s: %s Failed to unwrap data: %v", l.tag, conn.RemoteAddr(), err)
-							packet.Release(1)
-						}
-					} else if header.MsgType == MsgTypeHeartbeat {
-						// Update heartbeat time
-						authState.UpdateHeartbeat()
-
-						// Send heartbeat response
-						responseBuffer := make([]byte, HeaderSize)
-						CreateHeartbeat(responseBuffer)
-						conn.Write(responseBuffer)
-					} else if header.MsgType == MsgTypeDisconnect {
-						logger.Infof("%s: %s Client requested disconnect", l.tag, conn.RemoteAddr())
-						return
-					}
-				} else {
-					// Handle authentication
-					if header.MsgType == MsgTypeAuthChallenge {
-						data := messageBuffer[HeaderSize:totalMessageSize]
-						err, forwardID, poolID := l.authManager.ProcessAuthChallenge(data, authState)
-						if err != nil {
-							logger.Infof("%s: %s Failed to process auth challenge: %v", l.tag, conn.RemoteAddr(), err)
-							return
-						}
-
-						// Send auth response
-						responseBuffer := l.router.GetBuffer()
-						responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, forwardID, poolID)
-						if err != nil {
-							logger.Warnf("%s: Failed to create auth challenge response: %v", l.tag, err)
-							l.router.PutBuffer(responseBuffer)
-							return
-						}
-
-						if _, err := conn.Write(responseBuffer[:responseLen]); err != nil {
-							logger.Infof("%s: %s Failed to send auth response: %v", l.tag, conn.RemoteAddr(), err)
-							l.router.PutBuffer(responseBuffer)
-							return
-						}
-
-						tcpConn := &TcpConnection{
-							conn:       conn,
-							authState:  authState,
-							lastActive: time.Now(),
-						}
-
-						l.connectionsMutex.Lock()
-
-						if _, exists := l.connections[forwardID]; !exists {
-							l.connections[forwardID] = make(map[PoolID]*ConnPool)
-						}
-
-						if _, exists := l.connections[forwardID][poolID]; !exists {
-							l.connections[forwardID][poolID] = &ConnPool{
-								index: 0,
-								conns: []*TcpConnection{},
-							}
-						}
-
-						// addrKey := fmt.Sprintf("%s:%d", conn.RemoteAddr().(*net.TCPAddr).IP, conn.RemoteAddr().(*net.TCPAddr).Port)
-						// if _, exists := l.connections[forwardID][poolID].conns[addrKey]; !exists {
-						// 	logger.Errorf("%s: %s Connection already exists for %s in forwardID %s, poolID %s", l.tag, conn.RemoteAddr(), addrKey, forwardID, poolID)
-						// 	l.router.PutBuffer(responseBuffer)
-						// 	return
-						// }
-
-						l.connections[forwardID][poolID].AddConnection(tcpConn)
-						l.connectionsMutex.Unlock()
-
-						defer func() {
-							l.connectionsMutex.Lock()
-							if pool, exists := l.connections[forwardID][poolID]; exists {
-								pool.RemoveConnection(tcpConn)
-								if len(pool.conns) == 0 {
-									delete(l.connections[forwardID], poolID)
-									if len(l.connections[forwardID]) == 0 {
-										delete(l.connections, forwardID)
-									}
-								}
-							}
-							if tcpConn != nil {
-								tcpConn.conn.Close()
-								tcpConn = nil
-							}
-							// Release the response buffer back to the router
-
-							l.connectionsMutex.Unlock()
-						}()
-
-						l.router.PutBuffer(responseBuffer)
-						authState.authenticated = 1
-					} else {
-						logger.Infof("%s: %s Received unexpected message type %d before authentication", l.tag, conn.RemoteAddr(), header.MsgType)
-						return
-					}
-				}
-
-				// Move past this message in the buffer
-				processedBytes += totalMessageSize
-			}
-
-			// Shift any remaining partial message to the beginning of the buffer
-			if processedBytes > 0 {
-				copy(buffer, buffer[processedBytes:bufferUsed])
-				bufferUsed -= processedBytes
-			}
-
-			// Check if buffer is full but we couldn't process anything - likely a malformed packet
-			if bufferUsed == len(buffer) && processedBytes == 0 {
-				logger.Infof("%s: %s Buffer full but no complete message, likely malformed data", l.tag, conn.RemoteAddr())
-				return
-			}
-		}
-	}
-}
-
 func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
-	// Wrap data with authentication if needed
 	l.authManager.WrapData(packet)
 
 	// If broadcasting, send to all authenticated connections
@@ -305,27 +99,16 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 		defer l.connectionsMutex.RUnlock()
 		for _, pools := range l.connections {
 			for _, pool := range pools {
-				for i, n := 0, len(pool.conns); i < n; i++ {
-					index := atomic.AddUint32(&pool.index, 1) % uint32(len(pool.conns))
+				c := pool.GetNextConn()
 
-					if len(pool.conns) == 0 {
-						logger.Infof("%s: No connections available for broadcast", l.tag)
-						break
-					}
+				if c == nil {
+					logger.Warnf("%s: No available connections in pool %s", l.tag, pool.remoteAddr)
+					continue
+				}
 
-					selectedConn := pool.conns[index]
-
-					if selectedConn == nil || selectedConn.conn == nil || !selectedConn.authState.IsAuthenticated() {
-						logger.Infof("%s: Selected connection is nil or closed, skipping", l.tag)
-						continue
-					}
-
-					if err := l.SendPacket(packet, selectedConn.conn); err != nil {
-						logger.Infof("%s: Failed to send packet to %s: %v", l.tag, selectedConn.conn.RemoteAddr(), err)
-						continue
-					}
-
-					break
+				if err := l.router.SendPacket(l, packet, c.conn); err != nil {
+					logger.Infof("%s: Failed to send packet to %s: %v", l.tag, c.conn.RemoteAddr(), err)
+					continue
 				}
 			}
 		}
@@ -357,5 +140,71 @@ func (l *TcpTunnelListenComponent) Stop() error {
 	close(l.stopCh)
 
 	logger.Infof("%s: Stopped listening on %s", l.tag, l.listenAddr)
+	return nil
+}
+
+func (l *TcpTunnelListenComponent) GetAuthManager() *AuthManager {
+	return l.authManager
+}
+
+func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
+	logger.Infof("%s: Disconnecting %s", l.tag, c.conn.RemoteAddr())
+	l.connectionsMutex.Lock()
+	defer l.connectionsMutex.Unlock()
+	if pool, exists := l.connections[c.forwardID][c.poolID]; exists {
+		pool.RemoveConnection(c)
+		if len(pool.conns) == 0 {
+			delete(l.connections[c.forwardID], c.poolID)
+			if len(l.connections[c.forwardID]) == 0 {
+				delete(l.connections, c.forwardID)
+			}
+		}
+	}
+	if c != nil {
+		c.conn.Close()
+		c = nil
+	}
+}
+
+func (l *TcpTunnelListenComponent) GetDetour() []string {
+	return l.detour
+}
+
+func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {
+
+	// Send auth response
+	responseBuffer := l.GetRouter().GetBuffer()
+	responseLen, err := l.GetAuthManager().CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, c.forwardID, c.poolID)
+	if err != nil {
+		logger.Warnf("%s: Failed to create auth challenge response: %v", l.GetTag(), err)
+		l.GetRouter().PutBuffer(responseBuffer)
+		return err
+	}
+
+	if _, err := c.conn.Write(responseBuffer[:responseLen]); err != nil {
+		logger.Infof("%s: %s Failed to send auth response: %v", l.GetTag(), c.conn.RemoteAddr(), err)
+		l.GetRouter().PutBuffer(responseBuffer)
+		return fmt.Errorf("%s: Failed to send auth response: %v", l.GetTag(), err)
+	}
+
+	l.connectionsMutex.Lock()
+
+	if _, exists := l.connections[c.forwardID]; !exists {
+		l.connections[c.forwardID] = make(map[PoolID]*TcpTunnelConnPool)
+	}
+
+	if _, exists := l.connections[c.forwardID][c.poolID]; !exists {
+		l.connections[c.forwardID][c.poolID] = &TcpTunnelConnPool{
+			index: 0,
+			conns: []*TcpTunnelConn{},
+		}
+	}
+
+	l.connections[c.forwardID][c.poolID].AddConnection(c)
+	l.connectionsMutex.Unlock()
+
+	l.GetRouter().PutBuffer(responseBuffer)
+	c.authState.authenticated = 1
+
 	return nil
 }

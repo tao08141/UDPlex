@@ -49,12 +49,15 @@ type Component interface {
 	// srcTag is the tag of the component that sent the packet
 	HandlePacket(packet *Packet) error
 	SendPacket(packet *Packet, metadata any) error
+	GetRouter() *Router
+	GetStopChannel() chan struct{}
 }
 
 // BaseComponent provides common functionality for components
 type BaseComponent struct {
 	tag    string
 	router *Router
+	stopCh chan struct{}
 }
 
 // NewBaseComponent creates a base component with common functionality
@@ -62,7 +65,12 @@ func NewBaseComponent(tag string, router *Router) BaseComponent {
 	return BaseComponent{
 		tag:    tag,
 		router: router,
+		stopCh: make(chan struct{}),
 	}
+}
+
+func (bc *BaseComponent) GetStopChannel() chan struct{} {
+	return bc.stopCh
 }
 
 // GetTag returns the component's tag
@@ -93,4 +101,8 @@ func (l *BaseComponent) generateConnID() ConnID {
 	}
 
 	return connID
+}
+
+func (bc *BaseComponent) GetRouter() *Router {
+	return bc.router
 }

@@ -30,7 +30,6 @@ type ListenComponent struct {
 
 	mappings     map[string]*AddrMapping
 	mappingsRead *map[string]*AddrMapping
-	stopCh       chan struct{}
 
 	// Authentication
 	authManager *AuthManager
@@ -64,7 +63,6 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		detour:            cfg.Detour,
 		mappings:          make(map[string]*AddrMapping),
 		mappingsRead:      &map[string]*AddrMapping{},
-		stopCh:            make(chan struct{}),
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
 	}
@@ -88,7 +86,7 @@ func (l *ListenComponent) Start() error {
 
 // Stop closes the listener
 func (l *ListenComponent) Stop() error {
-	close(l.stopCh)
+	close(l.GetStopChannel())
 	return l.conn.Close()
 }
 
@@ -239,7 +237,7 @@ func (l *ListenComponent) handlePackets() {
 
 	for {
 		select {
-		case <-l.stopCh:
+		case <-l.GetStopChannel():
 			return
 		default:
 			func() {

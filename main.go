@@ -166,7 +166,13 @@ func main() {
 				continue
 			}
 			component = NewTcpTunnelListenComponent(cfg, router)
-
+		case "tcp_tunnel_forward":
+			var cfg ComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal tcp_tunnel_forward config: %v", err)
+				continue
+			}
+			component = NewTcpTunnelForwardComponent(cfg, router)
 		default:
 			logger.Warnf("Unknown component type: %s", typeVal)
 			continue

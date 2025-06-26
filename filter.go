@@ -11,7 +11,6 @@ type FilterComponent struct {
 	detourMiss        []string            // Default detour for undetected protocols
 	protocolDetector  *ProtocolDetector
 	useProtoDetectors []string // Protocol detector tags to use
-	stopCh            chan struct{}
 }
 
 // NewFilterComponent creates a new filter component
@@ -24,7 +23,6 @@ func NewFilterComponent(cfg FilterComponentConfig, router *Router, protoDetector
 		detourMiss:        cfg.DetourMiss,
 		protocolDetector:  protoDetector,
 		useProtoDetectors: cfg.UseProtoDetectors,
-		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -41,7 +39,7 @@ func (f *FilterComponent) Start() error {
 
 // Stop stops the filter component
 func (f *FilterComponent) Stop() error {
-	close(f.stopCh)
+	close(f.GetStopChannel())
 	return nil
 }
 
