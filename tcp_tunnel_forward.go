@@ -14,26 +14,20 @@ import (
 type TcpTunnelForwardComponent struct {
 	BaseComponent
 
-	checkTime     time.Duration
-	timeout       time.Duration
-	detour        []string
-	broadcastMode bool
-	forwardID     ForwardID
-	authManager   *AuthManager
-	pools         map[string]*TcpTunnelConnPool
+	connectionCheckTime time.Duration
+	detour              []string
+	broadcastMode       bool
+	forwardID           ForwardID
+	authManager         *AuthManager
+	pools               map[PoolID]*TcpTunnelConnPool
 
 	connectionsMutex sync.RWMutex
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
-	checkTime := time.Duration(cfg.ConnectionCheckTime) * time.Second
-	if checkTime == 0 {
-		checkTime = 10 * time.Second
-	}
-
-	timeout := time.Duration(cfg.Timeout) * time.Second
-	if timeout == 0 {
-		timeout = 30 * time.Second
+	connectionCheckTime := time.Duration(cfg.ConnectionCheckTime) * time.Second
+	if connectionCheckTime == 0 {
+		connectionCheckTime = 10 * time.Second
 	}
 
 	authManager, err := NewAuthManager(cfg.Auth, router)
@@ -50,7 +44,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	forwardID := ForwardID{}
 	rand.Read(forwardID[:])
 
-	pools := make(map[string]*TcpTunnelConnPool)
+	pools := make(map[PoolID]*TcpTunnelConnPool)
 
 	for _, fwd := range cfg.Forwarders {
 
@@ -69,25 +63,27 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 			}
 		}
 
-		pools[addr] = &TcpTunnelConnPool{
+		poolID := PoolID{}
+		rand.Read(poolID[:])
+
+		pools[poolID] = &TcpTunnelConnPool{
 			conns:      []*TcpTunnelConn{},
 			index:      0,
 			remoteAddr: addr,
-			poolID:     PoolID{},
+			poolID:     poolID,
 			connCount:  count,
 		}
 
 	}
 
 	return &TcpTunnelForwardComponent{
-		BaseComponent: NewBaseComponent(cfg.Tag, router),
-		checkTime:     checkTime,
-		broadcastMode: broadcastMode,
-		timeout:       timeout,
-		authManager:   authManager,
-		forwardID:     forwardID,
-		pools:         pools,
-		detour:        cfg.Detour,
+		BaseComponent:       NewBaseComponent(cfg.Tag, router),
+		connectionCheckTime: connectionCheckTime,
+		broadcastMode:       broadcastMode,
+		authManager:         authManager,
+		forwardID:           forwardID,
+		pools:               pools,
+		detour:              cfg.Detour,
 	}
 }
 
@@ -98,28 +94,28 @@ func (f *TcpTunnelForwardComponent) Start() error {
 
 	logger.Infof("%s: Starting TCP tunnel forward component with ID %x", f.tag, f.forwardID)
 
-	// 打印转发地址与数量
-	for addr, pool := range f.pools {
+	f.connectionsMutex.Lock()
+	defer f.connectionsMutex.Unlock()
+	for poolID, pool := range f.pools {
 		if pool == nil {
-			logger.Warnf("%s: Pool for %s is nil, skipping", f.tag, addr)
+			logger.Warnf("%s: Pool for %x is nil, skipping", f.tag, poolID)
 			continue
 		}
-		logger.Infof("%s: Forwarding to %s with %d connections", f.tag, addr, pool.connCount)
-		rand.Read(pool.poolID[:])
+		logger.Infof("%s: Forwarding to %s with %d connections", f.tag, pool.remoteAddr, pool.connCount)
 
-		for i := 0; i < pool.connCount; i++ {
-			ttc, err := f.setupConnection(addr, pool.poolID)
+		for range pool.connCount {
+			ttc, err := f.setupConnection(pool.remoteAddr, pool.poolID)
 			if err != nil {
-				logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, addr, err)
+				logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.remoteAddr, err)
 				continue
 			}
 			pool.AddConnection(ttc)
 
-			logger.Infof("%s: Added new connection to %s", f.tag, addr)
+			logger.Infof("%s: Added new connection to %s", f.tag, pool.remoteAddr)
 		}
 	}
 
-	go f.runChecker()
+	go f.connectionChecker()
 
 	return nil
 }
@@ -138,10 +134,11 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 	}
 
 	ttc := &TcpTunnelConn{
-		conn:        conn,
-		authState:   &AuthState{},
-		lastActive:  time.Now(),
-		isConnected: 1,
+		conn:       conn,
+		authState:  &AuthState{},
+		poolID:     poolID,
+		forwardID:  f.forwardID,
+		lastActive: time.Now(),
 	}
 
 	buffer := f.router.GetBuffer()
@@ -179,34 +176,73 @@ func (f *TcpTunnelForwardComponent) GetAuthManager() *AuthManager {
 	return f.authManager
 }
 
-func (f *TcpTunnelForwardComponent) runChecker() {
-	ticker := time.NewTicker(f.checkTime)
+func (f *TcpTunnelForwardComponent) sendHeartbeat(conn *TcpTunnelConn) {
+	if !conn.authState.IsAuthenticated() {
+		return
+	}
+
+	buffer := f.router.GetBuffer()
+	defer f.router.PutBuffer(buffer)
+
+	length := CreateHeartbeat(buffer)
+	conn.lastHeartbeatSent = time.Now()
+
+	_, err := conn.conn.Write(buffer[:length])
+	if err != nil {
+		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
+		conn.conn.Close()
+		return
+	}
+
+	conn.heartbeatMissCount++
+	if conn.heartbeatMissCount >= 5 {
+		logger.Warnf("%s: Heartbeat missed %d times, disconnecting", f.tag, conn.heartbeatMissCount)
+		conn.conn.Close()
+		return
+	}
+
+}
+
+func (f *TcpTunnelForwardComponent) connectionChecker() {
+	ticker := time.NewTicker(f.connectionCheckTime)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-f.GetStopChannel():
 			return
 		case <-ticker.C:
-
-			for addr, pool := range f.pools {
+			now := time.Now()
+			f.connectionsMutex.Lock()
+			for poolID, pool := range f.pools {
 				if pool == nil {
-					logger.Warnf("%s: Pool for %s is nil, skipping", f.tag, addr)
+					logger.Warnf("%s: Pool for %x is nil, skipping", f.tag, poolID)
 					continue
 				}
 
-				if len(pool.conns) < pool.connCount {
-					for i := len(pool.conns); i < pool.connCount; i++ {
-						ttc, err := f.setupConnection(addr, pool.poolID)
-						if err != nil {
-							logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, addr, err)
-							continue
-						}
-						pool.AddConnection(ttc)
+				for _, conn := range pool.conns {
+					if conn == nil || conn.conn == nil {
+						logger.Warnf("%s: Connection in pool %s is nil or closed, removing", f.tag, pool.remoteAddr)
+						pool.RemoveConnection(conn)
+						continue
+					}
 
-						logger.Infof("%s: Added new connection to %s", f.tag, addr)
+					if now.Sub(conn.lastHeartbeatSent) >= f.authManager.heartbeatInterval {
+						go f.sendHeartbeat(conn)
 					}
 				}
+
+				for i := len(pool.conns); i < pool.connCount; i++ {
+					ttc, err := f.setupConnection(pool.remoteAddr, pool.poolID)
+					if err != nil {
+						logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.remoteAddr, err)
+						continue
+					}
+					pool.AddConnection(ttc)
+
+					logger.Infof("%s: Added new connection to %s", f.tag, pool.remoteAddr)
+				}
 			}
+			f.connectionsMutex.Unlock()
 		}
 	}
 }
@@ -216,20 +252,24 @@ func (l *TcpTunnelForwardComponent) HandleAuthenticatedConnection(c *TcpTunnelCo
 	return nil
 }
 
-func (l *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
+func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 	if c == nil {
 		return
 	}
 
-	logger.Infof("%s: Disconnecting %s", l.tag, c.conn.RemoteAddr())
+	logger.Infof("%s: Disconnecting %s", f.tag, c.conn.RemoteAddr())
+	f.connectionsMutex.Lock()
+	defer f.connectionsMutex.Unlock()
 
-	c.isConnected = 0
-	c.conn.Close()
-	c = nil
+	defer c.conn.Close()
 
-	for _, pool := range l.pools {
-		pool.RemoveConnection(c)
+	if _, exists := f.pools[c.poolID]; !exists {
+		logger.Warnf("%s: Pool %x does not exist, cannot remove connection", f.tag, c.poolID)
+
+		return
 	}
+
+	f.pools[c.poolID].RemoveConnection(c)
 }
 
 func (f *TcpTunnelForwardComponent) SendPacket(packet *Packet, metadata any) error {

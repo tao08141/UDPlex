@@ -45,7 +45,7 @@ const (
 
 	// Timeouts
 	DefaultAuthTimeout = 30 * time.Second
-	DefaultDataTimeout = 30 * time.Second
+	DefaultDataTimeout = 60 * time.Second
 )
 
 // FrameTracker tracks used sequence numbers for a frame
@@ -351,9 +351,9 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8, forward
 }
 
 // ProcessAuthChallenge processes an authentication challenge (server side)
-func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (error, ForwardID, PoolID) {
+func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (ForwardID, PoolID, error) {
 	if len(data) < ChallengeSize+TimestampSize+ForwardIDSize+PoolIDSize+MACSize {
-		return errors.New("invalid challenge data length"), ForwardID{}, PoolID{}
+		return ForwardID{}, PoolID{}, errors.New("invalid challenge data length")
 	}
 
 	challenge := data[:ChallengeSize]
@@ -365,7 +365,7 @@ func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (
 	// Verify timestamp
 	timestamp := int64(binary.BigEndian.Uint64(timestampBytes))
 	if time.Since(time.UnixMilli(timestamp)) > am.authTimeout {
-		return errors.New("challenge timestamp expired"), ForwardID{}, PoolID{}
+		return ForwardID{}, PoolID{}, errors.New("challenge timestamp expired")
 	}
 
 	// Verify HMAC
@@ -377,10 +377,10 @@ func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (
 	expectedMAC := h.Sum(nil)
 
 	if !hmac.Equal(receivedMAC, expectedMAC) {
-		return errors.New("invalid challenge MAC"), ForwardID{}, PoolID{}
+		return ForwardID{}, PoolID{}, errors.New("invalid challenge MAC")
 	}
 
-	return nil, forwardID, poolID
+	return forwardID, poolID, nil
 }
 
 // CreateHeartbeat creates a heartbeat message

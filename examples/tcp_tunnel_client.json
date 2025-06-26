@@ -25,16 +25,14 @@
             "forwarders": [
                 "127.0.0.1:5203"
             ],
-            "reconnect_interval": 5,
             "connection_check_time": 10,
-            "send_keepalive": true,
             "detour": [
                 "client_listen"
             ],
             "auth": {
                 "secret": "your-secret-key-here",
                 "enabled": true,
-                "enable_encryption": true,
+                "enable_encryption": false,
                 "heartbeat_interval": 30
             }
         }

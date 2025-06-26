@@ -25,7 +25,7 @@ type TcpTunnelListenComponent struct {
 func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnelListenComponent {
 	timeout := time.Duration(cfg.Timeout) * time.Second
 	if timeout == 0 {
-		timeout = 120 * time.Second // Default timeout
+		timeout = 30 * time.Second // Default timeout
 	}
 
 	authManager, err := NewAuthManager(cfg.Auth, router)
@@ -73,12 +73,11 @@ func (l *TcpTunnelListenComponent) Start() error {
 
 			logger.Infof("%s: Accepted connection from %s", l.tag, conn.RemoteAddr())
 			c := &TcpTunnelConn{
-				forwardID:   ForwardID{},
-				poolID:      PoolID{},
-				conn:        conn,
-				authState:   &AuthState{},
-				lastActive:  time.Now(),
-				isConnected: 1,
+				forwardID:  ForwardID{},
+				poolID:     PoolID{},
+				conn:       conn,
+				authState:  &AuthState{},
+				lastActive: time.Now(),
 			}
 
 			go TcpTunnelLoopRead(c, l, TcpTunnelListenMode)

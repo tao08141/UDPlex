@@ -158,7 +158,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 
 		// Process challenge and send response
 		data := buffer[HeaderSize : HeaderSize+header.Length]
-		err, forwardID, poolID := l.authManager.ProcessAuthChallenge(data, mapping.authState)
+		forwardID, poolID, err := l.authManager.ProcessAuthChallenge(data, mapping.authState)
 		if err != nil {
 			logger.Infof("%s: %s Authentication challenge failed: %v", l.tag, addr.String(), err)
 			return nil

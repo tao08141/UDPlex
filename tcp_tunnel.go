@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"slices"
 	"sync/atomic"
 	"time"
 )
@@ -26,7 +27,7 @@ func (p *TcpTunnelConnPool) AddConnection(conn *TcpTunnelConn) {
 func (p *TcpTunnelConnPool) RemoveConnection(conn *TcpTunnelConn) {
 	for i, c := range p.conns {
 		if c == conn {
-			p.conns = append(p.conns[:i], p.conns[i+1:]...)
+			p.conns = slices.Delete(p.conns, i, i+1)
 			return
 		}
 	}
@@ -58,12 +59,14 @@ func (p *TcpTunnelConnPool) GetNextConn() *TcpTunnelConn {
 }
 
 type TcpTunnelConn struct {
-	forwardID   ForwardID
-	poolID      PoolID
-	conn        net.Conn
-	authState   *AuthState
-	lastActive  time.Time
-	isConnected int32
+	forwardID  ForwardID
+	poolID     PoolID
+	conn       net.Conn
+	authState  *AuthState
+	lastActive time.Time
+
+	heartbeatMissCount int
+	lastHeartbeatSent  time.Time
 }
 
 type TcpTunnelComponent interface {
@@ -83,6 +86,7 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 	// Buffer to accumulate incoming data
 	buffer := t.GetRouter().GetBuffer()
 	defer t.GetRouter().PutBuffer(buffer)
+	defer t.Disconnect(c)
 	bufferUsed := 0
 
 	for {
@@ -92,8 +96,11 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 			logger.Infof("%s: Stopping connection handling for %s", t.GetTag(), c.conn.RemoteAddr())
 			return
 		default:
-			authDeadline := time.Now().Add(t.GetAuthManager().authTimeout)
-			c.conn.SetReadDeadline(authDeadline)
+			if c.authState.IsAuthenticated() {
+				c.conn.SetReadDeadline(time.Now().Add(t.GetAuthManager().dataTimeout))
+			} else {
+				c.conn.SetReadDeadline(time.Now().Add(t.GetAuthManager().authTimeout))
+			}
 
 			n, err := c.conn.Read(buffer[bufferUsed:])
 			if err != nil {
@@ -143,9 +150,12 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						c.authState.UpdateHeartbeat()
 
 						if mode == TcpTunnelListenMode {
-							responseBuffer := make([]byte, HeaderSize)
-							CreateHeartbeat(responseBuffer)
-							c.conn.Write(responseBuffer)
+							responseBuffer := t.GetRouter().GetBuffer()
+							length := CreateHeartbeat(responseBuffer)
+							c.conn.Write(responseBuffer[:length])
+							t.GetRouter().PutBuffer(responseBuffer)
+						} else if mode == TcpTunnelForwardMode {
+							c.heartbeatMissCount = 0
 						}
 					} else if header.MsgType == MsgTypeDisconnect {
 						logger.Infof("%s: %s Client requested disconnect", t.GetTag(), c.conn.RemoteAddr())
@@ -155,7 +165,7 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 					// Handle authentication
 					if (mode == TcpTunnelListenMode && header.MsgType == MsgTypeAuthChallenge) || (mode == TcpTunnelForwardMode && header.MsgType == MsgTypeAuthResponse) {
 						data := messageBuffer[HeaderSize:totalMessageSize]
-						err, forwardID, poolID := t.GetAuthManager().ProcessAuthChallenge(data, c.authState)
+						forwardID, poolID, err := t.GetAuthManager().ProcessAuthChallenge(data, c.authState)
 						if err != nil {
 							logger.Infof("%s: %s Failed to process auth challenge: %v", t.GetTag(), c.conn.RemoteAddr(), err)
 							return
@@ -178,7 +188,6 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						return
 					}
 
-					defer t.Disconnect(c)
 				}
 				processedBytes += totalMessageSize
 

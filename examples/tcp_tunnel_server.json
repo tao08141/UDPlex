@@ -14,7 +14,6 @@
             "type": "tcp_tunnel_listen",
             "tag": "server_listen",
             "listen_addr": "0.0.0.0:5203",
-            "timeout": 120,
             "replace_old_mapping": true,
             "detour": [
                 "server_forward"
@@ -22,8 +21,7 @@
             "auth": {
                 "secret": "your-secret-key-here",
                 "enabled": true,
-                "enable_encryption": true,
-                "heartbeat_interval": 30
+                "enable_encryption": true
             }
         },
         {
@@ -33,7 +31,7 @@
                 "127.0.0.1:5201"
             ],
             "reconnect_interval": 5,
-            "connection_check_time": 30,
+            "connection_check_time": 10,
             "send_keepalive": false,
             "detour": [
                 "server_listen"
