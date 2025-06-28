@@ -50,3 +50,18 @@ func (p *Packet) Release(count int32) {
 		p.router.PutBuffer(p.buffer)
 	}
 }
+
+func (p *Packet) Copy() Packet {
+	newPacket := Packet{
+		buffer:  p.router.GetBuffer(),
+		offset:  p.offset,
+		length:  p.length,
+		srcAddr: p.srcAddr,
+		srcTag:  p.srcTag,
+		count:   1, // New packet starts with a reference count of 1
+		router:  p.router,
+		connID:  p.connID,
+	}
+	copy(newPacket.buffer, p.buffer)
+	return newPacket
+}

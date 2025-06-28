@@ -124,7 +124,7 @@ func (r *Router) processRouteTask(task routeTask) {
 	packet := task.packet
 	defer packet.Release(1) // Release our reference when done
 
-	for _, tag := range task.destTags {
+	for i, tag := range task.destTags {
 		if tag == packet.srcTag {
 			continue // Don't route back to source
 		}
@@ -135,9 +135,20 @@ func (r *Router) processRouteTask(task routeTask) {
 			continue
 		}
 
-		packet.AddRef(1)
-		if err := c.HandlePacket(packet); err != nil {
-			logger.Warnf("Error routing to %s: %v", tag, err)
+		if i < len(task.destTags)-1 {
+			// Create a copy for all but the last destination
+			newPacket := packet.Copy()
+
+			if err := c.HandlePacket(&newPacket); err != nil {
+				logger.Warnf("Error routing to %s: %v", tag, err)
+				newPacket.Release(1) // Release if error occurs
+			}
+		} else {
+			// Use original packet for the last destination or if only one destination
+			packet.AddRef(1)
+			if err := c.HandlePacket(packet); err != nil {
+				logger.Warnf("Error routing to %s: %v", tag, err)
+			}
 		}
 	}
 }
