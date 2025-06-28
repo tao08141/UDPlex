@@ -270,7 +270,6 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 
 	if _, exists := f.pools[c.poolID]; !exists {
 		logger.Warnf("%s: Pool %x does not exist, cannot remove connection", f.tag, c.poolID)
-
 		return
 	}
 

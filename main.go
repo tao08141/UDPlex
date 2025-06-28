@@ -11,6 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	version = "dev"
+)
+
 // stripJSONComments removes single-line (//) and multi-line (/* */) comments from JSON
 func stripJSONComments(data []byte) ([]byte, error) {
 	var result bytes.Buffer
@@ -85,6 +89,7 @@ func stripJSONComments(data []byte) ([]byte, error) {
 func main() {
 	defaultLogger, _ := zap.NewProduction()
 	logger = defaultLogger.Sugar()
+	logger.Warnf("UDPlex version: %s", version)
 
 	configPath := flag.String("c", "config.json", "Path to configuration file")
 	flag.Parse()

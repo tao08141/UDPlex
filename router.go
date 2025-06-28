@@ -172,7 +172,19 @@ func (r *Router) GetPacket(srcTag string) Packet {
 		router:  r,
 		proto:   "",
 	}
+}
 
+func (r *Router) GetPacketWithBuffer(srcTag string, buf []byte, offset int) Packet {
+	return Packet{
+		buffer:  buf,
+		offset:  offset,
+		length:  0,
+		srcAddr: nil,
+		srcTag:  srcTag,
+		count:   1, // Initial reference count
+		router:  r,
+		proto:   "",
+	}
 }
 
 // PutBuffer returns a buffer to the pool

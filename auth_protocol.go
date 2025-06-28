@@ -35,6 +35,7 @@ const (
 	ForwardIDSize = 8
 	PoolIDSize    = 8
 	ConnIDSize    = 8
+	HandshakeSize = ChallengeSize + TimestampSize + ForwardIDSize + PoolIDSize + MACSize
 
 	// Deduplication constants
 	FrameIDSize     = 8               // First 8 bytes of nonce
@@ -331,8 +332,7 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8, forward
 	mac := h.Sum(nil)
 
 	// Write header
-	dataLen := ChallengeSize + TimestampSize + ForwardIDSize + PoolIDSize + MACSize
-	WriteHeader(buffer, msgType, uint32(dataLen))
+	WriteHeader(buffer, msgType, HandshakeSize)
 
 	// Write data
 	offset := HeaderSize
@@ -352,15 +352,20 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8, forward
 
 // ProcessAuthChallenge processes an authentication challenge (server side)
 func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (ForwardID, PoolID, error) {
-	if len(data) < ChallengeSize+TimestampSize+ForwardIDSize+PoolIDSize+MACSize {
+	if len(data) < HandshakeSize {
 		return ForwardID{}, PoolID{}, errors.New("invalid challenge data length")
 	}
 
-	challenge := data[:ChallengeSize]
-	forwardID := ForwardIDFromBytes(data[ChallengeSize : ChallengeSize+ForwardIDSize])
-	poolID := PoolIDFromBytes(data[ChallengeSize+ForwardIDSize : ChallengeSize+ForwardIDSize+PoolIDSize])
-	timestampBytes := data[ChallengeSize+ForwardIDSize+PoolIDSize : ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize]
-	receivedMAC := data[ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize : ChallengeSize+ForwardIDSize+PoolIDSize+TimestampSize+MACSize]
+	offset := 0
+	challenge := data[offset:ChallengeSize]
+	offset += ChallengeSize
+	forwardID := ForwardIDFromBytes(data[offset : offset+ForwardIDSize])
+	offset += ForwardIDSize
+	poolID := PoolIDFromBytes(data[offset : offset+PoolIDSize])
+	offset += PoolIDSize
+	timestampBytes := data[offset : offset+TimestampSize]
+	offset += TimestampSize
+	receivedMAC := data[offset : offset+MACSize]
 
 	// Verify timestamp
 	timestamp := int64(binary.BigEndian.Uint64(timestampBytes))

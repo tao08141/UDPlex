@@ -80,17 +80,24 @@ type TcpTunnelComponent interface {
 }
 
 func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
-
 	c.authState.lastHeartbeat = time.Now()
 
 	// Buffer to accumulate incoming data
 	buffer := t.GetRouter().GetBuffer()
-	defer t.GetRouter().PutBuffer(buffer)
+
+	defer func() {
+		if buffer != nil {
+			t.GetRouter().PutBuffer(buffer)
+		}
+	}()
+
 	defer t.Disconnect(c)
 	bufferUsed := 0
+	bufferOffset := t.GetRouter().config.BufferOffset
+
+	expectedTotalSize := 0
 
 	for {
-
 		select {
 		case <-t.GetStopChannel():
 			logger.Infof("%s: Stopping connection handling for %s", t.GetTag(), c.conn.RemoteAddr())
@@ -102,7 +109,18 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 				c.conn.SetReadDeadline(time.Now().Add(t.GetAuthManager().authTimeout))
 			}
 
-			n, err := c.conn.Read(buffer[bufferUsed:])
+			// Calculate read size based on whether we have partial message
+			readSize := len(buffer) - (bufferOffset + bufferUsed)
+
+			// If we have a partial message with known size, only read what's needed
+			if expectedTotalSize > 0 {
+				bytesNeeded := expectedTotalSize - bufferUsed
+				if bytesNeeded < readSize {
+					readSize = bytesNeeded
+				}
+			}
+
+			n, err := c.conn.Read(buffer[bufferOffset+bufferUsed : bufferOffset+bufferUsed+readSize])
 			if err != nil {
 				logger.Infof("%s: %s Read error: %v", t.GetTag(), c.conn.RemoteAddr(), err)
 				return
@@ -112,32 +130,54 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 
 			processedBytes := 0
 			for processedBytes < bufferUsed {
+				// If we don't have an expected size yet, we need to parse header
 				if bufferUsed-processedBytes < HeaderSize {
-					break
+					expectedTotalSize = 0
+					break // Not enough for header
 				}
 
 				// Parse header
-				header, err := ParseHeader(buffer[processedBytes:])
+				header, err := ParseHeader(buffer[bufferOffset+processedBytes:])
 				if err != nil {
 					logger.Infof("%s: %s Invalid header: %v", t.GetTag(), c.conn.RemoteAddr(), err)
 					return
 				}
 
-				totalMessageSize := HeaderSize + int(header.Length)
+				if c.authState.IsAuthenticated() {
+					if header.Length > uint32(t.GetRouter().config.BufferSize) {
+						logger.Infof("%s: %s Message size %d exceeds maximum allowed size %d", t.GetTag(), c.conn.RemoteAddr(), header.Length, t.GetRouter().config.BufferSize)
+						return
+					}
+				} else {
+					if header.Length != HandshakeSize {
+						logger.Infof("%s: %s Received unexpected message size %d before authentication", t.GetTag(), c.conn.RemoteAddr(), header.Length)
+						return
+					}
+				}
+
+				expectedTotalSize = HeaderSize + int(header.Length)
 
 				// If we don't have the full message yet, wait for more data
-				if bufferUsed-processedBytes < totalMessageSize {
+				if bufferUsed-processedBytes < expectedTotalSize {
 					break
 				}
 
 				// We have a complete message, process it
-				messageBuffer := buffer[processedBytes : processedBytes+totalMessageSize]
+				messageBuffer := buffer[bufferOffset+processedBytes : bufferOffset+processedBytes+expectedTotalSize]
 
 				if c.authState.IsAuthenticated() {
 					if header.MsgType == MsgTypeData {
-						packet := t.GetRouter().GetPacket(t.GetTag())
-						packet.length = totalMessageSize
-						copy(packet.buffer[packet.offset:], messageBuffer)
+						var packet Packet
+
+						if bufferUsed-processedBytes == expectedTotalSize {
+							packet = t.GetRouter().GetPacketWithBuffer(t.GetTag(), buffer, bufferOffset+processedBytes)
+							packet.length = expectedTotalSize
+							buffer = t.GetRouter().GetBuffer()
+						} else {
+							packet = t.GetRouter().GetPacket(t.GetTag())
+							packet.length = expectedTotalSize
+							copy(packet.buffer[packet.offset:], messageBuffer)
+						}
 
 						_, err := t.GetAuthManager().UnwrapData(&packet)
 						if err == nil {
@@ -146,8 +186,9 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 							if err.Error() != "duplicate packet detected" {
 								logger.Infof("%s: %s Failed to unwrap data: %v", t.GetTag(), c.conn.RemoteAddr(), err)
 							}
-							packet.Release(1)
 						}
+
+						packet.Release(1)
 					} else if header.MsgType == MsgTypeHeartbeat {
 						c.authState.UpdateHeartbeat()
 
@@ -166,7 +207,7 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 				} else {
 					// Handle authentication
 					if (mode == TcpTunnelListenMode && header.MsgType == MsgTypeAuthChallenge) || (mode == TcpTunnelForwardMode && header.MsgType == MsgTypeAuthResponse) {
-						data := messageBuffer[HeaderSize:totalMessageSize]
+						data := messageBuffer[HeaderSize:expectedTotalSize]
 						forwardID, poolID, err := t.GetAuthManager().ProcessAuthChallenge(data, c.authState)
 						if err != nil {
 							logger.Infof("%s: %s Failed to process auth challenge: %v", t.GetTag(), c.conn.RemoteAddr(), err)
@@ -189,20 +230,22 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						logger.Infof("%s: %s Received unexpected message type %d before authentication", t.GetTag(), c.conn.RemoteAddr(), header.MsgType)
 						return
 					}
-
 				}
-				processedBytes += totalMessageSize
 
+				processedBytes += expectedTotalSize
+				expectedTotalSize = 0 // Reset for next message
 			}
 
 			// Shift any remaining partial message to the beginning of the buffer
 			if processedBytes > 0 {
-				copy(buffer, buffer[processedBytes:bufferUsed])
+				if processedBytes < bufferUsed {
+					copy(buffer[bufferOffset:], buffer[bufferOffset+processedBytes:bufferOffset+bufferUsed])
+				}
 				bufferUsed -= processedBytes
 			}
 
 			// Check if buffer is full but we couldn't process anything - likely a malformed packet
-			if bufferUsed == len(buffer) && processedBytes == 0 {
+			if bufferUsed == len(buffer[bufferOffset:]) && processedBytes == 0 {
 				logger.Infof("%s: %s Buffer full but no complete message, likely malformed data", t.GetTag(), c.conn.RemoteAddr())
 				return
 			}
