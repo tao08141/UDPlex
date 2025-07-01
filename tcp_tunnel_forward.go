@@ -20,6 +20,7 @@ type TcpTunnelForwardComponent struct {
 	forwardID           ForwardID
 	authManager         *AuthManager
 	pools               map[PoolID]*TcpTunnelConnPool
+	noDelay             bool
 
 	connectionsMutex sync.RWMutex
 }
@@ -39,6 +40,11 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	broadcastMode := true
 	if cfg.BroadcastMode != nil && !*cfg.BroadcastMode {
 		broadcastMode = false
+	}
+
+	noDelay := true
+	if cfg.NoDelay != nil && !*cfg.NoDelay {
+		noDelay = false
 	}
 
 	forwardID := ForwardID{}
@@ -84,6 +90,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		forwardID:           forwardID,
 		pools:               pools,
 		detour:              cfg.Detour,
+		noDelay:             noDelay,
 	}
 }
 
@@ -136,6 +143,13 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
+	}
+
+	if f.noDelay {
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			tcpConn.SetNoDelay(true)
+			logger.Infof("%s: TCP_NODELAY enabled for connection to %s", f.tag, addr)
+		}
 	}
 
 	ttc := &TcpTunnelConn{
@@ -307,7 +321,7 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 		for _, pool := range f.pools {
 			c := pool.GetNextConn()
 			if c == nil {
-				logger.Warnf("%s: No available connections in pool %s", f.tag, pool.remoteAddr)
+				logger.Debugf("%s: No available connections in pool %s", f.tag, pool.remoteAddr)
 				continue
 			}
 

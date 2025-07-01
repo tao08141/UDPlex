@@ -48,7 +48,6 @@ func (p *TcpTunnelConnPool) GetNextConn() *TcpTunnelConn {
 		}
 
 		if !conn.authState.IsAuthenticated() {
-			logger.Infof("TcpTunnelConnPool: Connection at index %d is not authenticated", index)
 			continue
 		}
 

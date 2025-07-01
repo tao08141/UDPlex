@@ -23,7 +23,7 @@
             "type": "tcp_tunnel_forward",
             "tag": "client_forward",
             "forwarders": [
-                "127.0.0.1:5203:8" // ip:port:conn_count
+                "127.0.0.1:5203:2" // ip:port:conn_count
             ],
             "connection_check_time": 10,
             "detour": [

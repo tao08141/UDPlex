@@ -15,6 +15,7 @@ type TcpTunnelListenComponent struct {
 	replaceOldMapping bool
 	detour            []string
 	broadcastMode     bool
+	noDelay           bool
 
 	connections      map[ForwardID]map[PoolID]*TcpTunnelConnPool
 	connectionsMutex sync.RWMutex
@@ -39,6 +40,11 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		broadcastMode = false
 	}
 
+	noDelay := true
+	if cfg.NoDelay != nil && !*cfg.NoDelay {
+		noDelay = false
+	}
+
 	return &TcpTunnelListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router),
 
@@ -49,6 +55,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
 		connections:       make(map[ForwardID]map[PoolID]*TcpTunnelConnPool),
+		noDelay:           noDelay,
 	}
 }
 
@@ -86,6 +93,13 @@ func (l *TcpTunnelListenComponent) Start() error {
 				lastActive: time.Now(),
 			}
 
+			if l.noDelay {
+				if tcpConn, ok := conn.(*net.TCPConn); ok {
+					tcpConn.SetNoDelay(true)
+					logger.Infof("%s: TCP_NODELAY enabled for %s", l.tag, conn.RemoteAddr())
+				}
+			}
+
 			go TcpTunnelLoopRead(c, l, TcpTunnelListenMode)
 
 		}
@@ -107,7 +121,7 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 				c := pool.GetNextConn()
 
 				if c == nil {
-					logger.Warnf("%s: No available connections in pool %s", l.tag, pool.remoteAddr)
+					logger.Infof("%s: No available connections in pool %s", l.tag, pool.remoteAddr)
 					continue
 				}
 

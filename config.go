@@ -26,6 +26,7 @@ type ComponentConfig struct {
 	Auth                *AuthConfig `json:"auth,omitempty"`
 	BroadcastMode       *bool       `json:"broadcast_mode"`       // When false, only send to the specific connection ID
 	ConnectionPoolSize  int         `json:"connection_pool_size"` // Number of connections in the pool
+	NoDelay             *bool       `json:"no_delay"`
 }
 
 // AuthConfig represents authentication and encryption settings
