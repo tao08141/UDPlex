@@ -46,7 +46,7 @@ const (
 
 	// Timeouts
 	DefaultAuthTimeout = 30 * time.Second
-	DefaultDataTimeout = 60 * time.Second
+	DefaultDataTimeout = 65 * time.Second
 )
 
 // FrameTracker tracks used sequence numbers for a frame

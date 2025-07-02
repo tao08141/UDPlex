@@ -1,4 +1,3 @@
-// // filepath: c:\Users\ghost\Desktop\dev\UDPlex\tcp_tunnel_forward_pool.go
 package main
 
 import (
@@ -7,7 +6,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -21,8 +19,6 @@ type TcpTunnelForwardComponent struct {
 	authManager         *AuthManager
 	pools               map[PoolID]*TcpTunnelConnPool
 	noDelay             bool
-
-	connectionsMutex sync.RWMutex
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
@@ -214,14 +210,16 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(conn *TcpTunnelConn) {
 }
 
 func (f *TcpTunnelForwardComponent) connectionChecker() {
-	ticker := time.NewTicker(f.connectionCheckTime)
-	defer ticker.Stop()
+	connectionCheckTicker := time.NewTicker(f.connectionCheckTime)
+	defer connectionCheckTicker.Stop()
+	heartbeatIntervalTicker := time.NewTicker(f.authManager.heartbeatInterval)
+	defer heartbeatIntervalTicker.Stop()
+
 	for {
 		select {
 		case <-f.GetStopChannel():
 			return
-		case <-ticker.C:
-			now := time.Now()
+		case <-connectionCheckTicker.C:
 
 			for poolID, pool := range f.pools {
 				if pool == nil {
@@ -238,23 +236,21 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 
 				for i := range conns {
 					// Get reference to the connection
-					conn := &conns[i]
-
-					if conn == nil || (*conn).conn == nil {
-						logger.Warnf("%s: Connection in pool %s is nil or closed, adding to removal list", f.tag, pool.remoteAddr)
-						connectionsToRemove = append(connectionsToRemove, *conn)
+					if conns[i] == nil {
+						logger.Warnf("%s: Connection in pool %s is nil, adding to removal list", f.tag, pool.remoteAddr)
 						continue
 					}
 
-					if now.Sub((*conn).lastHeartbeatSent) >= f.authManager.heartbeatInterval {
-						go f.sendHeartbeat(*conn)
+					if conns[i].conn == nil {
+						logger.Infof("%s: Connection in pool %s is nil or closed, adding to removal list", f.tag, pool.remoteAddr)
+						connectionsToRemove = append(connectionsToRemove, conns[i])
+						continue
 					}
 				}
 
 				for _, conn := range connectionsToRemove {
 					pool.RemoveConnection(conn)
 				}
-
 
 				for i := pool.ConnectionCount(); i < pool.connCount; i++ {
 					ttc, err := f.setupConnection(pool.remoteAddr, pool.poolID)
@@ -264,6 +260,27 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 					}
 					pool.AddConnection(ttc)
 					logger.Infof("%s: Added new connection to %s", f.tag, pool.remoteAddr)
+				}
+			}
+		case <-heartbeatIntervalTicker.C:
+			for poolID, pool := range f.pools {
+				if pool == nil {
+					logger.Warnf("%s: Pool for %x is nil, skipping", f.tag, poolID)
+					continue
+				}
+
+				// Get current slice of connections atomically
+				connsPtr := pool.conns.Load()
+				conns := *connsPtr
+
+				for i := range conns {
+					conn := conns[i]
+					if conn == nil || (*conn).conn == nil {
+						logger.Warnf("%s: Connection in pool %s is nil or closed, skipping", f.tag, pool.remoteAddr)
+						continue
+					}
+
+					go f.sendHeartbeat(conn)
 				}
 			}
 		}
