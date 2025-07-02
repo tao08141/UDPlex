@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,8 +17,7 @@ type TcpTunnelListenComponent struct {
 	broadcastMode     bool
 	noDelay           bool
 
-	connections      map[ForwardID]map[PoolID]*TcpTunnelConnPool
-	connectionsMutex sync.RWMutex
+	connections atomic.Value
 
 	authManager *AuthManager
 }
@@ -45,7 +44,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		noDelay = false
 	}
 
-	return &TcpTunnelListenComponent{
+	component := &TcpTunnelListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router),
 
 		listenAddr:        cfg.ListenAddr,
@@ -54,9 +53,17 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		detour:            cfg.Detour,
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
-		connections:       make(map[ForwardID]map[PoolID]*TcpTunnelConnPool),
 		noDelay:           noDelay,
 	}
+
+	emptyConnections := make(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
+	component.connections.Store(emptyConnections)
+
+	return component
+}
+
+func (l *TcpTunnelListenComponent) GetDetour() []string {
+	return l.detour
 }
 
 func (l *TcpTunnelListenComponent) Start() error {
@@ -101,7 +108,6 @@ func (l *TcpTunnelListenComponent) Start() error {
 			}
 
 			go TcpTunnelLoopRead(c, l, TcpTunnelListenMode)
-
 		}
 	}()
 	return nil
@@ -112,11 +118,9 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 
 	l.authManager.WrapData(packet)
 
-	// If broadcasting, send to all authenticated connections
 	if l.broadcastMode {
-		l.connectionsMutex.RLock()
-		defer l.connectionsMutex.RUnlock()
-		for _, pools := range l.connections {
+		connections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
+		for _, pools := range connections {
 			for _, pool := range pools {
 				c := pool.GetNextConn()
 
@@ -168,30 +172,40 @@ func (l *TcpTunnelListenComponent) GetAuthManager() *AuthManager {
 
 func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
 	logger.Infof("%s: Disconnecting %s", l.tag, c.conn.RemoteAddr())
-	l.connectionsMutex.Lock()
-	defer l.connectionsMutex.Unlock()
-	if pool, exists := l.connections[c.forwardID][c.poolID]; exists {
-		pool.RemoveConnection(c)
-		if len(pool.conns) == 0 {
-			delete(l.connections[c.forwardID], c.poolID)
-			if len(l.connections[c.forwardID]) == 0 {
-				delete(l.connections, c.forwardID)
-			}
+
+	currentConnections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
+	needsUpdate := false
+
+	if _, existsForward := currentConnections[c.forwardID]; existsForward {
+		if _, existsPool := currentConnections[c.forwardID][c.poolID]; existsPool {
+			needsUpdate = true
 		}
 	}
+
+	if needsUpdate {
+		newConnections := cloneConnections(currentConnections)
+
+		if pool, exists := newConnections[c.forwardID][c.poolID]; exists {
+			pool.RemoveConnection(c)
+
+			if pool.ConnectionCount() == 0 {
+				delete(newConnections[c.forwardID], c.poolID)
+				if len(newConnections[c.forwardID]) == 0 {
+					delete(newConnections, c.forwardID)
+				}
+			}
+		}
+
+		l.connections.Store(newConnections)
+	}
+
 	if c != nil {
 		c.conn.Close()
 		c = nil
 	}
 }
 
-func (l *TcpTunnelListenComponent) GetDetour() []string {
-	return l.detour
-}
-
 func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {
-
-	// Send auth response
 	responseBuffer := l.GetRouter().GetBuffer()
 	responseLen, err := l.GetAuthManager().CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, c.forwardID, c.poolID)
 	if err != nil {
@@ -206,24 +220,36 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 		return fmt.Errorf("%s: Failed to send auth response: %v", l.GetTag(), err)
 	}
 
-	l.connectionsMutex.Lock()
+	currentConnections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
 
-	if _, exists := l.connections[c.forwardID]; !exists {
-		l.connections[c.forwardID] = make(map[PoolID]*TcpTunnelConnPool)
+	newConnections := cloneConnections(currentConnections)
+
+	if _, exists := newConnections[c.forwardID]; !exists {
+		newConnections[c.forwardID] = make(map[PoolID]*TcpTunnelConnPool)
 	}
 
-	if _, exists := l.connections[c.forwardID][c.poolID]; !exists {
-		l.connections[c.forwardID][c.poolID] = &TcpTunnelConnPool{
-			index: 0,
-			conns: []*TcpTunnelConn{},
-		}
+	if _, exists := newConnections[c.forwardID][c.poolID]; !exists {
+		remoteAddr := c.conn.RemoteAddr().String()
+		newConnections[c.forwardID][c.poolID] = NewTcpTunnelConnPool(remoteAddr, c.poolID, 0)
 	}
 
-	l.connections[c.forwardID][c.poolID].AddConnection(c)
-	l.connectionsMutex.Unlock()
+	newConnections[c.forwardID][c.poolID].AddConnection(c)
+
+	l.connections.Store(newConnections)
 
 	l.GetRouter().PutBuffer(responseBuffer)
-	c.authState.authenticated = 1
+	atomic.StoreInt32(&c.authState.authenticated, 1)
 
 	return nil
+}
+
+func cloneConnections(src map[ForwardID]map[PoolID]*TcpTunnelConnPool) map[ForwardID]map[PoolID]*TcpTunnelConnPool {
+	dst := make(map[ForwardID]map[PoolID]*TcpTunnelConnPool, len(src))
+	for fid, pools := range src {
+		dst[fid] = make(map[PoolID]*TcpTunnelConnPool, len(pools))
+		for pid, pool := range pools {
+			dst[fid][pid] = pool
+		}
+	}
+	return dst
 }

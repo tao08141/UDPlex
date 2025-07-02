@@ -72,14 +72,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		poolID := PoolID{}
 		rand.Read(poolID[:])
 
-		pools[poolID] = &TcpTunnelConnPool{
-			conns:      []*TcpTunnelConn{},
-			index:      0,
-			remoteAddr: addr,
-			poolID:     poolID,
-			connCount:  count,
-		}
-
+		pools[poolID] = NewTcpTunnelConnPool(addr, poolID, count)
 	}
 
 	return &TcpTunnelForwardComponent{
@@ -106,8 +99,6 @@ func (f *TcpTunnelForwardComponent) Start() error {
 
 	logger.Infof("%s: Starting TCP tunnel forward component with ID %x", f.tag, f.forwardID)
 
-	f.connectionsMutex.Lock()
-	defer f.connectionsMutex.Unlock()
 	for poolID, pool := range f.pools {
 		if pool == nil {
 			logger.Warnf("%s: Pool for %x is nil, skipping", f.tag, poolID)
@@ -231,41 +222,53 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			f.connectionsMutex.Lock()
+
 			for poolID, pool := range f.pools {
 				if pool == nil {
 					logger.Warnf("%s: Pool for %x is nil, skipping", f.tag, poolID)
 					continue
 				}
 
-				for _, conn := range pool.conns {
-					if conn == nil || conn.conn == nil {
-						logger.Warnf("%s: Connection in pool %s is nil or closed, removing", f.tag, pool.remoteAddr)
-						pool.RemoveConnection(conn)
+				// Get current slice of connections atomically
+				connsPtr := pool.conns.Load()
+				conns := *connsPtr
+
+				// Track connections that need to be removed
+				var connectionsToRemove []*TcpTunnelConn
+
+				for i := range conns {
+					// Get reference to the connection
+					conn := &conns[i]
+
+					if conn == nil || (*conn).conn == nil {
+						logger.Warnf("%s: Connection in pool %s is nil or closed, adding to removal list", f.tag, pool.remoteAddr)
+						connectionsToRemove = append(connectionsToRemove, *conn)
 						continue
 					}
 
-					if now.Sub(conn.lastHeartbeatSent) >= f.authManager.heartbeatInterval {
-						go f.sendHeartbeat(conn)
+					if now.Sub((*conn).lastHeartbeatSent) >= f.authManager.heartbeatInterval {
+						go f.sendHeartbeat(*conn)
 					}
 				}
 
-				for i := len(pool.conns); i < pool.connCount; i++ {
+				for _, conn := range connectionsToRemove {
+					pool.RemoveConnection(conn)
+				}
+
+
+				for i := pool.ConnectionCount(); i < pool.connCount; i++ {
 					ttc, err := f.setupConnection(pool.remoteAddr, pool.poolID)
 					if err != nil {
 						logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.remoteAddr, err)
 						continue
 					}
 					pool.AddConnection(ttc)
-
 					logger.Infof("%s: Added new connection to %s", f.tag, pool.remoteAddr)
 				}
 			}
-			f.connectionsMutex.Unlock()
 		}
 	}
 }
-
 func (l *TcpTunnelForwardComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {
 	c.authState.authenticated = 1
 	return nil
@@ -277,8 +280,6 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 	}
 
 	logger.Infof("%s: Disconnecting %s", f.tag, c.conn.RemoteAddr())
-	f.connectionsMutex.Lock()
-	defer f.connectionsMutex.Unlock()
 
 	defer c.conn.Close()
 
@@ -315,8 +316,6 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	f.authManager.WrapData(packet)
 
 	if f.broadcastMode {
-		f.connectionsMutex.RLock()
-		defer f.connectionsMutex.RUnlock()
 
 		for _, pool := range f.pools {
 			c := pool.GetNextConn()

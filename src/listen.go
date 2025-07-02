@@ -28,8 +28,8 @@ type ListenComponent struct {
 
 	conn net.PacketConn
 
-	mappings     map[string]*AddrMapping
-	mappingsRead *map[string]*AddrMapping
+	mappings       map[string]*AddrMapping
+	mappingsAtomic atomic.Value
 
 	// Authentication
 	authManager *AuthManager
@@ -54,7 +54,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		broadcastMode = false
 	}
 
-	return &ListenComponent{
+	component := &ListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router),
 
 		listenAddr:        cfg.ListenAddr,
@@ -62,10 +62,15 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
 		mappings:          make(map[string]*AddrMapping),
-		mappingsRead:      &map[string]*AddrMapping{},
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
 	}
+
+	// Initialize atomic value with empty map
+	initialMap := make(map[string]*AddrMapping)
+	component.mappingsAtomic.Store(initialMap)
+
+	return component
 }
 
 // Start initializes and starts the listener
@@ -113,7 +118,7 @@ func (l *ListenComponent) performCleanup() {
 func (l *ListenComponent) syncMapping() error {
 	mappingsTemp := make(map[string]*AddrMapping)
 	maps.Copy(mappingsTemp, l.mappings)
-	l.mappingsRead = &mappingsTemp
+	l.mappingsAtomic.Store(mappingsTemp)
 	return nil
 }
 
@@ -349,9 +354,10 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 		l.authManager.WrapData(packet)
 	}
 
+	mappingsSnapshot := l.mappingsAtomic.Load().(map[string]*AddrMapping)
+
 	if l.broadcastMode {
-		for _, mapping := range *l.mappingsRead {
-			// Check authentication if required
+		for _, mapping := range mappingsSnapshot {
 			if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
 				continue
 			}
@@ -361,13 +367,11 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 			}
 		}
 	} else {
-		// Direct mode: send only to the specific connection ID
 		if packet.connID == (ConnID{}) {
 			logger.Infof("%s: Packet has no connection ID, dropping", l.tag)
 			return nil
 		}
-		// Find the mapping that matches the connection ID
-		for _, mapping := range *l.mappingsRead {
+		for _, mapping := range mappingsSnapshot {
 			if mapping.connID == packet.connID {
 				// Check authentication if required
 				if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
@@ -383,7 +387,6 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 		}
 
 		logger.Debugf("%s: No mapping found for connection ID: %s", l.tag, packet.connID)
-
 	}
 
 	return nil

@@ -2,7 +2,6 @@ package main
 
 import (
 	"net"
-	"slices"
 	"sync/atomic"
 	"time"
 )
@@ -13,36 +12,88 @@ const (
 )
 
 type TcpTunnelConnPool struct {
-	conns      []*TcpTunnelConn
+	conns atomic.Pointer[[]*TcpTunnelConn]
+
 	index      uint32
 	remoteAddr string
 	poolID     PoolID
 	connCount  int
 }
 
+func NewTcpTunnelConnPool(addr string, poolID PoolID, count int) *TcpTunnelConnPool {
+	pool := &TcpTunnelConnPool{
+		remoteAddr: addr,
+		poolID:     poolID,
+		connCount:  count,
+	}
+
+	emptySlice := make([]*TcpTunnelConn, 0, count)
+	pool.conns.Store(&emptySlice)
+
+	return pool
+}
+
+func (p *TcpTunnelConnPool) ConnectionCount() int {
+	connsPtr := p.conns.Load()
+	return len(*connsPtr)
+}
+
 func (p *TcpTunnelConnPool) AddConnection(conn *TcpTunnelConn) {
-	p.conns = append(p.conns, conn)
+	for {
+		oldSlicePtr := p.conns.Load()
+		oldSlice := *oldSlicePtr
+
+		newSlice := make([]*TcpTunnelConn, len(oldSlice)+1)
+		copy(newSlice, oldSlice)
+		newSlice[len(oldSlice)] = conn
+
+		if p.conns.CompareAndSwap(oldSlicePtr, &newSlice) {
+			return
+		}
+	}
 }
 
 func (p *TcpTunnelConnPool) RemoveConnection(conn *TcpTunnelConn) {
-	for i, c := range p.conns {
-		if c == conn {
-			p.conns = slices.Delete(p.conns, i, i+1)
+	for {
+		oldSlicePtr := p.conns.Load()
+		oldSlice := *oldSlicePtr
+
+		foundIndex := -1
+		for i, c := range oldSlice {
+			if c == conn {
+				foundIndex = i
+				break
+			}
+		}
+
+		if foundIndex == -1 {
+			logger.Warnf("Connection not found in pool %s for removal", p.remoteAddr)
+			return
+		}
+
+		newSlice := make([]*TcpTunnelConn, len(oldSlice)-1)
+		copy(newSlice, oldSlice[:foundIndex])
+		copy(newSlice[foundIndex:], oldSlice[foundIndex+1:])
+
+		if p.conns.CompareAndSwap(oldSlicePtr, &newSlice) {
 			return
 		}
 	}
 }
 
 func (p *TcpTunnelConnPool) GetNextConn() *TcpTunnelConn {
-	if len(p.conns) == 0 {
+	connsPtr := p.conns.Load()
+	conns := *connsPtr
+
+	if len(conns) == 0 {
 		return nil
 	}
 
-	for i, n := 0, len(p.conns); i < n; i++ {
-		index := atomic.AddUint32(&p.index, 1) % uint32(len(p.conns))
+	for i, n := 0, len(conns); i < n; i++ {
+		index := atomic.AddUint32(&p.index, 1) % uint32(len(conns))
 
-		conn := p.conns[index]
-		if conn == nil || conn.conn == nil {
+		conn := conns[index]
+		if conn.conn == nil {
 			logger.Warnf("TcpTunnelConnPool: Connection at index %d is nil or closed", index)
 			continue
 		}
