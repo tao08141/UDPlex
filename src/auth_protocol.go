@@ -236,6 +236,8 @@ type AuthManager struct {
 	router            *Router
 	gcm               cipher.AEAD // Shared GCM cipher for performance
 	deduplicationMgr  *DeduplicationManager
+	challengeCache    map[[ChallengeSize]byte]time.Time
+	challengeMu       sync.RWMutex
 }
 
 // NewAuthManager creates a new authentication manager
@@ -285,6 +287,7 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 		gcm:               gcm,
 		router:            router,
 		deduplicationMgr:  NewDeduplicationManager(),
+		challengeCache:    make(map[[ChallengeSize]byte]time.Time),
 	}, nil
 }
 
@@ -317,6 +320,14 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8, forward
 	if _, err := rand.Read(challenge); err != nil {
 		return 0, err
 	}
+
+	// Store challenge in cache to prevent replay
+	var challengeKey [ChallengeSize]byte
+	copy(challengeKey[:], challenge)
+
+	am.challengeMu.Lock()
+	am.challengeCache[challengeKey] = time.Now()
+	am.challengeMu.Unlock()
 
 	// Get current timestamp
 	timestamp := time.Now().UnixMilli()
@@ -358,6 +369,18 @@ func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (
 
 	offset := 0
 	challenge := data[offset:ChallengeSize]
+
+	var challengeKey [ChallengeSize]byte
+	copy(challengeKey[:], challenge)
+
+	am.challengeMu.RLock()
+	timestamp, exists := am.challengeCache[challengeKey]
+	am.challengeMu.RUnlock()
+
+	if exists && time.Since(timestamp) < am.authTimeout {
+		return ForwardID{}, PoolID{}, errors.New("duplicate challenge detected")
+	}
+
 	offset += ChallengeSize
 	forwardID := ForwardIDFromBytes(data[offset : offset+ForwardIDSize])
 	offset += ForwardIDSize
@@ -368,8 +391,8 @@ func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (
 	receivedMAC := data[offset : offset+MACSize]
 
 	// Verify timestamp
-	timestamp := int64(binary.BigEndian.Uint64(timestampBytes))
-	if time.Since(time.UnixMilli(timestamp)) > am.authTimeout {
+	tsValue := int64(binary.BigEndian.Uint64(timestampBytes))
+	if time.Since(time.UnixMilli(tsValue)) > am.authTimeout {
 		return ForwardID{}, PoolID{}, errors.New("challenge timestamp expired")
 	}
 
@@ -385,7 +408,25 @@ func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (
 		return ForwardID{}, PoolID{}, errors.New("invalid challenge MAC")
 	}
 
+	am.challengeMu.Lock()
+	am.challengeCache[challengeKey] = time.Now()
+	am.challengeMu.Unlock()
+
+	go am.cleanupExpiredChallenges()
+
 	return forwardID, poolID, nil
+}
+
+func (am *AuthManager) cleanupExpiredChallenges() {
+	am.challengeMu.Lock()
+	defer am.challengeMu.Unlock()
+
+	cutoff := time.Now().Add(-am.authTimeout)
+	for key, timestamp := range am.challengeCache {
+		if timestamp.Before(cutoff) {
+			delete(am.challengeCache, key)
+		}
+	}
 }
 
 // CreateHeartbeat creates a heartbeat message
