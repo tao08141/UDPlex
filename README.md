@@ -250,4 +250,6 @@ examples目录包含多种使用场景的配置示例：
 - **redundant_server_config.json** - UDP冗余服务端配置，接收客户端流量并转发
 - **wg_bidirectional_client_config.json** - WireGuard UDP上下行分离通信客户端配置
 - **wg_bidirectional_server_config.json** - WireGuard UDP上下行分离通信服务端配置
+- **tcp_tunnel_server.json** - TCP隧道服务端配置，监听TCP连接并转发UDP流量
+- **tcp_tunnel_client.json** - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
 

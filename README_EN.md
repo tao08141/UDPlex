@@ -235,12 +235,6 @@ docker-compose down
 - Network redundancy: Ensure important UDP data can be transmitted through multiple paths
 - Traffic distribution: Replicate UDP traffic to multiple targets for processing
 
-## Notes
-
-- Ensure listening ports are open in the firewall
-- Target forwarding servers need to correctly handle the forwarded UDP packets
-- For high traffic scenarios, appropriately adjust the `buffer_size` and `queue_size` parameters
-- Only supports UDP protocol, does not support TCP
 
 ## Configuration Examples
 
@@ -253,55 +247,5 @@ The examples directory contains configuration examples for various usage scenari
 - **redundant_server_config.json** - UDP redundant server configuration, receiving client traffic and forwarding
 - **wg_bidirectional_client_config.json** - WireGuard UDP bidirectional separated communication client configuration
 - **wg_bidirectional_server_config.json** - WireGuard UDP bidirectional separated communication server configuration
-
-## Performance Testing
-
-+ Test command: `iperf3.exe -c 127.0.0.1 -p 5202 -u -b 100000M`
-
-+ Baseline test, iperf3 performance test, without middleware.
-```bash
------------------------------------------------------------
-Server listening on 5201 (test #1)
------------------------------------------------------------
-Accepted connection from 127.0.0.1, port 58706
-[  5] local 127.0.0.1 port 5201 connected to 127.0.0.1 port 63982
-[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams
-[  5]   0.00-1.01   sec  5.94 GBytes  50.5 Gbits/sec  0.005 ms  805/98222 (0.82%)
-[  5]   1.01-2.00   sec  5.66 GBytes  49.1 Gbits/sec  0.004 ms  778/93535 (0.83%)
-[  5]   2.00-3.01   sec  5.74 GBytes  49.1 Gbits/sec  0.005 ms  769/94898 (0.81%)
-[  5]   3.01-4.00   sec  5.74 GBytes  49.6 Gbits/sec  0.002 ms  531/94593 (0.56%)
-[  5]   4.00-5.01   sec  5.77 GBytes  49.2 Gbits/sec  0.007 ms  644/95227 (0.68%)
-[  5]   5.01-6.01   sec  5.88 GBytes  50.4 Gbits/sec  0.003 ms  930/97358 (0.96%)
-[  5]   6.01-7.01   sec  5.69 GBytes  48.8 Gbits/sec  0.005 ms  721/93989 (0.77%)
-[  5]   7.01-8.01   sec  5.63 GBytes  48.6 Gbits/sec  0.006 ms  647/92910 (0.7%)
-[  5]   8.01-9.01   sec  5.80 GBytes  49.7 Gbits/sec  0.002 ms  848/95871 (0.88%)
-[  5]   9.01-10.01  sec  5.73 GBytes  49.1 Gbits/sec  0.010 ms  799/94792 (0.84%)
-[  5]  10.01-10.01  sec   128 KBytes  3.44 Gbits/sec  0.013 ms  0/2 (0%)
-- - - - - - - - - - - - - - - - - - - - - - - - -
-[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams
-[  5]   0.00-10.01  sec  57.6 GBytes  49.4 Gbits/sec  0.013 ms  7472/951397 (0.79%)  receiver
-```
-
-+ Using the forwarding configuration file `basic.json` example configuration, iperf3 performance test, with middleware.
-```bash
------------------------------------------------------------
-Server listening on 5201 (test #2)
------------------------------------------------------------
-Accepted connection from 127.0.0.1, port 58929
-[  5] local 127.0.0.1 port 5201 connected to 127.0.0.1 port 57174
-[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams
-[  5]   0.00-1.01   sec  3.55 GBytes  30.3 Gbits/sec  0.008 ms  40878/99061 (41%)
-[  5]   1.01-2.02   sec  3.66 GBytes  31.1 Gbits/sec  0.008 ms  73155/133095 (55%)
-[  5]   2.02-3.01   sec  3.56 GBytes  30.8 Gbits/sec  0.010 ms  66587/124925 (53%)
-[  5]   3.01-4.00   sec  3.55 GBytes  30.6 Gbits/sec  0.008 ms  71581/129761 (55%)
-[  5]   4.00-5.01   sec  3.65 GBytes  31.0 Gbits/sec  0.011 ms  70070/129940 (54%)
-[  5]   5.01-6.01   sec  3.52 GBytes  30.4 Gbits/sec  0.010 ms  67885/125564 (54%)
-[  5]   6.01-7.00   sec  3.59 GBytes  31.0 Gbits/sec  0.007 ms  65266/124137 (53%)
-[  5]   7.00-8.01   sec  3.58 GBytes  30.6 Gbits/sec  0.007 ms  69799/128461 (54%)
-[  5]   8.01-9.01   sec  3.59 GBytes  30.7 Gbits/sec  0.007 ms  56935/115861 (49%)
-[  5]   9.01-10.01  sec  3.37 GBytes  29.2 Gbits/sec  0.008 ms  37222/92417 (40%)
-[  5]  10.01-10.01  sec  1.37 MBytes  26.0 Gbits/sec  0.009 ms  10/32 (31%)
-- - - - - - - - - - - - - - - - - - - - - - - - -
-[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams
-[  5]   0.00-10.01  sec  35.6 GBytes  30.6 Gbits/sec  0.009 ms  619388/1203254 (51%)  receiver
-```
+- **tcp_tunnel_server.json** - TCP tunnel server configuration, listening for TCP connections and forwarding UDP traffic
+- **tcp_tunnel_client.json** - TCP tunnel client configuration, connecting to a TCP tunnel server and forwarding UDP traffic
