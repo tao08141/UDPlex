@@ -1,0 +1,17 @@
+version: '3'
+
+services:
+  udplex:
+    image: ghcr.io/tao08141/udplex:latest
+    container_name: udplex
+    restart: always
+    volumes:
+      - ./config.json:/app/config.json
+    network_mode: host
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Alternative port mapping if not using host network mode
+    # ports:
+    #   - "9000:9000/udp"  # Adjust these ports based on your config

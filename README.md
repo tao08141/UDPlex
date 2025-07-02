@@ -1,4 +1,7 @@
-UDPlex 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量同时转发到多个目标服务器，并能处理返回流量。
+# UDPlex
+[English](README_EN.md) | [中文](README.md)
+
+UDPlex 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量同时转发到多个目标服务器，并能处理返回流量，并支持鉴权、加密等功能。它适用于游戏加速、网络冗余和流量分流等场景。
 
 ## 功能特点
 
@@ -7,15 +10,10 @@ UDPlex 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量
 - 支持双向流量转发
 - 自动重连断开的连接
 - 可配置的缓冲区大小和超时参数
-- 简单的 JSON 配置文件
+- 支持鉴权和加密传输
+- 支持协议检测和过滤
+- 支持 Docker 部署
 
-## 安装
-
-```bash
-git clone https://github.com/tao08141/UDPlex.git
-cd UDPlex
-go build
-```
 
 ## 使用方法
 
@@ -29,6 +27,58 @@ go build
 # 或指定配置文件路径
 ./UDPlex -c /path/to/config.json
 ```
+
+## Docker 使用方法
+
+### 使用 Docker 命令
+
+```bash
+# 拉取镜像
+docker pull ghcr.io/tao08141/udplex:latest
+
+# 运行容器 (使用主机网络模式)
+docker run -d --name udplex --network host \
+  -v $(pwd)/config.json:/app/config.json \
+  ghcr.io/tao08141/udplex:latest
+
+# 使用端口映射模式 (如果不使用主机网络模式)
+docker run -d --name udplex \
+  -v $(pwd)/config.json:/app/config.json \
+  -p 9000:9000/udp \
+  ghcr.io/tao08141/udplex:latest
+```
+
+### 使用 Docker Compose
+
+1. 下载 docker-compose.yml 文件:
+
+```bash
+mkdir udplex && cd udplex
+# 下载 docker-compose.yml 文件
+curl -o docker-compose.yml https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/docker-compose.yml
+# 下载配置文件
+curl -o config.json https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/examples/basic.json
+```
+
+2. 启动服务:
+
+```bash
+docker-compose up -d
+```
+
+3. 查看日志:
+
+```bash
+docker-compose logs -f
+```
+
+4. 停止服务:
+
+```bash
+docker-compose down
+```
+
+> 注意：对于 UDP 转发应用，建议使用主机网络模式 (network_mode: host) 以获得最佳性能。如果需要精确控制端口映射，可以使用端口映射模式。
 
 # UDPlex 参数详解
 
@@ -87,6 +137,7 @@ go build
 | `tag` | 组件唯一标识，用于在detour中引用 |
 | `listen_addr` | 监听地址和端口，格式为"IP:端口"，如"0.0.0.0:9001" |
 | `timeout` | 连接超时时间（秒），超过此时间无数据传输则断开连接 |
+| `no_delay` | 是否启用TCP Nagle算法，true表示禁用Nagle算法以减少延迟 |
 | `detour` | 转发路径，指定接收数据的组件标识列表 |
 | `auth` | 鉴权配置，详见鉴权部分 |
 
@@ -96,8 +147,9 @@ go build
 |------|------|
 | `type` | 组件类型: `tcp_tunnel_forward`，表示TCP隧道转发端 |
 | `tag` | 组件唯一标识，用于在detour中引用 |
-| `forwarders` | 目标服务器地址列表，格式为"IP:端口[:连接数]"，如"1.2.3.4:9001:4" |
+| `forwarders` | 目标服务器地址列表，格式为"IP:端口[:连接数]"，如"1.2.3.4:9001:4",使用多连接时会造成UDP乱序，部分场景下可能会导致一些未知的问题 |
 | `connection_check_time` | 连接检查间隔（秒），定期检查并重连断开的连接 |
+| `no_delay` | 是否启用TCP Nagle算法，true表示禁用Nagle算法以减少延迟 |
 | `detour` | 转发路径，指定接收返回数据的组件标识列表 |
 | `auth` | 鉴权配置，详见鉴权部分 |
 
@@ -179,8 +231,8 @@ go build
 ## 开发计划
 - [X] 支持包过滤和选择性转发
 - [X] 支持鉴权、加密、去重等功能
-- [ ] 支持更复杂的负载均衡算法
 - [X] 支持UDP Over TCP的转发
+- [ ] 支持更复杂的负载均衡算法
 
 ## 使用场景
 - 游戏加速：将游戏流量同时转发到多个服务器，选择最快的响应
