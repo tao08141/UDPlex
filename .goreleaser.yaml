@@ -41,6 +41,21 @@ archives:
       - goos: windows
         formats: [zip]
 
+# Add Docker configuration
+dockers:
+  - dockerfile: Dockerfile
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:{{ .Tag }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}.{{ .Minor }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:latest"
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+
 changelog:
   sort: asc
   filters:
