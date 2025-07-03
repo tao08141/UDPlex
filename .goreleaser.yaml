@@ -46,10 +46,10 @@ archives:
 dockers:
   - dockerfile: Dockerfile
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:{{ .Tag }}"
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}"
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}.{{ .Minor }}"
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:latest"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:{{ if .Env.VERSION }}dev{{ else }}{{ .Tag }}{{ end }}"
+      - "{{ if not .Env.VERSION }}ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}{{ end }}"
+      - "{{ if not .Env.VERSION }}ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Env.VERSION }}ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:latest{{ end }}"
     build_flag_templates:
       - "--pull"
       - "--label=org.opencontainers.image.created={{.Date}}"
