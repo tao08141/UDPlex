@@ -54,6 +54,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: nightly-${{ steps.build_date.outputs.date }}-${{ steps.commit_hash.outputs.hash }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          DOCKER_SKIP_PUSH: false 
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
 
       - name: Upload assets
