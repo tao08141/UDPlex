@@ -77,7 +77,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 	rand.Read(forwardID[:])
 
 	return &ForwardComponent{
-		BaseComponent: NewBaseComponent(cfg.Tag, router),
+		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
 		forwarders:          cfg.Forwarders,
 		reconnectInterval:   reconnectInterval,

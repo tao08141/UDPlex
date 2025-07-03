@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"sync/atomic"
+	"time"
 )
 
 type ConnID [8]byte
@@ -51,22 +53,58 @@ type Component interface {
 	SendPacket(packet *Packet, metadata any) error
 	GetRouter() *Router
 	GetStopChannel() chan struct{}
+	SetSendQueueDelay(delay time.Duration)
+	GetAverageSendQueueDelay() time.Duration
+	GetSendTimeout() time.Duration
 }
 
 // BaseComponent provides common functionality for components
 type BaseComponent struct {
-	tag    string
-	router *Router
-	stopCh chan struct{}
+	tag                 string
+	router              *Router
+	stopCh              chan struct{}
+	sendTimeout         time.Duration
+	sendQueueDelays     [10]time.Duration
+	sendQueueDelayIndex uint32
 }
 
 // NewBaseComponent creates a base component with common functionality
-func NewBaseComponent(tag string, router *Router) BaseComponent {
+func NewBaseComponent(tag string, router *Router, sendTimeout time.Duration) BaseComponent {
 	return BaseComponent{
-		tag:    tag,
-		router: router,
-		stopCh: make(chan struct{}),
+		tag:                 tag,
+		router:              router,
+		stopCh:              make(chan struct{}),
+		sendTimeout:         sendTimeout,
+		sendQueueDelays:     [10]time.Duration{},
+		sendQueueDelayIndex: 0,
 	}
+}
+
+func (bc *BaseComponent) SetSendQueueDelay(delay time.Duration) {
+	index := atomic.AddUint32(&bc.sendQueueDelayIndex, 1) % uint32(len(bc.sendQueueDelays))
+	bc.sendQueueDelays[index] = delay
+}
+
+func (bc *BaseComponent) GetAverageSendQueueDelay() time.Duration {
+	var total time.Duration
+	count := 0
+
+	for _, delay := range bc.sendQueueDelays {
+		if delay > 0 {
+			total += delay
+			count++
+		}
+	}
+
+	if count == 0 {
+		return 0
+	}
+
+	return total / time.Duration(count)
+}
+
+func (bc *BaseComponent) GetSendTimeout() time.Duration {
+	return bc.sendTimeout
 }
 
 func (bc *BaseComponent) GetStopChannel() chan struct{} {

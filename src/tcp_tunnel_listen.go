@@ -49,7 +49,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 	}
 
 	component := &TcpTunnelListenComponent{
-		BaseComponent: NewBaseComponent(cfg.Tag, router),
+		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
 		listenAddr:        cfg.ListenAddr,
 		timeout:           timeout,

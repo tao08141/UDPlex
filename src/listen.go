@@ -57,7 +57,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	}
 
 	component := &ListenComponent{
-		BaseComponent: NewBaseComponent(cfg.Tag, router),
+		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
 		listenAddr:        cfg.ListenAddr,
 		timeout:           timeout,

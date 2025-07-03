@@ -19,7 +19,6 @@ type TcpTunnelForwardComponent struct {
 	authManager         *AuthManager
 	pools               map[PoolID]*TcpTunnelConnPool
 	noDelay             bool
-	sendTimeout         time.Duration
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
@@ -78,7 +77,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	}
 
 	return &TcpTunnelForwardComponent{
-		BaseComponent:       NewBaseComponent(cfg.Tag, router),
+		BaseComponent:       NewBaseComponent(cfg.Tag, router, sendTimeout),
 		connectionCheckTime: connectionCheckTime,
 		broadcastMode:       broadcastMode,
 		authManager:         authManager,
@@ -86,7 +85,6 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		pools:               pools,
 		detour:              cfg.Detour,
 		noDelay:             noDelay,
-		sendTimeout:         sendTimeout,
 	}
 }
 

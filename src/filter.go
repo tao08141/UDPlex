@@ -17,7 +17,7 @@ type FilterComponent struct {
 func NewFilterComponent(cfg FilterComponentConfig, router *Router, protoDetector *ProtocolDetector) *FilterComponent {
 
 	return &FilterComponent{
-		BaseComponent: NewBaseComponent(cfg.Tag, router),
+		BaseComponent: NewBaseComponent(cfg.Tag, router, 0),
 
 		detour:            cfg.Detour,
 		detourMiss:        cfg.DetourMiss,
