@@ -125,13 +125,22 @@ func (c *TcpTunnelConn) Write(data []byte) (int, error) {
 		return 0, net.ErrClosed
 	}
 
-	if c.sendTimeout > 0 {
-		if err := c.conn.SetWriteDeadline(time.Now().Add(c.sendTimeout)); err != nil {
-			logger.Infof("Failed to set write deadline: %v", err)
+	// Ensure all data is written
+	totalWritten := 0
+	for totalWritten < len(data) {
+		if c.sendTimeout > 0 {
+			if err := c.conn.SetWriteDeadline(time.Now().Add(c.sendTimeout)); err != nil {
+				logger.Infof("Failed to set write deadline: %v", err)
+			}
 		}
+		n, err := c.conn.Write(data[totalWritten:])
+		if err != nil {
+			return totalWritten, err
+		}
+		totalWritten += n
 	}
 
-	return c.conn.Write(data)
+	return totalWritten, nil
 }
 
 type TcpTunnelComponent interface {
