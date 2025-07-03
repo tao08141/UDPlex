@@ -33,12 +33,10 @@ func NewRouter(config Config) *Router {
 				return &buf // Return pointer to slice
 			},
 		},
-		routeTasks: make(chan routeTask, config.QueueSize),
-		sendTasks:  make(chan sendTask, config.QueueSize), // Initialize send queue
+		routeTasks:       make(chan routeTask, config.QueueSize),
+		sendTasks:        make(chan sendTask, config.QueueSize),
+		standbySendTasks: make(chan sendTask, config.QueueSize),
 	}
-
-	// Start the worker pools
-	r.startWorkers()
 
 	return r
 }
@@ -56,13 +54,15 @@ type routeTask struct {
 
 // Router manages all components and routes packets between them
 type Router struct {
-	components map[string]Component
-	bufferPool sync.Pool
-	config     Config
-	routeTasks chan routeTask
-	sendTasks  chan sendTask
-	wg         sync.WaitGroup
-	connPool   map[ConnID]map[string]any // connPoll[connId][tag] = any
+	components       map[string]Component
+	bufferPool       sync.Pool
+	config           Config
+	routeTasks       chan routeTask
+	sendTasks        chan sendTask
+	standbySendTasks chan sendTask
+	wg               sync.WaitGroup
+	connPool         map[ConnID]map[string]any // connPoll[connId][tag] = any
+	concurrencyChs   map[string]chan struct{}
 }
 
 func (r *Router) GetConnData(connID ConnID, tag string) any {
@@ -90,7 +90,18 @@ func (r *Router) RemoveConnData(connID ConnID, tag string) {
 
 // startWorkers initializes the worker goroutines for packet routing
 func (r *Router) startWorkers() {
-	for i := range r.config.WorkerCount {
+	r.concurrencyChs = make(map[string]chan struct{})
+	capacity := max(int(float64(r.config.WorkerCount)/float64(len(r.components))*1.5), 1)
+	for tag := range r.components {
+		r.concurrencyChs[tag] = make(chan struct{}, capacity)
+	}
+
+	logger.Infof("Starting %d router workers with concurrency capacity %d", r.config.WorkerCount, capacity)
+
+	// Start standby goroutine
+	go r.startStandbyWorker()
+
+	for i := range r.config.WorkerCount { // fix range usage
 		r.wg.Add(1)
 		go func(workerID int) {
 			defer r.wg.Done()
@@ -103,32 +114,59 @@ func (r *Router) startWorkers() {
 						logger.Warnf("Router worker %d: route tasks channel closed", workerID)
 						return
 					}
-					r.processRouteTask(task)
+					r.processRouteTaskConcurrent(task)
+
 				case task, ok := <-r.sendTasks:
 					if !ok {
 						logger.Warnf("Router worker %d: send tasks channel closed", workerID)
 						return
 					}
-					if err := task.component.SendPacket(task.packet, task.metadata); err != nil {
-						logger.Warnf("Error sending packet via %s: %v", task.component.GetTag(), err)
+					tag := task.component.GetTag()
+					if ch, found := r.concurrencyChs[tag]; found {
+						select {
+						case ch <- struct{}{}:
+							if err := task.component.SendPacket(task.packet, task.metadata); err != nil {
+								logger.Warnf("Error sending packet via %s: %v", tag, err)
+							}
+							task.packet.Release(1)
+							<-ch
+						default:
+							select {
+							case r.standbySendTasks <- task: // push to standby channel
+							default:
+								logger.Warnf("Standby send tasks channel full for %s, dropping packet", tag)
+								task.packet.Release(1) // Release packet if standby channel is full
+							}
+						}
+					} else {
+						logger.Warnf("Error sending packet via %s: concurrency channel not found", tag)
+						task.packet.Release(1)
 					}
-					task.packet.Release(1)
 				}
 			}
 		}(i)
 	}
 }
 
+// new standby worker
+func (r *Router) startStandbyWorker() {
+	for task := range r.standbySendTasks {
+		if err := task.component.SendPacket(task.packet, task.metadata); err != nil {
+			logger.Warnf("Standby: Error sending packet via %s: %v", task.component.GetTag(), err)
+		}
+
+	}
+}
+
 // processRouteTask handles the actual routing of packets
-func (r *Router) processRouteTask(task routeTask) {
+func (r *Router) processRouteTaskConcurrent(task routeTask) {
 	packet := task.packet
-	defer packet.Release(1) // Release our reference when done
+	defer packet.Release(1)
 
 	for i, tag := range task.destTags {
 		if tag == packet.srcTag {
-			continue // Don't route back to source
+			continue
 		}
-
 		c, exists := r.GetComponent(tag)
 		if !exists {
 			logger.Warnf("Warning: trying to route to non-existing component: %s", tag)
@@ -138,10 +176,10 @@ func (r *Router) processRouteTask(task routeTask) {
 		if i < len(task.destTags)-1 {
 			// Create a copy for all but the last destination
 			newPacket := packet.Copy()
-
+			defer newPacket.Release(1)
+			packet.AddRef(1)
 			if err := c.HandlePacket(&newPacket); err != nil {
 				logger.Warnf("Error routing to %s: %v", tag, err)
-				newPacket.Release(1) // Release if error occurs
 			}
 		} else {
 			// Use original packet for the last destination or if only one destination
@@ -247,6 +285,9 @@ func (r *Router) StartAll() error {
 			return fmt.Errorf("failed to start component %s: %w", tag, err)
 		}
 	}
+
+	r.startWorkers()
+
 	return nil
 }
 
