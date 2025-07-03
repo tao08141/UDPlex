@@ -54,7 +54,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: nightly-${{ steps.build_date.outputs.date }}-${{ steps.commit_hash.outputs.hash }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          DOCKER_SKIP_PUSH: false 
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
 
       - name: Upload assets
@@ -62,3 +61,18 @@ jobs:
         with:
           name: UDPlex
           path: dist/*
+
+      - name: List dev images
+        run: |
+          docker image ls --format "{{.Repository}}:{{.Tag}}" | \
+            grep -e "$GITHUB_REPOSITORY:.*$(git rev-parse --short HEAD).*" | \
+            paste -sd ' ' /dev/stdin > images
+
+      - name: Push dev images
+        run: |
+          cat images | xargs -d ' ' -I{} -n1 sh -c "docker push {}"
+
+      - name: Create and push manifest for :dev tag
+        run: |
+          docker manifest create $GITHUB_REPOSITORY:dev $(cat images)
+          docker manifest push $GITHUB_REPOSITORY:dev

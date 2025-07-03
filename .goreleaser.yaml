@@ -26,7 +26,6 @@ builds:
     ldflags:
       - -X main.version={{.Version}}
 
-
 archives:
   - formats: [tar.gz]
     # this name template makes the OS and Arch compatible with the results of `uname`.
@@ -46,17 +45,16 @@ archives:
 dockers:
   - dockerfile: Dockerfile
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:{{ if .Env.VERSION }}dev{{ else }}{{ .Tag }}{{ end }}"
-      - "{{ if not .Env.VERSION }}ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}{{ end }}"
-      - "{{ if not .Env.VERSION }}ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}.{{ .Minor }}{{ end }}"
-      - "{{ if not .Env.VERSION }}ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:latest{{ end }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:{{ .Tag }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:v{{ .Major }}.{{ .Minor }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/udplex:latest"
     build_flag_templates:
       - "--pull"
       - "--label=org.opencontainers.image.created={{.Date}}"
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
-    skip_push: "{{ if .Env.DOCKER_SKIP_PUSH }}false{{ else }}auto{{ end }}"
 
 changelog:
   sort: asc
