@@ -62,17 +62,6 @@ jobs:
           name: UDPlex
           path: dist/*
 
-      - name: List dev images
+      - name: Push Docker images
         run: |
-          docker image ls --format "{{.Repository}}:{{.Tag}}" | \
-            grep -e "$GITHUB_REPOSITORY:.*$(git rev-parse --short HEAD).*" | \
-            paste -sd ' ' /dev/stdin > images
-
-      - name: Push dev images
-        run: |
-          cat images | xargs -d ' ' -I{} -n1 sh -c "docker push {}"
-
-      - name: Create and push manifest for :dev tag
-        run: |
-          docker manifest create $GITHUB_REPOSITORY:dev $(cat images)
-          docker manifest push $GITHUB_REPOSITORY:dev
+          docker push ghcr.io/${{ github.repository_owner }}/udplex:dev
