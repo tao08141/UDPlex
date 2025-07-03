@@ -127,6 +127,7 @@ type TcpTunnelComponent interface {
 	GetAuthManager() *AuthManager
 	HandleAuthenticatedConnection(c *TcpTunnelConn) error
 	Disconnect(c *TcpTunnelConn)
+	GetSendTimeout() time.Duration
 }
 
 func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
@@ -250,6 +251,11 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						if mode == TcpTunnelListenMode {
 							responseBuffer := t.GetRouter().GetBuffer()
 							length := CreateHeartbeat(responseBuffer)
+							if t.GetSendTimeout() > 0 {
+								if err := c.conn.SetWriteDeadline(time.Now().Add(t.GetSendTimeout())); err != nil {
+									logger.Infof("%s: Failed to set write deadline: %v", t.GetTag(), err)
+								}
+							}
 							c.conn.Write(responseBuffer[:length])
 							t.GetRouter().PutBuffer(responseBuffer)
 						} else if mode == TcpTunnelForwardMode {
