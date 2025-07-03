@@ -16,10 +16,9 @@ type TcpTunnelListenComponent struct {
 	detour            []string
 	broadcastMode     bool
 	noDelay           bool
-
-	connections atomic.Value
-
-	authManager *AuthManager
+	connections       atomic.Value
+	authManager       *AuthManager
+	sendTimeout       time.Duration
 }
 
 func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnelListenComponent {
@@ -44,6 +43,11 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		noDelay = false
 	}
 
+	sendTimeout := time.Duration(cfg.SendTimeout) * time.Millisecond
+	if sendTimeout == 0 {
+		sendTimeout = 500 * time.Millisecond
+	}
+
 	component := &TcpTunnelListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router),
 
@@ -54,6 +58,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
 		noDelay:           noDelay,
+		sendTimeout:       sendTimeout,
 	}
 
 	emptyConnections := make(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
@@ -103,7 +108,6 @@ func (l *TcpTunnelListenComponent) Start() error {
 			if l.noDelay {
 				if tcpConn, ok := conn.(*net.TCPConn); ok {
 					tcpConn.SetNoDelay(true)
-					logger.Infof("%s: TCP_NODELAY enabled for %s", l.tag, conn.RemoteAddr())
 				}
 			}
 
@@ -148,6 +152,12 @@ func (l *TcpTunnelListenComponent) SendPacket(packet *Packet, metadata any) erro
 
 	if conn == nil {
 		return fmt.Errorf("%s: Connection is nil", l.tag)
+	}
+
+	if l.sendTimeout > 0 {
+		if err := conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+		}
 	}
 
 	_, err := conn.Write(packet.GetData())
@@ -212,6 +222,12 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 		logger.Warnf("%s: Failed to create auth challenge response: %v", l.GetTag(), err)
 		l.GetRouter().PutBuffer(responseBuffer)
 		return err
+	}
+
+	if l.sendTimeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+		}
 	}
 
 	if _, err := c.conn.Write(responseBuffer[:responseLen]); err != nil {

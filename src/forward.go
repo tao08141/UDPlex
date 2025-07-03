@@ -40,6 +40,7 @@ type ForwardComponent struct {
 
 	// Authentication
 	authManager *AuthManager
+	sendTimeout time.Duration
 }
 
 // NewForwardComponent creates a new forward component
@@ -66,6 +67,11 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		return nil
 	}
 
+	sendTimeout := time.Duration(cfg.SendTimeout) * time.Millisecond
+	if sendTimeout == 0 {
+		sendTimeout = 500 * time.Millisecond
+	}
+
 	forwardID := ForwardID{}
 
 	rand.Read(forwardID[:])
@@ -81,6 +87,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		forwardConns:        make(map[string]*ForwardConn),
 		authManager:         authManager,
 		forwardID:           forwardID,
+		sendTimeout:         sendTimeout,
 	}
 }
 
@@ -161,6 +168,11 @@ func (f *ForwardComponent) handleConnectionMaintenance(conn *ForwardConn) {
 		}
 	} else if f.sendKeepalive {
 		// No auth - just send keepalive
+		if f.sendTimeout > 0 {
+			if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+				logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
+			}
+		}
 		conn.conn.Write([]byte{})
 	}
 }
@@ -401,6 +413,12 @@ func (f *ForwardComponent) SendPacket(packet *Packet, metadata any) error {
 
 	if atomic.LoadInt32(&conn.isConnected) == 0 || conn.conn == nil {
 		return nil // Connection isn't available, just skip
+	}
+
+	if f.sendTimeout > 0 {
+		if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+		}
 	}
 
 	_, err := conn.conn.Write(packet.GetData())

@@ -27,6 +27,7 @@ type ComponentConfig struct {
 	BroadcastMode       *bool       `json:"broadcast_mode"`       // When false, only send to the specific connection ID
 	ConnectionPoolSize  int         `json:"connection_pool_size"` // Number of connections in the pool
 	NoDelay             *bool       `json:"no_delay"`
+	SendTimeout         int         `json:"send_timeout"` // ms
 }
 
 // AuthConfig represents authentication and encryption settings

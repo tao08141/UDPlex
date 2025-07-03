@@ -25,14 +25,11 @@ type ListenComponent struct {
 	replaceOldMapping bool
 	detour            []string
 	broadcastMode     bool
-
-	conn net.PacketConn
-
-	mappings       map[string]*AddrMapping
-	mappingsAtomic atomic.Value
-
-	// Authentication
-	authManager *AuthManager
+	conn              net.PacketConn
+	mappings          map[string]*AddrMapping
+	mappingsAtomic    atomic.Value
+	authManager       *AuthManager
+	sendTimeout       time.Duration
 }
 
 // NewListenComponent creates a new listen component
@@ -54,6 +51,11 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		broadcastMode = false
 	}
 
+	sendTimeout := time.Duration(cfg.SendTimeout) * time.Millisecond
+	if sendTimeout == 0 {
+		sendTimeout = 500 * time.Millisecond
+	}
+
 	component := &ListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router),
 
@@ -64,6 +66,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		mappings:          make(map[string]*AddrMapping),
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
+		sendTimeout:       sendTimeout,
 	}
 
 	// Initialize atomic value with empty map
@@ -132,6 +135,12 @@ func (l *ListenComponent) SendPacket(packet *Packet, metadata any) error {
 		return fmt.Errorf("%s: Address is nil", l.tag)
 	}
 
+	if l.sendTimeout > 0 {
+		if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+		}
+	}
+
 	_, err := l.conn.WriteTo(packet.GetData(), addr)
 	if err != nil {
 		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
@@ -193,6 +202,12 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, forwardID, poolID)
 		if err != nil {
 			logger.Warnf("%s: Failed to create auth challenge response: %v", l.tag, err)
+		}
+
+		if l.sendTimeout > 0 {
+			if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
+				logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+			}
 		}
 
 		// Send response

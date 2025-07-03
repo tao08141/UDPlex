@@ -19,6 +19,7 @@ type TcpTunnelForwardComponent struct {
 	authManager         *AuthManager
 	pools               map[PoolID]*TcpTunnelConnPool
 	noDelay             bool
+	sendTimeout         time.Duration
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
@@ -41,6 +42,11 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	noDelay := true
 	if cfg.NoDelay != nil && !*cfg.NoDelay {
 		noDelay = false
+	}
+
+	sendTimeout := time.Duration(cfg.SendTimeout) * time.Millisecond
+	if sendTimeout == 0 {
+		sendTimeout = 500 * time.Millisecond
 	}
 
 	forwardID := ForwardID{}
@@ -80,6 +86,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		pools:               pools,
 		detour:              cfg.Detour,
 		noDelay:             noDelay,
+		sendTimeout:         sendTimeout,
 	}
 }
 
@@ -135,7 +142,6 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 	if f.noDelay {
 		if tcpConn, ok := conn.(*net.TCPConn); ok {
 			tcpConn.SetNoDelay(true)
-			logger.Infof("%s: TCP_NODELAY enabled for connection to %s", f.tag, addr)
 		}
 	}
 
@@ -155,6 +161,12 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 		logger.Warnf("%s: Failed to create auth challenge: %v", f.tag, err)
 		conn.Close()
 		return nil, err
+	}
+
+	if f.sendTimeout > 0 {
+		if err := conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
+		}
 	}
 
 	_, err = conn.Write(buffer[:length])
@@ -182,8 +194,8 @@ func (f *TcpTunnelForwardComponent) GetAuthManager() *AuthManager {
 	return f.authManager
 }
 
-func (f *TcpTunnelForwardComponent) sendHeartbeat(conn *TcpTunnelConn) {
-	if !conn.authState.IsAuthenticated() {
+func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
+	if !c.authState.IsAuthenticated() {
 		return
 	}
 
@@ -191,19 +203,25 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(conn *TcpTunnelConn) {
 	defer f.router.PutBuffer(buffer)
 
 	length := CreateHeartbeat(buffer)
-	conn.lastHeartbeatSent = time.Now()
+	c.lastHeartbeatSent = time.Now()
 
-	_, err := conn.conn.Write(buffer[:length])
+	if f.sendTimeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
+		}
+	}
+
+	_, err := c.conn.Write(buffer[:length])
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
-		conn.conn.Close()
+		c.conn.Close()
 		return
 	}
 
-	conn.heartbeatMissCount++
-	if conn.heartbeatMissCount >= 5 {
-		logger.Warnf("%s: Heartbeat missed %d times, disconnecting", f.tag, conn.heartbeatMissCount)
-		conn.conn.Close()
+	c.heartbeatMissCount++
+	if c.heartbeatMissCount >= 5 {
+		logger.Warnf("%s: Heartbeat missed %d times, disconnecting", f.tag, c.heartbeatMissCount)
+		c.conn.Close()
 		return
 	}
 
@@ -317,6 +335,12 @@ func (f *TcpTunnelForwardComponent) SendPacket(packet *Packet, metadata any) err
 
 	if conn == nil {
 		return fmt.Errorf("%s: Connection is nil", f.tag)
+	}
+
+	if f.sendTimeout > 0 {
+		if err := conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
+		}
 	}
 
 	_, err := conn.Write(packet.GetData())

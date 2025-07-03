@@ -162,6 +162,11 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 			// Calculate read size based on whether we have partial message
 			readSize := len(buffer) - (bufferOffset + bufferUsed)
 
+			if readSize <= 0 {
+				logger.Infof("%s: %s Buffer full, processing messages", t.GetTag(), c.conn.RemoteAddr())
+				return
+			}
+
 			// If we have a partial message with known size, only read what's needed
 			if expectedTotalSize > 0 {
 				bytesNeeded := expectedTotalSize - bufferUsed
