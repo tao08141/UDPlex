@@ -91,6 +91,18 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 	}
 }
 
+func (f *ForwardConn) Write(data []byte) (int, error) {
+	if atomic.LoadInt32(&f.isConnected) == 0 || f.conn == nil {
+		return 0, fmt.Errorf("connection is not available")
+	}
+
+	if f.conn.SetWriteDeadline(time.Now().Add(5*time.Second)) != nil {
+		return 0, fmt.Errorf("failed to set write deadline")
+	}
+
+	return f.conn.Write(data)
+}
+
 // GetTag returns the component's tag
 func (f *ForwardComponent) GetTag() string {
 	return f.tag
@@ -167,13 +179,7 @@ func (f *ForwardComponent) handleConnectionMaintenance(conn *ForwardConn) {
 			}
 		}
 	} else if f.sendKeepalive {
-		// No auth - just send keepalive
-		if f.sendTimeout > 0 {
-			if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
-				logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
-			}
-		}
-		conn.conn.Write([]byte{})
+		conn.Write([]byte{})
 	}
 }
 
@@ -201,7 +207,7 @@ func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
 		return
 	}
 
-	_, err = conn.conn.Write(buffer[:length])
+	_, err = conn.Write(buffer[:length])
 	if err != nil {
 		logger.Warnf("%s: Failed to send auth challenge: %v", f.tag, err)
 		atomic.StoreInt32(&conn.isConnected, 0)
@@ -220,7 +226,7 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 	length := CreateHeartbeat(buffer)
 	conn.lastHeartbeatSent = time.Now()
 
-	_, err := conn.conn.Write(buffer[:length])
+	_, err := conn.Write(buffer[:length])
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
 		atomic.StoreInt32(&conn.isConnected, 0)
@@ -415,13 +421,7 @@ func (f *ForwardComponent) SendPacket(packet *Packet, metadata any) error {
 		return nil // Connection isn't available, just skip
 	}
 
-	if f.sendTimeout > 0 {
-		if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
-		}
-	}
-
-	_, err := conn.conn.Write(packet.GetData())
+	_, err := conn.Write(packet.GetData())
 	if err != nil {
 		logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
 		atomic.StoreInt32(&conn.isConnected, 0)

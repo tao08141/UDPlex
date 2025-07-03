@@ -232,6 +232,13 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 				// Echo heartbeat back
 				responseBuffer := l.router.GetBuffer()
 				responseLen := CreateHeartbeat(responseBuffer)
+
+				if l.sendTimeout > 0 {
+					if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
+						logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+					}
+				}
+
 				l.conn.WriteTo(responseBuffer[:responseLen], addr)
 				l.router.PutBuffer(responseBuffer)
 

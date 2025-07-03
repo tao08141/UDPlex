@@ -144,11 +144,12 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 	}
 
 	ttc := &TcpTunnelConn{
-		conn:       conn,
-		authState:  &AuthState{},
-		poolID:     poolID,
-		forwardID:  f.forwardID,
-		lastActive: time.Now(),
+		conn:        conn,
+		authState:   &AuthState{},
+		poolID:      poolID,
+		forwardID:   f.forwardID,
+		lastActive:  time.Now(),
+		sendTimeout: f.sendTimeout,
 	}
 
 	buffer := f.router.GetBuffer()
@@ -203,13 +204,7 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 	length := CreateHeartbeat(buffer)
 	c.lastHeartbeatSent = time.Now()
 
-	if f.sendTimeout > 0 {
-		if err := c.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
-		}
-	}
-
-	_, err := c.conn.Write(buffer[:length])
+	_, err := c.Write(buffer[:length])
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
 		c.conn.Close()
@@ -326,22 +321,12 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 
 func (f *TcpTunnelForwardComponent) SendPacket(packet *Packet, metadata any) error {
 
-	conn, ok := metadata.(net.Conn)
+	c, ok := metadata.(*TcpTunnelConn)
 	if !ok {
 		return fmt.Errorf("%s: Invalid connection type", f.tag)
 	}
 
-	if conn == nil {
-		return fmt.Errorf("%s: Connection is nil", f.tag)
-	}
-
-	if f.sendTimeout > 0 {
-		if err := conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
-		}
-	}
-
-	_, err := conn.Write(packet.GetData())
+	_, err := c.Write(packet.GetData())
 	if err != nil {
 		logger.Infof("%s: Failed to send packet: %v", f.tag, err)
 		return err
@@ -363,7 +348,7 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 				continue
 			}
 
-			if err := f.router.SendPacket(f, packet, c.conn); err != nil {
+			if err := f.router.SendPacket(f, packet, c); err != nil {
 				logger.Infof("%s: Failed to send packet to %s: %v", f.tag, c.conn.RemoteAddr(), err)
 				continue
 			}

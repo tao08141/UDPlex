@@ -117,6 +117,21 @@ type TcpTunnelConn struct {
 
 	heartbeatMissCount int
 	lastHeartbeatSent  time.Time
+	sendTimeout        time.Duration
+}
+
+func (c *TcpTunnelConn) Write(data []byte) (int, error) {
+	if c.conn == nil {
+		return 0, net.ErrClosed
+	}
+
+	if c.sendTimeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(c.sendTimeout)); err != nil {
+			logger.Infof("Failed to set write deadline: %v", err)
+		}
+	}
+
+	return c.conn.Write(data)
 }
 
 type TcpTunnelComponent interface {
@@ -251,12 +266,7 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						if mode == TcpTunnelListenMode {
 							responseBuffer := t.GetRouter().GetBuffer()
 							length := CreateHeartbeat(responseBuffer)
-							if t.GetSendTimeout() > 0 {
-								if err := c.conn.SetWriteDeadline(time.Now().Add(t.GetSendTimeout())); err != nil {
-									logger.Infof("%s: Failed to set write deadline: %v", t.GetTag(), err)
-								}
-							}
-							c.conn.Write(responseBuffer[:length])
+							c.Write(responseBuffer[:length])
 							t.GetRouter().PutBuffer(responseBuffer)
 						} else if mode == TcpTunnelForwardMode {
 							c.heartbeatMissCount = 0

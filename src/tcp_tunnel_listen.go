@@ -98,11 +98,12 @@ func (l *TcpTunnelListenComponent) Start() error {
 
 			logger.Infof("%s: Accepted connection from %s", l.tag, conn.RemoteAddr())
 			c := &TcpTunnelConn{
-				forwardID:  ForwardID{},
-				poolID:     PoolID{},
-				conn:       conn,
-				authState:  &AuthState{},
-				lastActive: time.Now(),
+				forwardID:   ForwardID{},
+				poolID:      PoolID{},
+				conn:        conn,
+				authState:   &AuthState{},
+				lastActive:  time.Now(),
+				sendTimeout: l.sendTimeout,
 			}
 
 			if l.noDelay {
@@ -133,7 +134,7 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 					continue
 				}
 
-				if err := l.router.SendPacket(l, packet, c.conn); err != nil {
+				if err := l.router.SendPacket(l, packet, c); err != nil {
 					logger.Infof("%s: Failed to send packet to %s: %v", l.tag, c.conn.RemoteAddr(), err)
 					continue
 				}
@@ -145,22 +146,12 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 }
 
 func (l *TcpTunnelListenComponent) SendPacket(packet *Packet, metadata any) error {
-	conn, ok := metadata.(net.Conn)
+	c, ok := metadata.(*TcpTunnelConn)
 	if !ok {
 		return fmt.Errorf("%s: Invalid connection type", l.tag)
 	}
 
-	if conn == nil {
-		return fmt.Errorf("%s: Connection is nil", l.tag)
-	}
-
-	if l.sendTimeout > 0 {
-		if err := conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
-		}
-	}
-
-	_, err := conn.Write(packet.GetData())
+	_, err := c.Write(packet.GetData())
 	if err != nil {
 		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
 		return err
@@ -224,13 +215,7 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 		return err
 	}
 
-	if l.sendTimeout > 0 {
-		if err := c.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
-		}
-	}
-
-	if _, err := c.conn.Write(responseBuffer[:responseLen]); err != nil {
+	if _, err := c.Write(responseBuffer[:responseLen]); err != nil {
 		logger.Infof("%s: %s Failed to send auth response: %v", l.GetTag(), c.conn.RemoteAddr(), err)
 		l.GetRouter().PutBuffer(responseBuffer)
 		return fmt.Errorf("%s: Failed to send auth response: %v", l.GetTag(), err)
