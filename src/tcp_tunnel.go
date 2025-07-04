@@ -232,7 +232,6 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 
 func (c *TcpTunnelConn) readLoop(mode int) {
 	defer c.writeWg.Done()
-	c.authState.lastHeartbeat = time.Now()
 
 	// Buffer to accumulate incoming data
 	buffer := (*c.t).GetRouter().GetBuffer()
@@ -351,8 +350,6 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 
 						packet.Release(1)
 					} else if header.MsgType == MsgTypeHeartbeat {
-						c.authState.UpdateHeartbeat()
-
 						if mode == TcpTunnelListenMode {
 							packet := (*c.t).GetRouter().GetPacket((*c.t).GetTag())
 							length := CreateHeartbeat(packet.buffer[packet.offset:])

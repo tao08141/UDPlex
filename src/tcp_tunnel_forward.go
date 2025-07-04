@@ -285,7 +285,7 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 	}
 }
 func (l *TcpTunnelForwardComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {
-	c.authState.authenticated = 1
+	c.authState.SetAuthenticated(1)
 	return nil
 }
 

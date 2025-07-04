@@ -242,7 +242,7 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 	if conn.heartbeatMissCount >= 5 {
 		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.remoteAddr)
 		atomic.StoreInt32(&conn.isConnected, 0)
-		atomic.StoreInt32(&conn.authState.authenticated, 0)
+		conn.authState.SetAuthenticated(0)
 		conn.heartbeatMissCount = 0
 	}
 }
@@ -275,7 +275,7 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 	if f.authManager != nil {
 		go f.sendAuthChallenge(forwardConn)
 	} else {
-		atomic.StoreInt32(&forwardConn.authState.authenticated, 1)
+		forwardConn.authState.SetAuthenticated(1)
 	}
 
 	return forwardConn, nil
@@ -314,7 +314,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 	if f.authManager != nil {
 		go f.sendAuthChallenge(conn)
 	} else {
-		atomic.StoreInt32(&conn.authState.authenticated, 1)
+		conn.authState.SetAuthenticated(1)
 	}
 }
 
@@ -391,23 +391,19 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 		_, _, err := f.authManager.ProcessAuthChallenge(data, conn.authState)
 		if err != nil {
 			logger.Warnf("%s: Auth response verification failed: %v", f.tag, err)
-			atomic.StoreInt32(&conn.authState.authenticated, 0)
+			conn.authState.SetAuthenticated(0)
 			return
 		}
 
 		// Authentication successful
-		atomic.StoreInt32(&conn.authState.authenticated, 1)
+		conn.authState.SetAuthenticated(1)
 		conn.authRetryCount = 0
-		conn.authState.lastAuth = time.Now()
 
 		logger.Infof("%s: Authentication successful for %s", f.tag, conn.remoteAddr)
 
 	case MsgTypeHeartbeat:
 		// Reset heartbeat miss count
 		conn.heartbeatMissCount = 0
-		if conn.authState != nil {
-			conn.authState.UpdateHeartbeat()
-		}
 	}
 }
 

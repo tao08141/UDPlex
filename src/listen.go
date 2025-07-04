@@ -216,7 +216,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 			logger.Warnf("%s: Failed to send auth response: %v", l.tag, err)
 		}
 
-		atomic.StoreInt32(&mapping.authState.authenticated, 1)
+		mapping.authState.SetAuthenticated(1)
 
 		mapping.lastActive = time.Now()
 		logger.Infof("%s: Authentication successful for %s", l.tag, addr.String())
@@ -227,8 +227,6 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		if mapping, exists := l.mappings[addrKey]; exists {
 			mapping.lastActive = time.Now()
 			if mapping.authState != nil {
-				mapping.authState.UpdateHeartbeat()
-
 				// Echo heartbeat back
 				responseBuffer := l.router.GetBuffer()
 				responseLen := CreateHeartbeat(responseBuffer)

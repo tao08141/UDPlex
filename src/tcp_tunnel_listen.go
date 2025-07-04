@@ -224,7 +224,7 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 
 	l.connections.Store(newConnections)
 
-	atomic.StoreInt32(&c.authState.authenticated, 1)
+	c.authState.SetAuthenticated(1)
 
 	return nil
 }

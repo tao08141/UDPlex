@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -221,9 +222,6 @@ type ProtocolHeader struct {
 // AuthState represents the authentication state for a connection
 type AuthState struct {
 	authenticated int32 // 0 = not authenticated, 1 = authenticated
-	lastAuth      time.Time
-	lastHeartbeat time.Time
-	mu            sync.RWMutex
 }
 
 // AuthManager manages authentication and encryption
@@ -605,12 +603,9 @@ func (am *AuthManager) UnwrapData(packet *Packet) (*ProtocolHeader, error) {
 
 // IsAuthenticated checks if connection is authenticated
 func (authState *AuthState) IsAuthenticated() bool {
-	return authState.authenticated == 1
+	return atomic.LoadInt32(&authState.authenticated) != 0
 }
 
-// UpdateHeartbeat updates last heartbeat time
-func (authState *AuthState) UpdateHeartbeat() {
-	authState.mu.Lock()
-	authState.lastHeartbeat = time.Now()
-	authState.mu.Unlock()
+func (authState *AuthState) SetAuthenticated(authenticated int32) {
+	atomic.StoreInt32(&authState.authenticated, authenticated)
 }
