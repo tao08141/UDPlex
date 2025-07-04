@@ -55,3 +55,18 @@ type LoggingConfig struct {
 	OutputPath string `json:"output_path"` // file path or "stdout"
 	Caller     bool   `json:"caller"`      // include caller information
 }
+
+// LoadBalancerDetourRule represents a single detour rule for load balancer
+type LoadBalancerDetourRule struct {
+	Rule   string `json:"rule"`   // Expression rule for matching
+	Target string `json:"target"` // Target component tag
+}
+
+// LoadBalancerComponentConfig represents the configuration for a load balancer component
+type LoadBalancerComponentConfig struct {
+	Type           string                   `json:"type"`
+	Tag            string                   `json:"tag"`
+	Detour         []LoadBalancerDetourRule `json:"detour"`
+	SampleInterval string                   `json:"sample_interval"` // e.g., "1s", "5s"
+	WindowSize     string                   `json:"window_size"`     // e.g., "1s", "1m", "5m", "1h"
+}

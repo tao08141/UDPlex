@@ -164,6 +164,19 @@ func main() {
 			}
 			component = NewFilterComponent(cfg, router, protocolDetector)
 
+		case "load_balancer":
+			var cfg LoadBalancerComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal load_balancer config: %v", err)
+				continue
+			}
+			var err error
+			component, err = NewLoadBalancerComponent(cfg, router)
+			if err != nil {
+				logger.Warnf("Failed to create load_balancer component: %v", err)
+				continue
+			}
+
 		case "tcp_tunnel_listen":
 			var cfg ComponentConfig
 			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
