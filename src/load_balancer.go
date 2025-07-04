@@ -7,7 +7,7 @@ import (
 	"go/token"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,52 +20,32 @@ type TrafficSample struct {
 // TrafficStats holds traffic statistics using sliding window
 type TrafficStats struct {
 	samples        []TrafficSample // Ring buffer for samples
-	currentIndex   int             // Current position in ring buffer
-	windowCount    int             // Number of samples in window
-	currentBytes   uint64          // Bytes accumulated in current sample period
-	currentPackets uint64          // Packets accumulated in current sample period
-	mutex          sync.RWMutex
+	currentIndex   uint32          // Current position in ring buffer
+	windowSize     uint32          // Number of samples in window
+	currentBytes   uint64          // Bytes accumulated in current sample period (atomic)
+	currentPackets uint64          // Packets accumulated in current sample period (atomic)
+	totalBytes     uint64          // totalBytes represents the cumulative count of bytes processed across all samples in the traffic statistics.
+	totalPackets   uint64          // totalPackets represents the cumulative count of packets processed across all samples in the traffic statistics.
 }
 
 // LoadBalancerComponent implements intelligent packet distribution based on traffic and rules
 type LoadBalancerComponent struct {
 	BaseComponent
-	detour         []LoadBalancerDetourRule
-	sampleInterval time.Duration
-	windowSize     time.Duration
-	stats          *TrafficStats
-	packetSeq      uint64
-	mutex          sync.RWMutex
+	detour     []LoadBalancerDetourRule
+	windowSize uint32
+	stats      *TrafficStats
+	packetSeq  uint64 // Atomic counter for packet sequence
 }
 
 // NewLoadBalancerComponent creates a new load balancer component
 func NewLoadBalancerComponent(cfg LoadBalancerComponentConfig, router *Router) (*LoadBalancerComponent, error) {
-	// Parse sample interval
-	sampleInterval, err := time.ParseDuration(cfg.SampleInterval)
-	if err != nil {
-		return nil, fmt.Errorf("invalid sample_interval: %w", err)
-	}
-
-	// Parse window size
-	windowSize, err := time.ParseDuration(cfg.WindowSize)
-	if err != nil {
-		return nil, fmt.Errorf("invalid window_size: %w", err)
-	}
-
-	// Calculate number of samples needed for the window
-	windowCount := int(windowSize / sampleInterval)
-	if windowCount < 1 {
-		windowCount = 1
-	}
 
 	lb := &LoadBalancerComponent{
-		BaseComponent:  NewBaseComponent(cfg.Tag, router, 0),
-		detour:         cfg.Detour,
-		sampleInterval: sampleInterval,
-		windowSize:     windowSize,
+		BaseComponent: NewBaseComponent(cfg.Tag, router, 0),
+		detour:        cfg.Detour,
 		stats: &TrafficStats{
-			samples:     make([]TrafficSample, windowCount),
-			windowCount: windowCount,
+			samples:    make([]TrafficSample, cfg.WindowSize),
+			windowSize: cfg.WindowSize,
 		},
 		packetSeq: 0,
 	}
@@ -108,11 +88,8 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 	// Get current stats for rule evaluation
 	bps, pps := lb.getCurrentStats()
 
-	// Increment packet sequence
-	lb.mutex.Lock()
-	lb.packetSeq++
-	seq := lb.packetSeq
-	lb.mutex.Unlock()
+	// Increment packet sequence atomically
+	seq := atomic.AddUint64(&lb.packetSeq, 1)
 
 	// Evaluate detour rules to find matching target
 	target := lb.evaluateRules(seq, bps, pps)
@@ -130,57 +107,27 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 
 // updateStats updates traffic statistics with the current packet
 func (lb *LoadBalancerComponent) updateStats(packet *Packet) {
-	lb.stats.mutex.Lock()
-	defer lb.stats.mutex.Unlock()
-
-	lb.stats.currentBytes += uint64(len(packet.GetData()))
-	lb.stats.currentPackets++
+	atomic.AddUint64(&lb.stats.currentBytes, uint64(len(packet.GetData())))
+	atomic.AddUint64(&lb.stats.currentPackets, 1)
 }
 
 // getCurrentStats returns average BPS and PPS values across the window
 func (lb *LoadBalancerComponent) getCurrentStats() (uint64, uint64) {
-	lb.stats.mutex.RLock()
-	defer lb.stats.mutex.RUnlock()
-
 	var totalBytes, totalPackets uint64
-	sampleCount := 0
 
-	// Sum up all samples in the window
-	for i := 0; i < lb.stats.windowCount; i++ {
-		sample := lb.stats.samples[i]
-		if sample.Bytes > 0 || sample.Packets > 0 {
-			totalBytes += sample.Bytes
-			totalPackets += sample.Packets
-			sampleCount++
-		}
-	}
+	totalBytes += atomic.LoadUint64(&lb.stats.totalBytes) + atomic.LoadUint64(&lb.stats.currentBytes)
+	totalPackets += atomic.LoadUint64(&lb.stats.totalPackets) + atomic.LoadUint64(&lb.stats.currentPackets)
 
-	// Add current accumulating sample
-	totalBytes += lb.stats.currentBytes
-	totalPackets += lb.stats.currentPackets
-	if lb.stats.currentBytes > 0 || lb.stats.currentPackets > 0 {
-		sampleCount++
-	}
-
-	// Calculate average per sample interval
-	if sampleCount == 0 {
-		return 0, 0
-	}
-
-	avgBytesPerInterval := totalBytes / uint64(sampleCount)
-	avgPacketsPerInterval := totalPackets / uint64(sampleCount)
-
-	// Convert to per-second rates
-	intervalSeconds := lb.sampleInterval.Seconds()
-	bps := uint64(float64(avgBytesPerInterval) / intervalSeconds)
-	pps := uint64(float64(avgPacketsPerInterval) / intervalSeconds)
+	sampleCount := lb.stats.windowSize + 1
+	bps := totalBytes / uint64(sampleCount)
+	pps := totalPackets / uint64(sampleCount)
 
 	return bps, pps
 }
 
 // statsSampler periodically samples statistics based on sample interval
 func (lb *LoadBalancerComponent) statsSampler() {
-	ticker := time.NewTicker(lb.sampleInterval)
+	ticker := time.NewTicker(time.Second) // Sample every second
 	defer ticker.Stop()
 
 	for {
@@ -195,21 +142,24 @@ func (lb *LoadBalancerComponent) statsSampler() {
 
 // sampleStats moves current accumulated stats to the sample window
 func (lb *LoadBalancerComponent) sampleStats() {
-	lb.stats.mutex.Lock()
-	defer lb.stats.mutex.Unlock()
+	// Atomically swap current counters to get snapshot and reset
+	currentBytes := atomic.SwapUint64(&lb.stats.currentBytes, 0)
+	currentPackets := atomic.SwapUint64(&lb.stats.currentPackets, 0)
 
-	// Store current sample in ring buffer
-	lb.stats.samples[lb.stats.currentIndex] = TrafficSample{
-		Bytes:   lb.stats.currentBytes,
-		Packets: lb.stats.currentPackets,
+	// Get current index atomically and increment
+	currentIndex := atomic.AddUint32(&lb.stats.currentIndex, 1) % uint32(lb.stats.windowSize)
+
+	atomic.AddUint64(&lb.stats.totalBytes, currentBytes)
+	atomic.AddUint64(&lb.stats.totalPackets, currentPackets)
+
+	atomic.AddUint64(&lb.stats.totalBytes, -lb.stats.samples[currentIndex].Bytes)
+	atomic.AddUint64(&lb.stats.totalPackets, -lb.stats.samples[currentIndex].Packets)
+
+	// Store sample in ring buffer
+	lb.stats.samples[currentIndex] = TrafficSample{
+		Bytes:   currentBytes,
+		Packets: currentPackets,
 	}
-
-	// Move to next position in ring buffer
-	lb.stats.currentIndex = (lb.stats.currentIndex + 1) % lb.stats.windowCount
-
-	// Reset current accumulators
-	lb.stats.currentBytes = 0
-	lb.stats.currentPackets = 0
 }
 
 // evaluateRules evaluates all detour rules and returns the target for the first matching rule

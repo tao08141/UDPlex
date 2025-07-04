@@ -64,9 +64,8 @@ type LoadBalancerDetourRule struct {
 
 // LoadBalancerComponentConfig represents the configuration for a load balancer component
 type LoadBalancerComponentConfig struct {
-	Type           string                   `json:"type"`
-	Tag            string                   `json:"tag"`
-	Detour         []LoadBalancerDetourRule `json:"detour"`
-	SampleInterval string                   `json:"sample_interval"` // e.g., "1s", "5s"
-	WindowSize     string                   `json:"window_size"`     // e.g., "1s", "1m", "5m", "1h"
+	Type       string                   `json:"type"`
+	Tag        string                   `json:"tag"`
+	Detour     []LoadBalancerDetourRule `json:"detour"`
+	WindowSize uint32                   `json:"window_size"`
 }

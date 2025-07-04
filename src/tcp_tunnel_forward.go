@@ -90,7 +90,9 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 
 func (f *TcpTunnelForwardComponent) Start() error {
 	if len(f.pools) == 0 {
-		logger.Warnf("%s: No forwarders configured, skipping start", f.tag)
+		err := fmt.Errorf("%s: No forwarders configured", f.tag)
+		logger.Warn(err)
+		return err
 	}
 
 	if f.authManager == nil {
