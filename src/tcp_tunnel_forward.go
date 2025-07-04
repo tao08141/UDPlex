@@ -308,6 +308,7 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 
 func (f *TcpTunnelForwardComponent) SendPacket(packet *Packet, metadata any) error {
 
+	// Due to the nature of TCP streams, adding send tasks to queue processing would cause packet reordering or queue blocking
 	return nil
 }
 

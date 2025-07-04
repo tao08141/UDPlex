@@ -141,6 +141,7 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 
 func (l *TcpTunnelListenComponent) SendPacket(packet *Packet, metadata any) error {
 
+	// Due to the nature of TCP streams, adding send tasks to queue processing would cause packet reordering or queue blocking
 	return nil
 }
 

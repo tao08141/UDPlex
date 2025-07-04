@@ -229,6 +229,7 @@ docker-compose down
 - [X] Support authentication, encryption, deduplication, and other features
 - [X] Support UDP Over TCP forwarding
 - [ ] Support more complex load balancing algorithms
+- [ ] RESTful API interface
 
 ## Use Cases
 - Game acceleration: Forward game traffic to multiple servers simultaneously, selecting the fastest response
