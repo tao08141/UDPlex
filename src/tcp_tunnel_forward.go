@@ -143,40 +143,27 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 		}
 	}
 
-	ttc := &TcpTunnelConn{
-		conn:        conn,
-		authState:   &AuthState{},
-		poolID:      poolID,
-		forwardID:   f.forwardID,
-		lastActive:  time.Now(),
-		sendTimeout: f.sendTimeout,
-	}
+	ttc := NewTcpTunnelConn(conn, f.forwardID, poolID, f, f.router.config.QueueSize, TcpTunnelForwardMode)
 
-	buffer := f.router.GetBuffer()
-	defer f.router.PutBuffer(buffer)
+	packet := f.router.GetPacket(f.GetTag())
 
-	length, err := f.authManager.CreateAuthChallenge(buffer, MsgTypeAuthChallenge, f.forwardID, poolID)
+	length, err := f.authManager.CreateAuthChallenge(packet.buffer[packet.offset:], MsgTypeAuthChallenge, f.forwardID, poolID)
 	if err != nil {
 		logger.Warnf("%s: Failed to create auth challenge: %v", f.tag, err)
-		conn.Close()
+		ttc.Close()
+		packet.Release(1)
 		return nil, err
 	}
 
-	if f.sendTimeout > 0 {
-		if err := conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", f.tag, err)
-		}
-	}
+	packet.length = length
 
-	_, err = conn.Write(buffer[:length])
-
+	err = ttc.Write(&packet)
 	if err != nil {
 		logger.Warnf("%s: Failed to send auth challenge to %s: %v", f.tag, addr, err)
-		conn.Close()
+		ttc.Close()
+		packet.Release(1)
 		return nil, err
 	}
-
-	go TcpTunnelLoopRead(ttc, f, TcpTunnelForwardMode)
 
 	return ttc, nil
 }
@@ -198,13 +185,13 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 		return
 	}
 
-	buffer := f.router.GetBuffer()
-	defer f.router.PutBuffer(buffer)
+	packet := f.router.GetPacket(f.GetTag())
 
-	length := CreateHeartbeat(buffer)
+	length := CreateHeartbeat(packet.buffer[packet.offset:])
 	c.lastHeartbeatSent = time.Now()
+	packet.length = length
 
-	_, err := c.Write(buffer[:length])
+	err := c.Write(&packet)
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
 		c.conn.Close()
@@ -309,7 +296,7 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 
 	logger.Infof("%s: Disconnecting %s", f.tag, c.conn.RemoteAddr())
 
-	defer c.conn.Close()
+	defer c.Close()
 
 	if _, exists := f.pools[c.poolID]; !exists {
 		logger.Warnf("%s: Pool %x does not exist, cannot remove connection", f.tag, c.poolID)
@@ -321,17 +308,7 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 
 func (f *TcpTunnelForwardComponent) SendPacket(packet *Packet, metadata any) error {
 
-	c, ok := metadata.(*TcpTunnelConn)
-	if !ok {
-		return fmt.Errorf("%s: Invalid connection type", f.tag)
-	}
-
-	_, err := c.Write(packet.GetData())
-	if err != nil {
-		logger.Infof("%s: Failed to send packet: %v", f.tag, err)
-		return err
-	}
-	return err
+	return nil
 }
 
 func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
@@ -340,7 +317,6 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	f.authManager.WrapData(packet)
 
 	if f.broadcastMode {
-
 		for _, pool := range f.pools {
 			c := pool.GetNextConn()
 			if c == nil {
@@ -348,7 +324,9 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 				continue
 			}
 
-			if err := f.router.SendPacket(f, packet, c); err != nil {
+			packet.AddRef(1)
+			if err := c.Write(packet); err != nil {
+				packet.Release(1)
 				logger.Infof("%s: Failed to send packet to %s: %v", f.tag, c.conn.RemoteAddr(), err)
 				continue
 			}

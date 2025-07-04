@@ -97,14 +97,7 @@ func (l *TcpTunnelListenComponent) Start() error {
 			}
 
 			logger.Infof("%s: Accepted connection from %s", l.tag, conn.RemoteAddr())
-			c := &TcpTunnelConn{
-				forwardID:   ForwardID{},
-				poolID:      PoolID{},
-				conn:        conn,
-				authState:   &AuthState{},
-				lastActive:  time.Now(),
-				sendTimeout: l.sendTimeout,
-			}
+			NewTcpTunnelConn(conn, ForwardID{}, PoolID{}, l, l.router.config.QueueSize, TcpTunnelListenMode)
 
 			if l.noDelay {
 				if tcpConn, ok := conn.(*net.TCPConn); ok {
@@ -112,7 +105,6 @@ func (l *TcpTunnelListenComponent) Start() error {
 				}
 			}
 
-			go TcpTunnelLoopRead(c, l, TcpTunnelListenMode)
 		}
 	}()
 	return nil
@@ -130,11 +122,13 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 				c := pool.GetNextConn()
 
 				if c == nil {
-					logger.Infof("%s: No available connections in pool %s", l.tag, pool.remoteAddr)
+					logger.Debugf("%s: No available connections in pool %s", l.tag, pool.remoteAddr)
 					continue
 				}
 
-				if err := l.router.SendPacket(l, packet, c); err != nil {
+				packet.AddRef(1)
+				if err := c.Write(packet); err != nil {
+					packet.Release(1)
 					logger.Infof("%s: Failed to send packet to %s: %v", l.tag, c.conn.RemoteAddr(), err)
 					continue
 				}
@@ -146,16 +140,6 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 }
 
 func (l *TcpTunnelListenComponent) SendPacket(packet *Packet, metadata any) error {
-	c, ok := metadata.(*TcpTunnelConn)
-	if !ok {
-		return fmt.Errorf("%s: Invalid connection type", l.tag)
-	}
-
-	_, err := c.Write(packet.GetData())
-	if err != nil {
-		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
-		return err
-	}
 
 	return nil
 }
@@ -201,23 +185,25 @@ func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
 	}
 
 	if c != nil {
-		c.conn.Close()
+		c.Close()
 		c = nil
 	}
 }
 
 func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {
-	responseBuffer := l.GetRouter().GetBuffer()
-	responseLen, err := l.GetAuthManager().CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, c.forwardID, c.poolID)
+	packet := l.GetRouter().GetPacket(l.GetTag())
+
+	responseLen, err := l.GetAuthManager().CreateAuthChallenge(packet.buffer[packet.offset:], MsgTypeAuthResponse, c.forwardID, c.poolID)
 	if err != nil {
 		logger.Warnf("%s: Failed to create auth challenge response: %v", l.GetTag(), err)
-		l.GetRouter().PutBuffer(responseBuffer)
+		packet.Release(1)
 		return err
 	}
+	packet.length = responseLen
 
-	if _, err := c.Write(responseBuffer[:responseLen]); err != nil {
+	if err := c.Write(&packet); err != nil {
 		logger.Infof("%s: %s Failed to send auth response: %v", l.GetTag(), c.conn.RemoteAddr(), err)
-		l.GetRouter().PutBuffer(responseBuffer)
+		packet.Release(1)
 		return fmt.Errorf("%s: Failed to send auth response: %v", l.GetTag(), err)
 	}
 
@@ -238,7 +224,6 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 
 	l.connections.Store(newConnections)
 
-	l.GetRouter().PutBuffer(responseBuffer)
 	atomic.StoreInt32(&c.authState.authenticated, 1)
 
 	return nil

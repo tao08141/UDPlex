@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -112,35 +113,52 @@ type TcpTunnelConn struct {
 	forwardID  ForwardID
 	poolID     PoolID
 	conn       net.Conn
+	t          *TcpTunnelComponent
 	authState  *AuthState
 	lastActive time.Time
 
 	heartbeatMissCount int
 	lastHeartbeatSent  time.Time
-	sendTimeout        time.Duration
+
+	writeQueue chan *Packet
+	writeWg    sync.WaitGroup
+	closed     chan struct{}
+	closeOnce  sync.Once
 }
 
-func (c *TcpTunnelConn) Write(data []byte) (int, error) {
-	if c.conn == nil {
-		return 0, net.ErrClosed
+func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, queueSize int, mode int) *TcpTunnelConn {
+	c := &TcpTunnelConn{
+		forwardID:  forwardID,
+		poolID:     poolID,
+		conn:       conn,
+		authState:  &AuthState{},
+		lastActive: time.Now(),
+		writeQueue: make(chan *Packet, queueSize), // Buffered channel for write queue
+		closed:     make(chan struct{}),
+		closeOnce:  sync.Once{},
+		writeWg:    sync.WaitGroup{},
+		t:          &t,
 	}
 
-	// Ensure all data is written
-	totalWritten := 0
-	for totalWritten < len(data) {
-		if c.sendTimeout > 0 {
-			if err := c.conn.SetWriteDeadline(time.Now().Add(c.sendTimeout)); err != nil {
-				logger.Infof("Failed to set write deadline: %v", err)
-			}
-		}
-		n, err := c.conn.Write(data[totalWritten:])
-		if err != nil {
-			return totalWritten, err
-		}
-		totalWritten += n
-	}
+	// Start write goroutine
+	c.writeWg.Add(1)
+	go c.writeLoop()
+	c.writeWg.Add(1)
+	go c.readLoop(mode)
 
-	return totalWritten, nil
+	return c
+}
+
+func (c *TcpTunnelConn) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.closed)
+		close(c.writeQueue)
+		c.writeWg.Wait() // Wait for write goroutine to finish
+		if c.conn != nil {
+			c.conn.Close()
+		}
+	})
+	return nil
 }
 
 type TcpTunnelComponent interface {
@@ -154,41 +172,104 @@ type TcpTunnelComponent interface {
 	GetSendTimeout() time.Duration
 }
 
-func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
+func (c *TcpTunnelConn) writeLoop() {
+	defer c.writeWg.Done()
+	defer c.Close()
+
+	for {
+		select {
+		case <-c.closed:
+			logger.Infof("Write loop for %s closed", c.conn.RemoteAddr())
+			return
+		case <-(*c.t).GetStopChannel():
+			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
+			return
+		case packet := <-c.writeQueue:
+			if c.conn == nil {
+				packet.Release(1)
+				return
+			}
+
+			// Ensure all data is written
+			totalWritten := 0
+			for totalWritten < packet.length {
+				if (*c.t).GetSendTimeout() > 0 {
+					if err := c.conn.SetWriteDeadline(time.Now().Add((*c.t).GetSendTimeout())); err != nil {
+						logger.Infof("Failed to set write deadline: %v", err)
+						packet.Release(1)
+						return
+					}
+				}
+
+				n, err := c.conn.Write(packet.GetData()[totalWritten:])
+				if err != nil {
+					logger.Infof("Write error: %v", err)
+					packet.Release(1)
+					return
+				}
+				totalWritten += n
+			}
+
+			packet.Release(1)
+		}
+	}
+}
+
+func (c *TcpTunnelConn) Write(packet *Packet) error {
+
+	if c.conn == nil {
+		return net.ErrClosed
+	}
+
+	select {
+	case c.writeQueue <- packet:
+		return nil
+	default:
+		// Queue is full, drop the packet or handle error
+		return net.ErrClosed
+	}
+}
+
+func (c *TcpTunnelConn) readLoop(mode int) {
+	defer c.writeWg.Done()
 	c.authState.lastHeartbeat = time.Now()
 
 	// Buffer to accumulate incoming data
-	buffer := t.GetRouter().GetBuffer()
+	buffer := (*c.t).GetRouter().GetBuffer()
 
 	defer func() {
 		if buffer != nil {
-			t.GetRouter().PutBuffer(buffer)
+			(*c.t).GetRouter().PutBuffer(buffer)
 		}
 	}()
 
-	defer t.Disconnect(c)
+	defer c.Close()
+	defer (*c.t).Disconnect(c)
 	bufferUsed := 0
-	bufferOffset := t.GetRouter().config.BufferOffset
+	bufferOffset := (*c.t).GetRouter().config.BufferOffset
 
 	expectedTotalSize := 0
 
 	for {
 		select {
-		case <-t.GetStopChannel():
-			logger.Infof("%s: Stopping connection handling for %s", t.GetTag(), c.conn.RemoteAddr())
+		case <-c.closed:
+			logger.Infof("Read loop for %s closed", c.conn.RemoteAddr())
+			return
+		case <-(*c.t).GetStopChannel():
+			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
 			return
 		default:
 			if c.authState.IsAuthenticated() {
-				c.conn.SetReadDeadline(time.Now().Add(t.GetAuthManager().dataTimeout))
+				c.conn.SetReadDeadline(time.Now().Add((*c.t).GetAuthManager().dataTimeout))
 			} else {
-				c.conn.SetReadDeadline(time.Now().Add(t.GetAuthManager().authTimeout))
+				c.conn.SetReadDeadline(time.Now().Add((*c.t).GetAuthManager().authTimeout))
 			}
 
 			// Calculate read size based on whether we have partial message
 			readSize := len(buffer) - (bufferOffset + bufferUsed)
 
 			if readSize <= 0 {
-				logger.Infof("%s: %s Buffer full, processing messages", t.GetTag(), c.conn.RemoteAddr())
+				logger.Infof("%s: %s Buffer full, processing messages", (*c.t).GetTag(), c.conn.RemoteAddr())
 				return
 			}
 
@@ -202,7 +283,7 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 
 			n, err := c.conn.Read(buffer[bufferOffset+bufferUsed : bufferOffset+bufferUsed+readSize])
 			if err != nil {
-				logger.Infof("%s: %s Read error: %v", t.GetTag(), c.conn.RemoteAddr(), err)
+				logger.Infof("%s: %s Read error: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 				return
 			}
 
@@ -219,18 +300,18 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 				// Parse header
 				header, err := ParseHeader(buffer[bufferOffset+processedBytes:])
 				if err != nil {
-					logger.Infof("%s: %s Invalid header: %v", t.GetTag(), c.conn.RemoteAddr(), err)
+					logger.Infof("%s: %s Invalid header: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 					return
 				}
 
 				if c.authState.IsAuthenticated() {
-					if header.Length > uint32(t.GetRouter().config.BufferSize) {
-						logger.Infof("%s: %s Message size %d exceeds maximum allowed size %d", t.GetTag(), c.conn.RemoteAddr(), header.Length, t.GetRouter().config.BufferSize)
+					if header.Length > uint32((*c.t).GetRouter().config.BufferSize) {
+						logger.Infof("%s: %s Message size %d exceeds maximum allowed size %d", (*c.t).GetTag(), c.conn.RemoteAddr(), header.Length, (*c.t).GetRouter().config.BufferSize)
 						return
 					}
 				} else {
 					if header.Length != HandshakeSize {
-						logger.Infof("%s: %s Received unexpected message size %d before authentication", t.GetTag(), c.conn.RemoteAddr(), header.Length)
+						logger.Infof("%s: %s Received unexpected message size %d before authentication", (*c.t).GetTag(), c.conn.RemoteAddr(), header.Length)
 						return
 					}
 				}
@@ -250,21 +331,21 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						var packet Packet
 
 						if bufferUsed-processedBytes == expectedTotalSize {
-							packet = t.GetRouter().GetPacketWithBuffer(t.GetTag(), buffer, bufferOffset+processedBytes)
+							packet = (*c.t).GetRouter().GetPacketWithBuffer((*c.t).GetTag(), buffer, bufferOffset+processedBytes)
 							packet.length = expectedTotalSize
-							buffer = t.GetRouter().GetBuffer()
+							buffer = (*c.t).GetRouter().GetBuffer()
 						} else {
-							packet = t.GetRouter().GetPacket(t.GetTag())
+							packet = (*c.t).GetRouter().GetPacket((*c.t).GetTag())
 							packet.length = expectedTotalSize
 							copy(packet.buffer[packet.offset:], messageBuffer)
 						}
 
-						_, err := t.GetAuthManager().UnwrapData(&packet)
+						_, err := (*c.t).GetAuthManager().UnwrapData(&packet)
 						if err == nil {
-							t.GetRouter().Route(&packet, t.GetDetour())
+							(*c.t).GetRouter().Route(&packet, (*c.t).GetDetour())
 						} else {
 							if err.Error() != "duplicate packet detected" {
-								logger.Infof("%s: %s Failed to unwrap data: %v", t.GetTag(), c.conn.RemoteAddr(), err)
+								logger.Infof("%s: %s Failed to unwrap data: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 							}
 						}
 
@@ -273,41 +354,41 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 						c.authState.UpdateHeartbeat()
 
 						if mode == TcpTunnelListenMode {
-							responseBuffer := t.GetRouter().GetBuffer()
-							length := CreateHeartbeat(responseBuffer)
-							c.Write(responseBuffer[:length])
-							t.GetRouter().PutBuffer(responseBuffer)
+							packet := (*c.t).GetRouter().GetPacket((*c.t).GetTag())
+							length := CreateHeartbeat(packet.buffer[packet.offset:])
+							packet.length = length
+							c.Write(&packet)
 						} else if mode == TcpTunnelForwardMode {
 							c.heartbeatMissCount = 0
 						}
 					} else if header.MsgType == MsgTypeDisconnect {
-						logger.Infof("%s: %s Client requested disconnect", t.GetTag(), c.conn.RemoteAddr())
+						logger.Infof("%s: %s Client requested disconnect", (*c.t).GetTag(), c.conn.RemoteAddr())
 						return
 					}
 				} else {
 					// Handle authentication
 					if (mode == TcpTunnelListenMode && header.MsgType == MsgTypeAuthChallenge) || (mode == TcpTunnelForwardMode && header.MsgType == MsgTypeAuthResponse) {
 						data := messageBuffer[HeaderSize:expectedTotalSize]
-						forwardID, poolID, err := t.GetAuthManager().ProcessAuthChallenge(data, c.authState)
+						forwardID, poolID, err := (*c.t).GetAuthManager().ProcessAuthChallenge(data, c.authState)
 						if err != nil {
-							logger.Infof("%s: %s Failed to process auth challenge: %v", t.GetTag(), c.conn.RemoteAddr(), err)
+							logger.Infof("%s: %s Failed to process auth challenge: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 							return
 						}
 
 						c.forwardID = forwardID
 						c.poolID = poolID
 
-						err = t.HandleAuthenticatedConnection(c)
+						err = (*c.t).HandleAuthenticatedConnection(c)
 
 						if err != nil {
-							logger.Infof("%s: %s Failed to handle authenticated connection: %v", t.GetTag(), c.conn.RemoteAddr(), err)
+							logger.Infof("%s: %s Failed to handle authenticated connection: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 							return
 						}
 
-						logger.Infof("%s: %s Authentication successful, forwardID: %x, poolID: %x", t.GetTag(), c.conn.RemoteAddr(), c.forwardID, c.poolID)
+						logger.Infof("%s: %s Authentication successful, forwardID: %x, poolID: %x", (*c.t).GetTag(), c.conn.RemoteAddr(), c.forwardID, c.poolID)
 
 					} else {
-						logger.Infof("%s: %s Received unexpected message type %d before authentication", t.GetTag(), c.conn.RemoteAddr(), header.MsgType)
+						logger.Infof("%s: %s Received unexpected message type %d before authentication", (*c.t).GetTag(), c.conn.RemoteAddr(), header.MsgType)
 						return
 					}
 				}
@@ -326,7 +407,7 @@ func TcpTunnelLoopRead(c *TcpTunnelConn, t TcpTunnelComponent, mode int) {
 
 			// Check if buffer is full but we couldn't process anything - likely a malformed packet
 			if bufferUsed == len(buffer[bufferOffset:]) && processedBytes == 0 {
-				logger.Infof("%s: %s Buffer full but no complete message, likely malformed data", t.GetTag(), c.conn.RemoteAddr())
+				logger.Infof("%s: %s Buffer full but no complete message, likely malformed data", (*c.t).GetTag(), c.conn.RemoteAddr())
 				return
 			}
 		}
