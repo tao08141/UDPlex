@@ -56,6 +56,7 @@ type routeTask struct {
 type Router struct {
 	components     map[string]Component
 	bufferPool     sync.Pool
+	bufferRefCount int32
 	config         Config
 	routeTasks     chan routeTask
 	sendTasks      chan sendTask
@@ -202,6 +203,7 @@ func (r *Router) SendPacket(component Component, packet *Packet, metadata any) e
 
 // GetBuffer retrieves a buffer from the pool
 func (r *Router) GetBuffer() []byte {
+	r.incrementBufferRef()
 	return *(r.bufferPool.Get().(*[]byte))
 }
 
@@ -235,6 +237,9 @@ func (r *Router) GetPacketWithBuffer(srcTag string, buf []byte, offset int) Pack
 func (r *Router) PutBuffer(buf []byte) {
 	buf = buf[:r.config.BufferSize+r.config.BufferOffset]
 	r.bufferPool.Put(&buf)
+
+	r.decrementBufferRef()
+	r.logBufferRef()
 }
 
 // Register adds a component to the router
