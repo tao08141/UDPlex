@@ -58,8 +58,8 @@ type LoggingConfig struct {
 
 // LoadBalancerDetourRule represents a single detour rule for load balancer
 type LoadBalancerDetourRule struct {
-	Rule   string `json:"rule"`   // Expression rule for matching
-	Target string `json:"target"` // Target component tag
+	Rule    string   `json:"rule"`    // Expression rule for matching
+	Targets []string `json:"targets"` // Target component tags (array)
 }
 
 // LoadBalancerComponentConfig represents the configuration for a load balancer component

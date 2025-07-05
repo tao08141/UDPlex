@@ -36,7 +36,7 @@
 | 参数       | 说明              |
 |----------|-----------------|
 | `rule`   | 转发规则，详情参考`匹配规则` |
-| `target` | 转发目标tag         |
+| `target` | 转发目标tag，数组，可多个  |
 
 
 为了全面描述匹配规则支持运算表达式且结论为非零即成立的功能，以及流量转发的流量均衡策略，我可以帮你完善文档中的“匹配规则”部分，确保内容更清晰、更详细。以下是建议的补充内容：
@@ -107,19 +107,19 @@
             "type": "load_balancer",
             "tag": "load_balancer",
             "sample_interval": "1s",
-            "window_size": "10s",
+            "window_size": 10,
             "detour": [
                 {
                     "rule": "$seq % 3 == 0",
-                    "target": "server1"
+                    "target": ["server1"]
                 },
                 {
                     "rule": "$seq % 3 == 1", 
-                    "target": "server2"
+                    "target": ["server2"]
                 },
                 {
                     "rule": "$seq % 3 == 2 || $pps > 1000",
-                    "target": "server3"
+                    "target": ["server3"]
                 }
             ]
         },

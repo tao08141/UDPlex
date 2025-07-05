@@ -43,7 +43,7 @@ type LoadBalancerComponent struct {
 	stats           *TrafficStats
 	packetSeq       uint64                         // Atomic counter for packet sequence
 	compiledRules   []CompiledExpression           // Pre-compiled expressions
-	ruleTargets     []string                       // Corresponding targets for each rule
+	ruleTargets     [][]string                     // Corresponding targets for each rule (array of arrays)
 	compileOnce     sync.Once                      // Ensure rules are compiled only once
 	expressionCache map[string]*CompiledExpression // Cache for compiled expressions
 	cacheMutex      sync.RWMutex                   // Mutex for cache access
@@ -89,7 +89,7 @@ func (lb *LoadBalancerComponent) Start() error {
 // precompileRules compiles all detour rules into AST for faster evaluation
 func (lb *LoadBalancerComponent) precompileRules() error {
 	lb.compiledRules = make([]CompiledExpression, len(lb.detour))
-	lb.ruleTargets = make([]string, len(lb.detour))
+	lb.ruleTargets = make([][]string, len(lb.detour))
 
 	for i, rule := range lb.detour {
 		compiled, err := lb.compileExpression(rule.Rule)
@@ -97,7 +97,7 @@ func (lb *LoadBalancerComponent) precompileRules() error {
 			return fmt.Errorf("failed to compile rule %d (%s): %w", i, rule.Rule, err)
 		}
 		lb.compiledRules[i] = *compiled
-		lb.ruleTargets[i] = rule.Target
+		lb.ruleTargets[i] = rule.Targets
 	}
 
 	return nil
@@ -178,14 +178,14 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 	// Increment packet sequence atomically
 	seq := atomic.AddUint64(&lb.packetSeq, 1)
 
-	// Evaluate detour rules to find matching target
-	target := lb.evaluateCompiledRules(seq, bps, pps)
-	if target == "" {
+	// Evaluate detour rules to find matching targets
+	targets := lb.evaluateCompiledRules(seq, bps, pps)
+	if len(targets) == 0 {
 		return fmt.Errorf("%s: No matching rule found for packet", lb.tag)
 	}
 
-	// Route packet to the determined target
-	if err := lb.router.Route(packet, []string{target}); err != nil {
+	// Route packet to all determined targets
+	if err := lb.router.Route(packet, targets); err != nil {
 		return fmt.Errorf("routing error: %w", err)
 	}
 
@@ -249,14 +249,17 @@ func (lb *LoadBalancerComponent) sampleStats() {
 	}
 }
 
-// evaluateCompiledRules evaluates all pre-compiled detour rules
-func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps uint64) string {
+// evaluateCompiledRules evaluates all pre-compiled detour rules and returns all matching targets
+func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps uint64) []string {
+	var allTargets []string
+
 	for i, compiledRule := range lb.compiledRules {
 		if lb.evaluateCompiledExpression(&compiledRule, seq, bps, pps) {
-			return lb.ruleTargets[i]
+			allTargets = append(allTargets, lb.ruleTargets[i]...)
 		}
 	}
-	return ""
+
+	return allTargets
 }
 
 // evaluateCompiledExpression evaluates a pre-compiled expression with given variables
@@ -284,14 +287,17 @@ func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledEx
 	return result != 0
 }
 
-// evaluateRules evaluates all detour rules and returns the target for the first matching rule
-func (lb *LoadBalancerComponent) evaluateRules(seq, bps, pps uint64) string {
+// evaluateRules evaluates all detour rules and returns all matching targets
+func (lb *LoadBalancerComponent) evaluateRules(seq, bps, pps uint64) []string {
+	var allTargets []string
+
 	for _, rule := range lb.detour {
 		if lb.evaluateExpression(rule.Rule, seq, bps, pps) {
-			return rule.Target
+			allTargets = append(allTargets, rule.Targets...)
 		}
 	}
-	return ""
+
+	return allTargets
 }
 
 // evaluateExpression evaluates a rule expression with the given variables
