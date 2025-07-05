@@ -100,12 +100,15 @@ func (a *APIServer) handleGetComponents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	components := a.router.GetComponents()
-	componentList := make([]map[string]interface{}, 0, len(components))
+	componentList := make([]map[string]interface{}, 0)
 
-	for _, component := range components {
-		componentInfo := a.getComponentInfo(component.GetTag())
-		componentList = append(componentList, componentInfo)
+	for _, serviceConfig := range a.router.config.Services {
+		if serviceTag, ok := serviceConfig["tag"].(string); ok {
+			if component := a.router.GetComponentByTag(serviceTag); component != nil {
+				componentInfo := a.getComponentInfo(serviceTag)
+				componentList = append(componentList, componentInfo)
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
