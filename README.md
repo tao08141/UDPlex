@@ -94,144 +94,35 @@ docker-compose down
 
 ## 服务组件参数
 
-### listen 组件参数
+UDPlex 支持多种组件类型，每种组件都有特定的功能和配置参数。详细文档请参考：
 
-| 参数 | 说明 |
-|------|------|
-| `type` | 组件类型: `listen`，表示监听组件 |
-| `tag` | 组件唯一标识，用于在detour中引用 |
-| `listen_addr` | 监听地址和端口，格式为"IP:端口"，如"0.0.0.0:9000" |
-| `timeout` | 连接超时时间（秒），超过此时间无数据传输则清除映射 |
-| `replace_old_mapping` | 是否替换旧映射，当为true时新映射会替换同地址的旧映射 |
-| `detour` | 转发路径，指定接收数据的组件标识列表 |
-| `auth` | 鉴权配置，详见鉴权部分 |
-
-### forward 组件参数
-
-| 参数 | 说明 |
-|------|------|
-| `type` | 组件类型: `forward`，表示转发组件 |
-| `tag` | 组件唯一标识，用于在detour中引用 |
-| `forwarders` | 转发目标地址列表，可配置多个目标进行并行转发 |
-| `reconnect_interval` | 重连间隔时间（秒），断开连接后尝试重连的等待时间 |
-| `connection_check_time` | 连接检查间隔（秒），定期检查连接状态的时间间隔 |
-| `send_keepalive` | 是否发送空数据包作为心跳包来保持连接活跃 |
-| `detour` | 转发路径，指定接收返回数据的组件标识列表 |
-| `auth` | 鉴权配置，详见鉴权部分 |
- 
-### filter 组件参数
-
-| 参数 | 说明 |
-|------|------|
-| `type` | 组件类型: `filter`，表示过滤组件 |
-| `tag` | 组件唯一标识，用于在detour中引用 |
-| `use_proto_detectors` | 使用的协议检测器列表，指定要应用的协议检测器名称 |
-| `detour` | 转发路径对象，键为检测器名称，值为匹配成功后的目标组件标识列表 |
-| `detour_miss` | 未匹配任何协议时的转发路径，指定组件标识列表 |
-
-### tcp_tunnel_listen 组件参数
-
-| 参数 | 说明 |
-|------|------|
-| `type` | 组件类型: `tcp_tunnel_listen`，表示TCP隧道监听端 |
-| `tag` | 组件唯一标识，用于在detour中引用 |
-| `listen_addr` | 监听地址和端口，格式为"IP:端口"，如"0.0.0.0:9001" |
-| `timeout` | 连接超时时间（秒），超过此时间无数据传输则断开连接 |
-| `no_delay` | 是否启用TCP Nagle算法，true表示禁用Nagle算法以减少延迟 |
-| `detour` | 转发路径，指定接收数据的组件标识列表 |
-| `auth` | 鉴权配置，详见鉴权部分 |
-
-### tcp_tunnel_forward 组件参数
-
-| 参数 | 说明 |
-|------|------|
-| `type` | 组件类型: `tcp_tunnel_forward`，表示TCP隧道转发端 |
-| `tag` | 组件唯一标识，用于在detour中引用 |
-| `forwarders` | 目标服务器地址列表，格式为"IP:端口[:连接数]"，如"1.2.3.4:9001:4",使用多连接时会造成UDP乱序，部分场景下可能会导致一些未知的问题 |
-| `connection_check_time` | 连接检查间隔（秒），定期检查并重连断开的连接 |
-| `no_delay` | 是否启用TCP Nagle算法，true表示禁用Nagle算法以减少延迟 |
-| `detour` | 转发路径，指定接收返回数据的组件标识列表 |
-| `auth` | 鉴权配置，详见鉴权部分 |
+- [Listen 组件](docs/listen_zh.md) - 监听 UDP 端口并接收数据包
+- [Forward 组件](docs/forward_zh.md) - 将数据包转发到目标服务器
+- [Filter 组件](docs/filter_zh.md) - 根据协议特征过滤和分类数据包
+- [TCP Tunnel Listen 组件](docs/tcp_tunnel_listen_zh.md) - TCP 隧道监听端
+- [TCP Tunnel Forward 组件](docs/tcp_tunnel_forward_zh.md) - TCP 隧道转发端
+- [Load Balancer 组件](docs/load_balancer_zh.md) - 负载均衡组件
 
 
-### auth 鉴权配置参数
+### 鉴权配置
 
-| 参数                | 说明                                                                 |
-|---------------------|----------------------------------------------------------------------|
-| `enabled`           | 是否启用鉴权，布尔值，true 表示启用                                   |
-| `secret`            | 鉴权密钥，字符串，客户端与服务端需保持一致                            |
-| `enable_encryption` | 是否启用数据加密（AES-GCM），true 表示加密传输                        |
-| `heartbeat_interval`| 心跳包发送间隔（秒），用于连接保活，默认30秒                          |
+UDPlex 支持数据包鉴权与加密功能，详细文档请参考：
 
-#### 说明
-
-- `auth` 配置用于数据包鉴权与加密。
-- 启用后，连接建立时会进行握手认证，认证通过后才允许数据转发。
-- 若 `enable_encryption` 为 true，所有数据包内容将使用 AES-GCM 加密，提升安全性。
-- `heartbeat_interval` 控制心跳包频率，防止长时间无数据导致连接断开。
-
-#### 示例
-
-```json
-"auth": {
-    "enabled": true,
-    "secret": "your-strong-password",
-    "enable_encryption": true,
-    "heartbeat_interval": 30
-}
-```
-
-> 注意：`secret` 必须在客户端和服务端保持一致，否则无法通过认证。
+- [鉴权协议](docs/auth_protocol_zh.md) - 鉴权协议详细说明
 
 
-## 协议检测器配置
+## 协议检测器
 
-```json
-"protocol_detectors": {
-    "名称": {
-        "signatures": [
-            {
-                "offset": 数据包偏移量,
-                "bytes": "匹配字节序列",
-                "mask": "应用的位掩码",
-                "hex": true/false,  // bytes是否为十六进制格式
-                "length": { "min": 最小长度, "max": 最大长度 },
-                "contains": "包含的字节序列",
-                "description": "特征描述"
-            }
-        ],
-        "match_logic": "AND/OR",  // 多个签名的匹配逻辑
-        "description": "协议检测器描述"
-    }
-}
-```
+UDPlex 支持通过配置协议检测器来识别和分类 UDP 数据包中的特定协议，详细文档请参考：
 
-### 协议签名参数
-
-| 参数 | 说明 |
-|------|------|
-| `offset` | 在数据包中开始匹配的字节偏移量 |
-| `bytes` | 要匹配的字节序列，可以是十六进制或ASCII格式 |
-| `mask` | 应用于匹配的位掩码，用十六进制表示 |
-| `hex` | 指定bytes是否为十六进制格式，true为十六进制，false为ASCII |
-| `length` | 数据包长度限制，包含min（最小长度）和max（最大长度） |
-| `contains` | 数据包中必须包含的字节序列，用于进一步过滤 |
-| `description` | 签名描述，说明此签名匹配的协议特征 |
-
-### 协议检测器参数
-
-| 参数 | 说明 |
-|------|------|
-| `signatures` | 协议签名数组，定义识别特定协议的特征 |
-| `match_logic` | 多个签名间的逻辑关系，"AND"表示全部匹配，"OR"表示任一匹配 |
-| `description` | 协议检测器描述 |
+- [协议检测器](docs/protocol_detector_zh.md) - 协议检测器配置和使用说明
 
 
 ## 开发计划
 - [X] 支持包过滤和选择性转发
 - [X] 支持鉴权、加密、去重等功能
 - [X] 支持UDP Over TCP的转发
-- [ ] 支持更复杂的负载均衡算法
+- [X] 支持更复杂的负载均衡算法
 - [ ] RESTful API 接口
 
 ## 使用场景
@@ -244,13 +135,12 @@ docker-compose down
 
 examples目录包含多种使用场景的配置示例：
 
-- **basic.json** - UDP转发的基本配置示例
-- **auth_client.json** - 带鉴权的UDP客户端配置
-- **auth_server.json** - 带鉴权的UDP服务端配置
-- **redundant_client_config.json** - UDP冗余客户端配置，将流量同时发送到多个服务器
-- **redundant_server_config.json** - UDP冗余服务端配置，接收客户端流量并转发
-- **wg_bidirectional_client_config.json** - WireGuard UDP上下行分离通信客户端配置
-- **wg_bidirectional_server_config.json** - WireGuard UDP上下行分离通信服务端配置
-- **tcp_tunnel_server.json** - TCP隧道服务端配置，监听TCP连接并转发UDP流量
-- **tcp_tunnel_client.json** - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
-
+- [**basic.json**](examples/basic.json) - UDP转发的基本配置示例
+- [**auth_client.json**](examples/auth_client.json) - 带鉴权的UDP客户端配置
+- [**auth_server.json**](examples/auth_server.json) - 带鉴权的UDP服务端配置
+- [**redundant_client.json**](examples/redundant_client.json) - UDP冗余客户端配置，将流量同时发送到多个服务器
+- [**redundant_server.json**](examples/redundant_server.json) - UDP冗余服务端配置，接收客户端流量并转发
+- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP上下行分离通信客户端配置
+- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP上下行分离通信服务端配置
+- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP隧道服务端配置，监听TCP连接并转发UDP流量
+- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量

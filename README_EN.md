@@ -94,141 +94,32 @@ docker-compose down
 
 ## Service Component Parameters
 
-### listen Component Parameters
+UDPlex supports various component types, each with specific functions and configuration parameters. For detailed documentation, please refer to:
 
-| Parameter | Description |
-|-----------|-------------|
-| `type` | Component type: `listen`, indicates a listening component |
-| `tag` | Unique component identifier, used for reference in detour |
-| `listen_addr` | Listening address and port, format "IP:port", e.g. "0.0.0.0:9000" |
-| `timeout` | Connection timeout (seconds), after which mappings are cleared if no data is transmitted |
-| `replace_old_mapping` | Whether to replace old mappings, when true new mappings replace old mappings with the same address |
-| `detour` | Forwarding path, specifies the component identifiers that receive data |
-| `auth` | Authentication configuration, see the authentication section |
+- [Listen Component](docs/listen_en.md) - Listen on UDP ports and receive packets
+- [Forward Component](docs/forward_en.md) - Forward packets to target servers
+- [Filter Component](docs/filter_en.md) - Filter and categorize packets based on protocol characteristics
+- [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening end
+- [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding end
+- [Load Balancer Component](docs/load_balancer_en.md) - Load balancing component
 
-### forward Component Parameters
+### Authentication Configuration
 
-| Parameter | Description |
-|-----------|-------------|
-| `type` | Component type: `forward`, indicates a forwarding component |
-| `tag` | Unique component identifier, used for reference in detour |
-| `forwarders` | List of forwarding target addresses, multiple targets can be configured for parallel forwarding |
-| `reconnect_interval` | Reconnection interval (seconds), waiting time before attempting to reconnect after disconnection |
-| `connection_check_time` | Connection check interval (seconds), time interval for regularly checking connection status |
-| `send_keepalive` | Whether to send empty packets as heartbeats to keep the connection active |
-| `detour` | Forwarding path, specifies the component identifiers that receive return data |
-| `auth` | Authentication configuration, see the authentication section |
- 
-### filter Component Parameters
+UDPlex supports packet authentication and encryption features. For detailed documentation, please refer to:
 
-| Parameter | Description |
-|-----------|-------------|
-| `type` | Component type: `filter`, indicates a filtering component |
-| `tag` | Unique component identifier, used for reference in detour |
-| `use_proto_detectors` | List of protocol detectors to use, specifies the names of protocol detectors to apply |
-| `detour` | Forwarding path object, keys are detector names, values are lists of target component identifiers after successful matching |
-| `detour_miss` | Forwarding path when no protocol matches, specifies a list of component identifiers |
+- [Authentication Protocol](docs/auth_protocol_en.md) - Detailed explanation of the authentication protocol
 
-### tcp_tunnel_listen Component Parameters
+## Protocol Detector
 
-| Parameter | Description |
-|-----------|-------------|
-| `type` | Component type: `tcp_tunnel_listen`, indicates a TCP tunnel listening end |
-| `tag` | Unique component identifier, used for reference in detour |
-| `listen_addr` | Listening address and port, format "IP:port", e.g. "0.0.0.0:9001" |
-| `timeout` | Connection timeout (seconds), after which connections are closed if no data is transmitted |
-| `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
-| `detour` | Forwarding path, specifies the component identifiers that receive data |
-| `auth` | Authentication configuration, see the authentication section |
+UDPlex supports configuring protocol detectors to identify and categorize specific protocols in UDP packets. For detailed documentation, please refer to:
 
-### tcp_tunnel_forward Component Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| `type` | Component type: `tcp_tunnel_forward`, indicates a TCP tunnel forwarding end |
-| `tag` | Unique component identifier, used for reference in detour |
-| `forwarders` | List of target server addresses, format "IP:port[:connection_count]", e.g. "1.2.3.4:9001:4". Using multiple connections may cause UDP packet reordering, which might lead to unknown issues in some scenarios |
-| `connection_check_time` | Connection check interval (seconds), regularly checks and reconnects broken connections |
-| `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
-| `detour` | Forwarding path, specifies the component identifiers that receive return data |
-| `auth` | Authentication configuration, see the authentication section |
-
-### auth Authentication Configuration Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| `enabled` | Whether to enable authentication, boolean value, true means enabled |
-| `secret` | Authentication key, string, must be consistent between client and server |
-| `enable_encryption` | Whether to enable data encryption (AES-GCM), true means encrypted transmission |
-| `heartbeat_interval` | Heartbeat packet sending interval (seconds), used to keep connections alive, default 30 seconds |
-
-#### Description
-
-- The `auth` configuration is used for packet authentication and encryption.
-- When enabled, handshake authentication is performed when establishing a connection, and data forwarding is only allowed after successful authentication.
-- If `enable_encryption` is true, all packet contents will be encrypted using AES-GCM, enhancing security.
-- `heartbeat_interval` controls the frequency of heartbeat packets, preventing connections from being disconnected due to long periods of inactivity.
-
-#### Example
-
-```json
-"auth": {
-    "enabled": true,
-    "secret": "your-strong-password",
-    "enable_encryption": true,
-    "heartbeat_interval": 30
-}
-```
-
-> Note: The `secret` must be consistent between client and server, otherwise authentication will fail.
-
-## Protocol Detector Configuration
-
-```json
-"protocol_detectors": {
-    "name": {
-        "signatures": [
-            {
-                "offset": packet_offset,
-                "bytes": "matching_byte_sequence",
-                "mask": "applied_bit_mask",
-                "hex": true/false,  // whether bytes is in hexadecimal format
-                "length": { "min": minimum_length, "max": maximum_length },
-                "contains": "contained_byte_sequence",
-                "description": "signature_description"
-            }
-        ],
-        "match_logic": "AND/OR",  // matching logic for multiple signatures
-        "description": "protocol_detector_description"
-    }
-}
-```
-
-### Protocol Signature Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| `offset` | Byte offset to start matching in the packet |
-| `bytes` | Byte sequence to match, can be in hexadecimal or ASCII format |
-| `mask` | Bit mask applied to the match, represented in hexadecimal |
-| `hex` | Specifies whether bytes is in hexadecimal format, true for hexadecimal, false for ASCII |
-| `length` | Packet length limit, including min (minimum length) and max (maximum length) |
-| `contains` | Byte sequence that must be contained in the packet, for further filtering |
-| `description` | Signature description, explains the protocol feature this signature matches |
-
-### Protocol Detector Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| `signatures` | Array of protocol signatures, defines features for identifying specific protocols |
-| `match_logic` | Logical relationship between multiple signatures, "AND" means all must match, "OR" means any can match |
-| `description` | Protocol detector description |
+- [Protocol Detector](docs/protocol_detector_en.md) - Protocol detector configuration and usage instructions
 
 ## Development Roadmap
 - [X] Support packet filtering and selective forwarding
 - [X] Support authentication, encryption, deduplication, and other features
 - [X] Support UDP Over TCP forwarding
-- [ ] Support more complex load balancing algorithms
+- [X] Support more complex load balancing algorithms
 - [ ] RESTful API interface
 
 ## Use Cases
@@ -241,12 +132,12 @@ docker-compose down
 
 The examples directory contains configuration examples for various usage scenarios:
 
-- **basic.json** - Basic configuration example for UDP forwarding
-- **auth_client.json** - UDP client configuration with authentication
-- **auth_server.json** - UDP server configuration with authentication
-- **redundant_client_config.json** - UDP redundant client configuration, sending traffic to multiple servers simultaneously
-- **redundant_server_config.json** - UDP redundant server configuration, receiving client traffic and forwarding
-- **wg_bidirectional_client_config.json** - WireGuard UDP bidirectional separated communication client configuration
-- **wg_bidirectional_server_config.json** - WireGuard UDP bidirectional separated communication server configuration
-- **tcp_tunnel_server.json** - TCP tunnel server configuration, listening for TCP connections and forwarding UDP traffic
-- **tcp_tunnel_client.json** - TCP tunnel client configuration, connecting to a TCP tunnel server and forwarding UDP traffic
+- [**basic.json**](examples/basic.json) - Basic configuration example for UDP forwarding
+- [**auth_client.json**](examples/auth_client.json) - UDP client configuration with authentication
+- [**auth_server.json**](examples/auth_server.json) - UDP server configuration with authentication
+- [**redundant_client.json**](examples/redundant_client.json) - UDP redundant client configuration, sending traffic to multiple servers simultaneously
+- [**redundant_server.json**](examples/redundant_server.json) - UDP redundant server configuration, receiving client traffic and forwarding
+- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP bidirectional separated communication client configuration
+- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP bidirectional separated communication server configuration
+- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP tunnel server configuration, listening for TCP connections and forwarding UDP traffic
+- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP tunnel client configuration, connecting to a TCP tunnel server and forwarding UDP traffic
