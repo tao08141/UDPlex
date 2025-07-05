@@ -126,15 +126,6 @@ UDPlex provides RESTful API interfaces to query component status and connection 
 
 - [RESTful](docs/RESTful_en.md) - RESTful interface configuration and usage instructions
 
-### API Endpoints
-- `GET /api/components` - Get list of all components
-- `GET /api/components/{tag}` - Get information for specified component
-- `GET /api/listen/{tag}` - Get connection information for Listen component
-- `GET /api/forward/{tag}` - Get connection information for Forward component
-- `GET /api/tcp_tunnel_listen/{tag}` - Get connection information for TCP Tunnel Listen component
-- `GET /api/tcp_tunnel_forward/{tag}` - Get connection information for TCP Tunnel Forward component
-- `GET /api/load_balancer/{tag}` - Get traffic information for Load Balancer component
-
 ## Use Cases
 - Gaming acceleration: Forward game traffic to multiple servers simultaneously, selecting the fastest response
 - Network redundancy: Ensure important UDP data can be transmitted through multiple paths

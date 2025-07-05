@@ -130,15 +130,6 @@ UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
 
 - [RESTful](docs/RESTful_zh.md) - RESTful接口配置和使用说明
 
-### API 端点
-- `GET /api/components` - 获取所有组件列表
-- `GET /api/components/{tag}` - 获取指定组件信息
-- `GET /api/listen/{tag}` - 获取 Listen 组件的连接信息
-- `GET /api/forward/{tag}` - 获取 Forward 组件的连接信息
-- `GET /api/tcp_tunnel_listen/{tag}` - 获取 TCP Tunnel Listen 组件的连接信息
-- `GET /api/tcp_tunnel_forward/{tag}` - 获取 TCP Tunnel Forward 组件的连接信息
-- `GET /api/load_balancer/{tag}` - 获取 Load Balancer 组件的流量信息
-
 ## 使用场景
 - 游戏加速：将游戏流量同时转发到多个服务器，选择最快的响应
 - 网络冗余：确保重要的 UDP 数据能通过多条路径传输
