@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UDPlex API 监控仪表板</title>
+    <title>UDPlex 组件监控</title>
     <style>
         * {
             margin: 0;
@@ -12,365 +12,375 @@
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+            font-family: 'Arial', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow-x: auto;
+        }
+
+        .header {
+            background: #16213e;
             padding: 20px;
+            text-align: center;
+            border-bottom: 2px solid #0f3460;
+        }
+
+        .header h1 {
+            color: #00d4aa;
+            margin-bottom: 10px;
+        }
+
+        .controls {
+            margin: 10px 0;
+        }
+
+        .btn {
+            background: #0f3460;
+            color: #eee;
+            border: none;
+            padding: 8px 16px;
+            margin: 0 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #16213e;
+        }
+
+        .btn.active {
+            background: #00d4aa;
+            color: #1a1a2e;
+        }
+
+        .status {
+            padding: 10px 20px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
         }
 
         .container {
+            padding: 20px;
             max-width: 1400px;
             margin: 0 auto;
         }
 
-        .header {
-            text-align: center;
-            color: white;
+        .components-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
             margin-bottom: 30px;
         }
 
-        .header h1 {
-            font-size: 2.5em;
+        .component-card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            border: 2px solid #0f3460;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .component-card:hover {
+            border-color: #00d4aa;
+            transform: translateY(-2px);
+        }
+
+        .component-card.highlight {
+            border-color: #ff6b6b !important;
+            box-shadow: 0 0 20px rgba(255, 107, 107, 0.5);
+            animation: pulse 1s ease-in-out;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .component-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .component-tag {
+            font-size: 18px;
+            font-weight: bold;
+            color: #00d4aa;
+        }
+
+        .component-type {
+            background: #0f3460;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .component-type.listen { background: #4caf50; }
+        .component-type.forward { background: #2196f3; }
+        .component-type.filter { background: #ff9800; }
+        .component-type.load_balancer { background: #9c27b0; }
+        .component-type.tcp_tunnel_listen { background: #e91e63; }
+        .component-type.tcp_tunnel_forward { background: #795548; }
+
+        .component-details {
+            margin: 10px 0;
+        }
+
+        .detail-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            font-size: 14px;
+        }
+
+        .detail-label {
+            color: #999;
+            min-width: 120px;
+        }
+
+        .detail-value {
+            color: #eee;
+            text-align: right;
+            flex: 1;
+        }
+
+        .detour-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #0f3460;
+        }
+
+        .detour-title {
+            color: #00d4aa;
+            font-weight: bold;
             margin-bottom: 10px;
         }
 
-        .refresh-controls {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .refresh-controls button {
-            background: #4CAF50;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            margin: 5px;
-        }
-
-        .refresh-controls button:hover {
-            background: #45a049;
-        }
-
-        .refresh-controls select {
-            padding: 8px;
-            border-radius: 5px;
-            border: none;
-            margin: 5px;
-        }
-
-        .status-indicator {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
+        .detour-tag {
             display: inline-block;
-            margin-right: 5px;
+            background: #0f3460;
+            color: #eee;
+            padding: 4px 8px;
+            margin: 2px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 12px;
         }
 
-        .status-online { background: #4CAF50; }
-        .status-offline { background: #f44336; }
-        .status-warning { background: #ff9800; }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
+        .detour-tag:hover {
+            background: #00d4aa;
+            color: #1a1a2e;
+            transform: scale(1.05);
         }
 
-        .card {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
+        .detour-protocol {
+            margin: 5px 0;
         }
 
-        .card h3 {
-            color: #333;
-            margin-bottom: 15px;
-            font-size: 1.2em;
-            border-bottom: 2px solid #eee;
-            padding-bottom: 10px;
-        }
-
-        .metric {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid #f0f0f0;
-        }
-
-        .metric:last-child {
-            border-bottom: none;
-        }
-
-        .metric-label {
-            color: #666;
-            font-weight: 500;
-        }
-
-        .metric-value {
-            color: #333;
+        .protocol-label {
+            color: #ff9800;
             font-weight: bold;
+            margin-right: 10px;
         }
 
-        .connection-list {
-            max-height: 200px;
-            overflow-y: auto;
+        .connections-info {
+            background: #0f3460;
+            padding: 10px;
+            border-radius: 4px;
             margin-top: 10px;
         }
 
         .connection-item {
-            background: #f8f9fa;
-            padding: 10px;
             margin: 5px 0;
-            border-radius: 5px;
-            font-size: 0.9em;
+            padding: 5px;
+            background: #1a1a2e;
+            border-radius: 4px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+
+        .status-online { background: #4caf50; }
+        .status-offline { background: #f44336; }
+        .status-warning { background: #ff9800; }
+
+        .error-message {
+            background: #f44336;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
         }
 
         .loading {
             text-align: center;
-            color: #666;
-            padding: 20px;
-        }
-
-        .error {
-            background: #ffebee;
-            color: #c62828;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 10px 0;
-        }
-
-        .component-tabs {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        .tab-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-
-        .tab-button {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 25px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .tab-button.active {
-            background: rgba(255, 255, 255, 0.8);
-            color: #333;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
-
-        @media (max-width: 768px) {
-            .grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .refresh-controls {
-                flex-direction: column;
-                text-align: center;
-            }
+            padding: 40px;
+            color: #999;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>UDPlex API 监控仪表板</h1>
-            <p>实时监控路由器组件状态</p>
-        </div>
-
-        <div class="refresh-controls">
-            <div>
-                <span style="color: white; margin-right: 10px;">自动刷新:</span>
-                <select id="refreshInterval">
-                    <option value="0">关闭</option>
-                    <option value="1000">1秒</option>
-                    <option value="5000" selected>5秒</option>
-                    <option value="10000">10秒</option>
-                    <option value="30000">30秒</option>
-                </select>
-                <button onclick="refreshAll()">立即刷新</button>
-            </div>
-            <div>
-                <span style="color: white;">
-                    <span class="status-indicator status-online"></span>
-                    最后更新: <span id="lastUpdate">-</span>
-                </span>
-            </div>
-        </div>
-
-        <div class="component-tabs">
-            <div class="tab-buttons" id="componentTabs">
-                <!-- 动态生成标签页 -->
-            </div>
-            <div id="tabContents">
-                <!-- 动态生成内容 -->
-            </div>
-        </div>
-
-        <div class="grid" id="componentsGrid">
-            <!-- 动态生成组件卡片 -->
+    <div class="header">
+        <h1>UDPlex 路由器组件监控</h1>
+        <div class="controls">
+            <button class="btn active" id="autoRefreshBtn">自动刷新</button>
+            <button class="btn" id="refreshBtn">立即刷新</button>
+            <button class="btn" id="clearHighlightBtn">清除高亮</button>
         </div>
     </div>
 
+    <div class="status">
+        <span>状态: <span id="connectionStatus">连接中...</span></span>
+        <span style="margin-left: 20px;">最后更新: <span id="lastUpdate">-</span></span>
+        <span style="margin-left: 20px;">自动刷新: <span id="refreshInterval">5秒</span></span>
+        <span style="margin-left: 20px;">
+            刷新间隔:
+            <select id="intervalSelect" style="background:#16213e;color:#eee;border-radius:4px;padding:2px 8px;">
+                <option value="2000">2秒</option>
+                <option value="5000" selected>5秒</option>
+                <option value="10000">10秒</option>
+                <option value="30000">30秒</option>
+                <option value="60000">60秒</option>
+            </select>
+        </span>
+    </div>
+
+    <div class="container">
+        <div id="errorContainer"></div>
+        <div id="loadingContainer" class="loading">正在加载组件数据...</div>
+        <div id="componentsContainer" class="components-grid" style="display: none;"></div>
+    </div>
+
     <script>
-        class APIMonitor {
+        class UDPlexMonitor {
             constructor() {
-                this.components = [];
+                this.components = new Map();
+                this.detailedData = new Map();
+                this.autoRefresh = true;
+                this.refreshInterval = 5000;
                 this.refreshTimer = null;
-                this.lastUpdateTime = null;
-                this.activeTab = 'all';
-                this.init();
+                this.baseUrl = '';
+                this.componentsLoaded = false;
+
+                this.initEventListeners();
+                this.startMonitoring();
             }
 
-            async init() {
-                await this.loadComponents();
-                this.setupRefreshInterval();
-                this.setupEventListeners();
-            }
+            initEventListeners() {
+                document.getElementById('autoRefreshBtn').addEventListener('click', () => {
+                    this.toggleAutoRefresh();
+                });
 
-            setupEventListeners() {
-                document.getElementById('refreshInterval').addEventListener('change', (e) => {
-                    this.setupRefreshInterval();
+                document.getElementById('refreshBtn').addEventListener('click', () => {
+                    this.refreshData();
+                });
+
+                document.getElementById('clearHighlightBtn').addEventListener('click', () => {
+                    this.clearHighlights();
+                });
+
+                document.getElementById('intervalSelect').addEventListener('change', (e) => {
+                    this.refreshInterval = parseInt(e.target.value, 10);
+                    document.getElementById('refreshInterval').textContent = `${this.refreshInterval / 1000}秒`;
+                    if (this.autoRefresh) {
+                        this.startRefreshTimer();
+                    }
                 });
             }
 
-            setupRefreshInterval() {
+            toggleAutoRefresh() {
+                this.autoRefresh = !this.autoRefresh;
+                const btn = document.getElementById('autoRefreshBtn');
+                btn.textContent = this.autoRefresh ? '自动刷新' : '手动刷新';
+                btn.classList.toggle('active', this.autoRefresh);
+
+                if (this.autoRefresh) {
+                    this.startRefreshTimer();
+                } else {
+                    this.stopRefreshTimer();
+                }
+            }
+
+            startRefreshTimer() {
+                this.stopRefreshTimer();
+                this.refreshTimer = setInterval(() => {
+                    this.refreshData();
+                }, this.refreshInterval);
+            }
+
+            stopRefreshTimer() {
                 if (this.refreshTimer) {
                     clearInterval(this.refreshTimer);
-                }
-
-                const interval = parseInt(document.getElementById('refreshInterval').value);
-                if (interval > 0) {
-                    this.refreshTimer = setInterval(() => {
-                        this.refreshAll();
-                    }, interval);
+                    this.refreshTimer = null;
                 }
             }
 
-            async loadComponents() {
+            async startMonitoring() {
+                await this.loadComponentsOnce();
+                if (this.autoRefresh) {
+                    this.startRefreshTimer();
+                }
+            }
+
+            async loadComponentsOnce() {
                 try {
-                    const response = await fetch('/api/components');
-                    if (!response.ok) throw new Error('Failed to fetch components');
-                    
-                    this.components = await response.json();
-                    this.renderComponentTabs();
-                    await this.refreshAll();
-                } catch (error) {
-                    this.showError('加载组件列表失败: ' + error.message);
-                }
-            }
-
-            renderComponentTabs() {
-                const tabsContainer = document.getElementById('componentTabs');
-                const contentsContainer = document.getElementById('tabContents');
-                
-                // 清空现有内容
-                tabsContainer.innerHTML = '';
-                contentsContainer.innerHTML = '';
-
-                // 添加"全部"标签页
-                const allTab = document.createElement('button');
-                allTab.className = 'tab-button active';
-                allTab.textContent = '全部组件';
-                allTab.onclick = () => this.switchTab('all');
-                tabsContainer.appendChild(allTab);
-
-                // 按类型分组组件
-                const componentsByType = {};
-                this.components.forEach(comp => {
-                    if (!componentsByType[comp.type]) {
-                        componentsByType[comp.type] = [];
+                    document.getElementById('connectionStatus').textContent = '加载组件...';
+                    // 只加载一次组件列表
+                    const response = await fetch(`${this.baseUrl}/api/components`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                     }
-                    componentsByType[comp.type].push(comp);
-                });
-
-                // 为每种类型创建标签页
-                Object.keys(componentsByType).forEach(type => {
-                    const tab = document.createElement('button');
-                    tab.className = 'tab-button';
-                    tab.textContent = this.getTypeDisplayName(type);
-                    tab.onclick = () => this.switchTab(type);
-                    tabsContainer.appendChild(tab);
-                });
-            }
-
-            switchTab(tabType) {
-                this.activeTab = tabType;
-                
-                // 更新标签页样式
-                document.querySelectorAll('.tab-button').forEach(btn => {
-                    btn.classList.remove('active');
-                });
-                event.target.classList.add('active');
-
-                // 刷新显示
-                this.refreshAll();
-            }
-
-            getTypeDisplayName(type) {
-                const typeNames = {
-                    'listen': '监听组件',
-                    'forward': '转发组件',
-                    'tcp_tunnel_listen': 'TCP隧道监听',
-                    'tcp_tunnel_forward': 'TCP隧道转发',
-                    'load_balancer': '负载均衡器'
-                };
-                return typeNames[type] || type;
-            }
-
-            async refreshAll() {
-                const grid = document.getElementById('componentsGrid');
-                grid.innerHTML = '<div class="loading">正在加载数据...</div>';
-
-                try {
-                    const filteredComponents = this.activeTab === 'all' 
-                        ? this.components 
-                        : this.components.filter(comp => comp.type === this.activeTab);
-
-                    const componentData = await Promise.all(
-                        filteredComponents.map(comp => this.fetchComponentData(comp))
-                    );
-
-                    this.renderComponents(componentData);
-                    this.updateLastUpdateTime();
+                    const components = await response.json();
+                    this.components.clear();
+                    for (const component of components) {
+                        this.components.set(component.tag, component);
+                        await this.fetchComponentDetails(component);
+                    }
+                    this.componentsLoaded = true;
+                    this.renderComponents();
+                    this.updateStatus('在线', true);
+                    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
                 } catch (error) {
-                    this.showError('刷新数据失败: ' + error.message);
+                    console.error('Error fetching data:', error);
+                    this.showError(`连接失败: ${error.message}`);
+                    this.updateStatus('离线', false);
                 }
             }
 
-            async fetchComponentData(component) {
+            async refreshData() {
+                if (!this.componentsLoaded) {
+                    await this.loadComponentsOnce();
+                    return;
+                }
                 try {
-                    let endpoint;
+                    document.getElementById('connectionStatus').textContent = '更新中...';
+                    // 只刷新详细信息
+                    for (const component of this.components.values()) {
+                        await this.fetchComponentDetails(component);
+                    }
+                    this.renderComponents();
+                    this.updateStatus('在线', true);
+                    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                } catch (error) {
+                    console.error('Error fetching data:', error);
+                    this.showError(`连接失败: ${error.message}`);
+                    this.updateStatus('离线', false);
+                }
+            }
+
+            async fetchComponentDetails(component) {
+                try {
+                    let endpoint = '';
                     switch (component.type) {
                         case 'listen':
                             endpoint = `/api/listen/${component.tag}`;
@@ -387,231 +397,303 @@
                         case 'load_balancer':
                             endpoint = `/api/load_balancer/${component.tag}`;
                             break;
+                        case 'filter':
+                            endpoint = `/api/filter/${component.tag}`;
+                            break;
                         default:
-                            return { ...component, error: '未知组件类型' };
+                            return;
                     }
 
-                    const response = await fetch(endpoint);
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    
-                    const data = await response.json();
-                    return { ...component, data, status: 'online' };
+                    const response = await fetch(`${this.baseUrl}${endpoint}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.detailedData.set(component.tag, data);
+                    }
                 } catch (error) {
-                    return { ...component, error: error.message, status: 'offline' };
+                    console.warn(`Failed to fetch details for ${component.tag}:`, error);
                 }
             }
 
-            renderComponents(componentData) {
-                const grid = document.getElementById('componentsGrid');
-                grid.innerHTML = '';
+            renderComponents() {
+                const container = document.getElementById('componentsContainer');
+                container.innerHTML = '';
 
-                componentData.forEach(comp => {
-                    const card = this.createComponentCard(comp);
-                    grid.appendChild(card);
-                });
+                for (const [tag, component] of this.components) {
+                    const card = this.createComponentCard(component);
+                    container.appendChild(card);
+                }
+
+                document.getElementById('loadingContainer').style.display = 'none';
+                container.style.display = 'grid';
             }
 
             createComponentCard(component) {
                 const card = document.createElement('div');
-                card.className = 'card';
+                card.className = 'component-card';
+                card.dataset.tag = component.tag;
 
-                const statusClass = component.status === 'online' ? 'status-online' : 'status-offline';
-                
+                card.addEventListener('click', () => {
+                    this.highlightDetourTargets(component);
+                });
+
+                const detailedData = this.detailedData.get(component.tag);
+
                 card.innerHTML = `
-                    <h3>
-                        <span class="status-indicator ${statusClass}"></span>
-                        ${component.tag} (${this.getTypeDisplayName(component.type)})
-                    </h3>
-                    ${component.error ? `<div class="error">${component.error}</div>` : this.renderComponentData(component)}
+                    <div class="component-header">
+                        <div class="component-tag">${component.tag}</div>
+                        <div class="component-type ${component.type}">${component.type}</div>
+                    </div>
+
+                    ${this.renderComponentDetails(component, detailedData)}
+                    ${this.renderDetourSection(component)}
+                    ${this.renderConnectionsInfo(detailedData)}
                 `;
 
                 return card;
             }
 
-            renderComponentData(component) {
-                if (!component.data) return '<div class="loading">无数据</div>';
-
-                switch (component.type) {
-                    case 'listen':
-                        return this.renderListenData(component.data);
-                    case 'forward':
-                        return this.renderForwardData(component.data);
-                    case 'tcp_tunnel_listen':
-                        return this.renderTcpTunnelListenData(component.data);
-                    case 'tcp_tunnel_forward':
-                        return this.renderTcpTunnelForwardData(component.data);
-                    case 'load_balancer':
-                        return this.renderLoadBalancerData(component.data);
-                    default:
-                        return '<div>未知数据格式</div>';
+            // 新增：自适应速率单位
+            formatRate(bytesPerSec) {
+                if (bytesPerSec >= 1024 * 1024 * 1024) {
+                    return (bytesPerSec / (1024 * 1024 * 1024)).toFixed(2) + ' GB/s';
+                } else if (bytesPerSec >= 1024 * 1024) {
+                    return (bytesPerSec / (1024 * 1024)).toFixed(2) + ' MB/s';
+                } else if (bytesPerSec >= 1024) {
+                    return (bytesPerSec / 1024).toFixed(2) + ' KB/s';
+                } else {
+                    return bytesPerSec + ' B/s';
                 }
             }
 
-            renderListenData(data) {
+            renderComponentDetails(component, detailedData) {
+                const details = [];
+
+                // 基本配置信息
+                if (component.listen_addr) {
+                    details.push(['监听地址', component.listen_addr]);
+                }
+                if (component.forwarders) {
+                    details.push(['转发目标', component.forwarders.join(', ')]);
+                }
+                if (component.timeout) {
+                    details.push(['超时时间', `${component.timeout}s`]);
+                }
+                if (component.window_size) {
+                    details.push(['窗口大小', component.window_size]);
+                }
+                if (component.use_proto_detectors) {
+                    details.push(['协议检测器', component.use_proto_detectors.join(', ')]);
+                }
+
+                // 连接统计信息
+                if (detailedData) {
+                    if (detailedData.count !== undefined) {
+                        details.push(['连接数', detailedData.count]);
+                    }
+                    if (detailedData.total_connections !== undefined) {
+                        details.push(['总连接数', detailedData.total_connections]);
+                    }
+                    // 修改：load_balancer速率自适应单位
+                    if (detailedData.bytes_per_sec !== undefined) {
+                        const rate = component.type === 'load_balancer'
+                            ? this.formatRate(detailedData.bytes_per_sec)
+                            : ((detailedData.bytes_per_sec / 1024).toFixed(2) + ' KB/s');
+                        details.push(['流量速率', rate]);
+                    }
+                    if (detailedData.packets_per_sec !== undefined) {
+                        details.push(['包速率', `${detailedData.packets_per_sec} pps`]);
+                    }
+                }
+
+                if (details.length === 0) {
+                    return '';
+                }
+
                 return `
-                    <div class="metric">
-                        <span class="metric-label">监听地址:</span>
-                        <span class="metric-value">${data.listen_addr || 'N/A'}</span>
+                    <div class="component-details">
+                        ${details.map(([label, value]) => `
+                            <div class="detail-item">
+                                <span class="detail-label">${label}:</span>
+                                <span class="detail-value">${value}</span>
+                            </div>
+                        `).join('')}
                     </div>
-                    <div class="metric">
-                        <span class="metric-label">连接数:</span>
-                        <span class="metric-value">${data.count || 0}</span>
-                    </div>
-                    ${data.connections && data.connections.length > 0 ? `
-                        <div class="connection-list">
-                            <strong>活跃连接:</strong>
-                            ${data.connections.map(conn => `
-                                <div class="connection-item">
-                                    <div><strong>地址:</strong> ${conn.address}</div>
-                                    <div><strong>ID:</strong> ${conn.connection_id}</div>
-                                    <div><strong>认证:</strong> ${conn.is_authenticated ? '是' : '否'}</div>
-                                    <div><strong>最后活跃:</strong> ${new Date(conn.last_active).toLocaleString()}</div>
+                `;
+            }
+
+            renderDetourSection(component) {
+                if (!component.detour) {
+                    return '';
+                }
+
+                let detourHtml = '<div class="detour-section"><div class="detour-title">路由目标 (Detour):</div>';
+
+                if (Array.isArray(component.detour)) {
+                    if (component.detour.length > 0 && typeof component.detour[0] === 'object') {
+                        // 负载均衡规则
+                        component.detour.forEach(rule => {
+                            detourHtml += `
+                                <div class="detour-protocol">
+                                    <span class="protocol-label">规则: ${rule.rule}</span>
+                                    ${rule.targets.map(target => 
+                                        `<span class="detour-tag" data-target="${target}">${target}</span>`
+                                    ).join('')}
                                 </div>
-                            `).join('')}
+                            `;
+                        });
+                    } else {
+                        // 简单数组
+                        detourHtml += component.detour.map(target => 
+                            `<span class="detour-tag" data-target="${target}">${target}</span>`
+                        ).join('');
+                    }
+                } else if (typeof component.detour === 'object') {
+                    // 协议映射对象
+                    Object.entries(component.detour).forEach(([protocol, targets]) => {
+                        detourHtml += `
+                            <div class="detour-protocol">
+                                <span class="protocol-label">${protocol}:</span>
+                                ${targets.map(target => 
+                                    `<span class="detour-tag" data-target="${target}">${target}</span>`
+                                ).join('')}
+                            </div>
+                        `;
+                    });
+                }
+
+                // detour_miss
+                if (component.detour_miss) {
+                    detourHtml += `
+                        <div class="detour-protocol">
+                            <span class="protocol-label">未匹配:</span>
+                            ${component.detour_miss.map(target => 
+                                `<span class="detour-tag" data-target="${target}">${target}</span>`
+                            ).join('')}
                         </div>
-                    ` : ''}
-                `;
+                    `;
+                }
+
+                detourHtml += '</div>';
+                return detourHtml;
             }
 
-            renderForwardData(data) {
-                return `
-                    <div class="metric">
-                        <span class="metric-label">连接数:</span>
-                        <span class="metric-value">${data.count || 0}</span>
-                    </div>
-                    ${data.connections && data.connections.length > 0 ? `
-                        <div class="connection-list">
-                            <strong>连接详情:</strong>
-                            ${data.connections.map(conn => `
-                                <div class="connection-item">
-                                    <div><strong>远程地址:</strong> ${conn.remote_addr}</div>
-                                    <div><strong>状态:</strong> ${conn.is_connected ? '已连接' : '未连接'}</div>
-                                    <div><strong>认证:</strong> ${conn.is_authenticated ? '是' : '否'}</div>
-                                    <div><strong>心跳丢失:</strong> ${conn.heartbeat_miss}</div>
-                                    <div><strong>最后心跳:</strong> ${new Date(conn.last_heartbeat).toLocaleString()}</div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    ` : ''}
-                `;
+            renderConnectionsInfo(detailedData) {
+                if (!detailedData || (!detailedData.connections && !detailedData.pools)) {
+                    return '';
+                }
+
+                let html = '<div class="connections-info"><div class="detour-title">连接信息:</div>';
+
+                if (detailedData.connections) {
+                    detailedData.connections.forEach(conn => {
+                        const status = conn.is_connected !== undefined ? 
+                            (conn.is_connected ? 'online' : 'offline') : 
+                            (conn.is_authenticated ? 'online' : 'warning');
+                        
+                        html += `
+                            <div class="connection-item">
+                                <span class="status-indicator status-${status}"></span>
+                                ${conn.address || conn.remote_addr}
+                                ${conn.last_active ? ` (${new Date(conn.last_active).toLocaleTimeString()})` : ''}
+                            </div>
+                        `;
+                    });
+                }
+
+                if (detailedData.pools) {
+                    detailedData.pools.forEach(pool => {
+                        html += `
+                            <div class="connection-item">
+                                <strong>池 ${pool.pool_id}:</strong> ${pool.conn_count} 连接
+                                ${pool.target_count ? ` (目标: ${pool.target_count})` : ''}
+                            </div>
+                        `;
+                    });
+                }
+
+                html += '</div>';
+                return html;
             }
 
-            renderTcpTunnelListenData(data) {
-                return `
-                    <div class="metric">
-                        <span class="metric-label">监听地址:</span>
-                        <span class="metric-value">${data.listen_addr || 'N/A'}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">总连接数:</span>
-                        <span class="metric-value">${data.total_connections || 0}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">连接池数:</span>
-                        <span class="metric-value">${data.pools ? data.pools.length : 0}</span>
-                    </div>
-                    ${data.pools && data.pools.length > 0 ? `
-                        <div class="connection-list">
-                            <strong>连接池:</strong>
-                            ${data.pools.map(pool => `
-                                <div class="connection-item">
-                                    <div><strong>池ID:</strong> ${pool.pool_id}</div>
-                                    <div><strong>转发ID:</strong> ${pool.forward_id}</div>
-                                    <div><strong>远程地址:</strong> ${pool.remote_addr}</div>
-                                    <div><strong>连接数:</strong> ${pool.conn_count}</div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    ` : ''}
-                `;
+            highlightDetourTargets(component) {
+                this.clearHighlights();
+                
+                if (!component.detour) {
+                    return;
+                }
+
+                const targets = new Set();
+                
+                if (Array.isArray(component.detour)) {
+                    if (component.detour.length > 0 && typeof component.detour[0] === 'object') {
+                        // 负载均衡规则
+                        component.detour.forEach(rule => {
+                            rule.targets.forEach(target => targets.add(target));
+                        });
+                    } else {
+                        // 简单数组
+                        component.detour.forEach(target => targets.add(target));
+                    }
+                } else if (typeof component.detour === 'object') {
+                    // 协议映射对象
+                    Object.values(component.detour).forEach(targetList => {
+                        targetList.forEach(target => targets.add(target));
+                    });
+                }
+
+                // detour_miss
+                if (component.detour_miss) {
+                    component.detour_miss.forEach(target => targets.add(target));
+                }
+
+                // 高亮目标组件
+                targets.forEach(target => {
+                    const targetCard = document.querySelector(`[data-tag="${target}"]`);
+                    if (targetCard) {
+                        targetCard.classList.add('highlight');
+                    }
+                });
+
+                // 添加detour标签点击事件
+                const detourTags = document.querySelectorAll('.detour-tag');
+                detourTags.forEach(tag => {
+                    tag.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const targetTag = tag.dataset.target;
+                        const targetComponent = this.components.get(targetTag);
+                        if (targetComponent) {
+                            this.highlightDetourTargets(targetComponent);
+                        }
+                    });
+                });
             }
 
-            renderTcpTunnelForwardData(data) {
-                return `
-                    <div class="metric">
-                        <span class="metric-label">转发ID:</span>
-                        <span class="metric-value">${data.forward_id || 'N/A'}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">总连接数:</span>
-                        <span class="metric-value">${data.total_connections || 0}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">连接池数:</span>
-                        <span class="metric-value">${data.pools ? data.pools.length : 0}</span>
-                    </div>
-                    ${data.pools && data.pools.length > 0 ? `
-                        <div class="connection-list">
-                            <strong>连接池:</strong>
-                            ${data.pools.map(pool => `
-                                <div class="connection-item">
-                                    <div><strong>池ID:</strong> ${pool.pool_id}</div>
-                                    <div><strong>远程地址:</strong> ${pool.remote_addr}</div>
-                                    <div><strong>当前连接:</strong> ${pool.conn_count}</div>
-                                    <div><strong>目标连接:</strong> ${pool.target_count}</div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    ` : ''}
-                `;
+            clearHighlights() {
+                const highlighted = document.querySelectorAll('.component-card.highlight');
+                highlighted.forEach(card => {
+                    card.classList.remove('highlight');
+                });
             }
 
-            renderLoadBalancerData(data) {
-                return `
-                    <div class="metric">
-                        <span class="metric-label">每秒字节数:</span>
-                        <span class="metric-value">${this.formatBytes(data.bytes_per_sec || 0)}/s</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">每秒包数:</span>
-                        <span class="metric-value">${data.packets_per_sec || 0}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">总字节数:</span>
-                        <span class="metric-value">${this.formatBytes(data.total_bytes || 0)}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">总包数:</span>
-                        <span class="metric-value">${data.total_packets || 0}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">当前字节:</span>
-                        <span class="metric-value">${this.formatBytes(data.current_bytes || 0)}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">窗口大小:</span>
-                        <span class="metric-value">${data.window_size || 0}s</span>
-                    </div>
-                `;
-            }
-
-            formatBytes(bytes) {
-                if (bytes === 0) return '0 B';
-                const k = 1024;
-                const sizes = ['B', 'KB', 'MB', 'GB'];
-                const i = Math.floor(Math.log(bytes) / Math.log(k));
-                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-            }
-
-            updateLastUpdateTime() {
-                this.lastUpdateTime = new Date();
-                document.getElementById('lastUpdate').textContent = this.lastUpdateTime.toLocaleTimeString();
+            updateStatus(status, isOnline) {
+                const statusElement = document.getElementById('connectionStatus');
+                statusElement.textContent = status;
+                statusElement.style.color = isOnline ? '#4caf50' : '#f44336';
             }
 
             showError(message) {
-                const grid = document.getElementById('componentsGrid');
-                grid.innerHTML = `<div class="error">${message}</div>`;
+                const errorContainer = document.getElementById('errorContainer');
+                errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
+                
+                setTimeout(() => {
+                    errorContainer.innerHTML = '';
+                }, 10000);
             }
         }
 
-        // 全局函数
-        function refreshAll() {
-            window.monitor.refreshAll();
-        }
-
-        // 初始化
-        window.addEventListener('DOMContentLoaded', () => {
-            window.monitor = new APIMonitor();
+        // 初始化监控系统
+        document.addEventListener('DOMContentLoaded', () => {
+            new UDPlexMonitor();
         });
     </script>
 </body>

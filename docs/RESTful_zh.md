@@ -2,7 +2,7 @@
 
 ## 概述
 
-API服务器提供RESTful API接口，用于监控和管理路由器组件的状态。服务器支持多种组件类型，包括监听组件、转发组件、TCP隧道组件和负载均衡组件。
+API服务器提供RESTful API接口，用于监控和管理路由器组件的状态。服务器支持多种组件类型，包括监听组件、转发组件、TCP隧道组件、负载均衡组件和过滤组件。
 
 ## 配置
 
@@ -18,7 +18,6 @@ API服务器提供RESTful API接口，用于监控和管理路由器组件的状
 }
 ```
 
-
 ### 配置选项
 
 - `enabled`: 是否启用API服务器
@@ -32,39 +31,126 @@ API服务器提供RESTful API接口，用于监控和管理路由器组件的状
 
 **端点：** `GET /api/components`
 
-**描述：** 获取所有已注册组件的列表
+**描述：** 获取所有已注册组件的列表，包含每个组件的基本信息和detour配置
 
 **响应格式：**
-```
-json
+```json
 [
   {
-    "tag": "component1",
-    "type": "listen"
+    "tag": "client_listen",
+    "type": "listen",
+    "listen_addr": "0.0.0.0:5202",
+    "timeout": 120,
+    "replace_old_mapping": true,
+    "detour": ["protocol_filter"]
   },
   {
-    "tag": "component2",
-    "type": "forward"
+    "tag": "protocol_filter",
+    "type": "filter",
+    "use_proto_detectors": ["wireguard", "openvpn"],
+    "detour": {
+      "wireguard": ["wg_forward"],
+      "openvpn": ["ovpn_forward"]
+    },
+    "detour_miss": ["default_forward"]
+  },
+  {
+    "tag": "load_balancer",
+    "type": "load_balancer",
+    "window_size": 10,
+    "detour": [
+      {
+        "rule": "seq % 2 == 0",
+        "targets": ["client_forward"]
+      },
+      {
+        "rule": "seq % 2 == 1",
+        "targets": ["client_forward"]
+      }
+    ]
+  },
+  {
+    "tag": "client_forward",
+    "type": "forward",
+    "forwarders": ["127.0.0.1:5201"],
+    "reconnect_interval": 5,
+    "connection_check_time": 30,
+    "send_keepalive": true,
+    "detour": ["client_listen"]
   }
 ]
 ```
+
 ### 2. 获取指定组件信息
 
 **端点：** `GET /api/components/{tag}`
 
-**描述：** 根据标签获取特定组件的信息
+**描述：** 根据标签获取特定组件的详细信息，包含完整的配置和detour信息
 
 **参数：**
 - `tag` (路径参数): 组件标签
 
 **响应格式：**
-```
-json
+
+**监听组件示例：**
+```json
 {
-  "tag": "component1",
-  "type": "listen"
+  "tag": "client_listen",
+  "type": "listen",
+  "listen_addr": "0.0.0.0:5202",
+  "timeout": 120,
+  "replace_old_mapping": true,
+  "detour": ["protocol_filter"]
 }
 ```
+
+**过滤组件示例：**
+```json
+{
+  "tag": "protocol_filter",
+  "type": "filter",
+  "use_proto_detectors": ["wireguard", "openvpn", "game_protocol"],
+  "detour": {
+    "wireguard": ["wg_forward"],
+    "openvpn": ["ovpn_forward"],
+    "game_protocol": ["game_forward"]
+  },
+  "detour_miss": ["default_forward"]
+}
+```
+
+**负载均衡组件示例：**
+```json
+{
+  "tag": "load_balancer",
+  "type": "load_balancer",
+  "window_size": 10,
+  "detour": [
+    {
+      "rule": "seq % 2 == 0",
+      "targets": ["client_forward"]
+    },
+    {
+      "rule": "seq % 2 == 1",
+      "targets": ["client_forward"]
+    }
+  ]
+}
+```
+
+**转发组件示例：**
+```json
+{
+  "tag": "client_forward",
+  "type": "forward",
+  "forwarders": ["127.0.0.1:5201"],
+  "reconnect_interval": 5,
+  "connection_check_time": 30,
+  "send_keepalive": true,
+  "detour": ["client_listen"]
+}
+```
+
 ### 3. 获取监听组件连接
 
 **端点：** `GET /api/listen/{tag}`
@@ -75,8 +161,7 @@ json
 - `tag` (路径参数): 组件标签
 
 **响应格式：**
-```
-json
+```json
 {
   "tag": "listen_component",
   "listen_addr": "0.0.0.0:8080",
@@ -91,6 +176,7 @@ json
   "count": 1
 }
 ```
+
 ### 4. 获取转发组件连接
 
 **端点：** `GET /api/forward/{tag}`
@@ -101,8 +187,7 @@ json
 - `tag` (路径参数): 组件标签
 
 **响应格式：**
-```
-json
+```json
 {
   "tag": "forward_component",
   "connections": [
@@ -119,6 +204,7 @@ json
   "count": 1
 }
 ```
+
 ### 5. 获取TCP隧道监听连接
 
 **端点：** `GET /api/tcp_tunnel_listen/{tag}`
@@ -129,8 +215,7 @@ json
 - `tag` (路径参数): 组件标签
 
 **响应格式：**
-```
-json
+```json
 {
   "tag": "tcp_tunnel_listen",
   "listen_addr": "0.0.0.0:9090",
@@ -154,6 +239,7 @@ json
   "total_connections": 1
 }
 ```
+
 ### 6. 获取TCP隧道转发连接
 
 **端点：** `GET /api/tcp_tunnel_forward/{tag}`
@@ -164,8 +250,7 @@ json
 - `tag` (路径参数): 组件标签
 
 **响应格式：**
-```
-json
+```json
 {
   "tag": "tcp_tunnel_forward",
   "forward_id": "abc123",
@@ -189,6 +274,7 @@ json
   "total_connections": 1
 }
 ```
+
 ### 7. 获取负载均衡器流量统计
 
 **端点：** `GET /api/load_balancer/{tag}`
@@ -199,8 +285,7 @@ json
 - `tag` (路径参数): 组件标签
 
 **响应格式：**
-```
-json
+```json
 {
   "tag": "load_balancer",
   "bytes_per_sec": 1024000,
@@ -219,7 +304,31 @@ json
 }
 ```
 
-### 8. 提供H5文件
+### 8. 获取过滤器组件信息
+
+**端点：** `GET /api/filter/{tag}`
+
+**描述：** 获取指定过滤器组件的配置信息
+
+**参数：**
+- `tag` (路径参数): 组件标签
+
+**响应格式：**
+```json
+{
+  "tag": "protocol_filter",
+  "type": "filter",
+  "use_proto_detectors": ["wireguard", "openvpn", "game_protocol"],
+  "detour": {
+    "wireguard": ["wg_forward"],
+    "openvpn": ["ovpn_forward"],
+    "game_protocol": ["game_forward"]
+  },
+  "detour_miss": ["default_forward"]
+}
+```
+
+### 9. 提供H5文件
 
 **端点：** `GET /h5/{file_path}`
 
@@ -229,6 +338,46 @@ json
 - `file_path` (路径参数): 相对于配置的 `h5_files_path` 目录的H5文件路径
 
 **响应：** 请求的H5文件内容，带有适当的内容类型。
+
+## 组件detour配置说明
+
+### detour字段类型
+
+**简单字符串数组（适用于listen和forward组件）：**
+```json
+"detour": ["target_component"]
+```
+
+**协议映射对象（适用于filter组件）：**
+```json
+"detour": {
+  "protocol_name": ["target_component1", "target_component2"],
+  "another_protocol": ["target_component3"]
+}
+```
+
+**负载均衡规则数组（适用于load_balancer组件）：**
+```json
+"detour": [
+  {
+    "rule": "seq % 2 == 0",
+    "targets": ["component1"]
+  },
+  {
+    "rule": "seq % 2 == 1", 
+    "targets": ["component2"]
+  }
+]
+```
+
+### 组件类型特定字段
+
+- **listen组件**: `listen_addr`, `timeout`, `replace_old_mapping`
+- **forward组件**: `forwarders`, `reconnect_interval`, `connection_check_time`, `send_keepalive`
+- **load_balancer组件**: `window_size`
+- **filter组件**: `use_proto_detectors`, `detour_miss`
+- **tcp_tunnel_listen组件**: `listen_addr`, `pools`
+- **tcp_tunnel_forward组件**: `pools`, `target_count`
 
 ## 错误处理
 

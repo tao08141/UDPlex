@@ -57,6 +57,7 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/tcp_tunnel_listen/", a.handleGetTcpTunnelListenConnections)
 	mux.HandleFunc("/api/tcp_tunnel_forward/", a.handleGetTcpTunnelForwardConnections)
 	mux.HandleFunc("/api/load_balancer/", a.handleGetLoadBalancerTraffic)
+	mux.HandleFunc("/api/filter/", a.handleGetFilterInfo)
 
 	// Register H5 files handler if path is configured
 	if a.config.H5FilesPath != "" {
@@ -100,14 +101,11 @@ func (a *APIServer) handleGetComponents(w http.ResponseWriter, r *http.Request) 
 	}
 
 	components := a.router.GetComponents()
-	componentList := make([]map[string]string, 0, len(components))
+	componentList := make([]map[string]interface{}, 0, len(components))
 
 	for _, component := range components {
-		componentType := a.getComponentTypeFromConfig(component.GetTag())
-		componentList = append(componentList, map[string]string{
-			"tag":  component.GetTag(),
-			"type": componentType,
-		})
+		componentInfo := a.getComponentInfo(component.GetTag())
+		componentList = append(componentList, componentInfo)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -137,17 +135,81 @@ func (a *APIServer) handleGetComponentByTag(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	componentType := a.getComponentTypeFromConfig(component.GetTag())
+	componentInfo := a.getComponentInfo(component.GetTag())
 
 	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(map[string]string{
-		"tag":  component.GetTag(),
-		"type": componentType,
-	})
+	err := json.NewEncoder(w).Encode(componentInfo)
 	if err != nil {
 		logger.Errorf("Error encoding JSON: %v", err)
 		return
 	}
+}
+
+// getComponentInfo retrieves comprehensive component information including detour
+func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
+	result := map[string]interface{}{
+		"tag":    tag,
+		"type":   "unknown",
+		"detour": nil,
+	}
+
+	// Get the component configuration from router's configuration
+	if a.router != nil {
+		for _, serviceConfig := range a.router.config.Services {
+			if serviceTag, ok := serviceConfig["tag"].(string); ok && serviceTag == tag {
+				// Set component type
+				if serviceType, ok := serviceConfig["type"].(string); ok {
+					result["type"] = serviceType
+				}
+
+				// Set detour information
+				if detour, ok := serviceConfig["detour"]; ok {
+					result["detour"] = detour
+				}
+
+				// Add other relevant configuration based on component type
+				if serviceType, ok := serviceConfig["type"].(string); ok {
+					switch serviceType {
+					case "listen":
+						if listenAddr, ok := serviceConfig["listen_addr"].(string); ok {
+							result["listen_addr"] = listenAddr
+						}
+						if timeout, ok := serviceConfig["timeout"]; ok {
+							result["timeout"] = timeout
+						}
+						if replaceOldMapping, ok := serviceConfig["replace_old_mapping"]; ok {
+							result["replace_old_mapping"] = replaceOldMapping
+						}
+					case "forward":
+						if forwarders, ok := serviceConfig["forwarders"]; ok {
+							result["forwarders"] = forwarders
+						}
+						if reconnectInterval, ok := serviceConfig["reconnect_interval"]; ok {
+							result["reconnect_interval"] = reconnectInterval
+						}
+						if sendKeepalive, ok := serviceConfig["send_keepalive"]; ok {
+							result["send_keepalive"] = sendKeepalive
+						}
+					case "load_balancer":
+						if windowSize, ok := serviceConfig["window_size"]; ok {
+							result["window_size"] = windowSize
+						}
+					case "filter":
+						if useProtoDetectors, ok := serviceConfig["use_proto_detectors"]; ok {
+							result["use_proto_detectors"] = useProtoDetectors
+						}
+						if detourMiss, ok := serviceConfig["detour_miss"]; ok {
+							result["detour_miss"] = detourMiss
+						}
+					}
+				}
+
+				break
+			}
+		}
+	}
+
+	return result
 }
 
 // getComponentTypeFromConfig retrieves the component type from router config
@@ -478,6 +540,47 @@ func (a *APIServer) handleGetLoadBalancerTraffic(w http.ResponseWriter, r *http.
 		"current_packets": atomic.LoadUint64(&loadBalancerComponent.stats.currentPackets),
 		"samples":         samples,
 		"window_size":     loadBalancerComponent.stats.windowSize,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	err := json.NewEncoder(w).Encode(result)
+	if err != nil {
+		logger.Errorf("Error encoding JSON: %v", err)
+		return
+	}
+}
+
+func (a *APIServer) handleGetFilterInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tag := r.URL.Path[len("/api/filter/"):]
+	if tag == "" {
+		http.Error(w, "Component tag is required", http.StatusBadRequest)
+		return
+	}
+
+	component := a.router.GetComponentByTag(tag)
+	if component == nil {
+		http.Error(w, "Component not found", http.StatusNotFound)
+		return
+	}
+
+	filterComponent, ok := component.(*FilterComponent)
+	if !ok {
+		http.Error(w, "Component is not a FilterComponent", http.StatusBadRequest)
+		return
+	}
+
+	// Get filter configuration from router config
+	result := map[string]interface{}{
+		"tag":                 filterComponent.GetTag(),
+		"type":                "filter",
+		"use_proto_detectors": filterComponent.useProtoDetectors,
+		"detour":              filterComponent.detour,
+		"detour_miss":         filterComponent.detourMiss,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

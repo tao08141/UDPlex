@@ -2,11 +2,11 @@
 
 ## Overview
 
-The API server provides RESTful API endpoints for monitoring and managing router component states. The server supports various component types including Listen, Forward, TCP Tunnel, and Load Balancer components.
+The API server provides a RESTful API interface for monitoring and managing the status of router components. The server supports multiple component types, including listen components, forward components, TCP tunnel components, load balancer components, and filter components.
 
 ## Configuration
 
-Add the following configuration to the configuration file:
+Add the following configuration to your config file:
 ```json
 {
   "api": {
@@ -18,13 +18,12 @@ Add the following configuration to the configuration file:
 }
 ```
 
-
 ### Configuration Options
 
 - `enabled`: Whether to enable the API server
-- `port`: The port on which the API server listens
-- `host`: The host address on which the API server listens
-- `h5_files_path`: Path to a directory containing H5 files to be served. When configured, the API server will serve H5 files from this directory at the "/h5/" endpoint.
+- `port`: Port on which the API server listens
+- `host`: Host address for the API server
+- `h5_files_path`: Directory path containing H5 files. When configured, the API server will serve files from this directory at the "/h5/" endpoint.
 
 ## API Endpoints
 
@@ -32,51 +31,137 @@ Add the following configuration to the configuration file:
 
 **Endpoint:** `GET /api/components`
 
-**Description:** Retrieve a list of all registered components
+**Description:** Retrieve a list of all registered components, including basic information and detour configuration for each component.
 
-**Response Format:**
-```
-json
+**Response Example:**
+```json
 [
   {
-    "tag": "component1",
-    "type": "listen"
+    "tag": "client_listen",
+    "type": "listen",
+    "listen_addr": "0.0.0.0:5202",
+    "timeout": 120,
+    "replace_old_mapping": true,
+    "detour": ["protocol_filter"]
   },
   {
-    "tag": "component2",
-    "type": "forward"
+    "tag": "protocol_filter",
+    "type": "filter",
+    "use_proto_detectors": ["wireguard", "openvpn"],
+    "detour": {
+      "wireguard": ["wg_forward"],
+      "openvpn": ["ovpn_forward"]
+    },
+    "detour_miss": ["default_forward"]
+  },
+  {
+    "tag": "load_balancer",
+    "type": "load_balancer",
+    "window_size": 10,
+    "detour": [
+      {
+        "rule": "seq % 2 == 0",
+        "targets": ["client_forward"]
+      },
+      {
+        "rule": "seq % 2 == 1",
+        "targets": ["client_forward"]
+      }
+    ]
+  },
+  {
+    "tag": "client_forward",
+    "type": "forward",
+    "forwarders": ["127.0.0.1:5201"],
+    "reconnect_interval": 5,
+    "connection_check_time": 30,
+    "send_keepalive": true,
+    "detour": ["client_listen"]
   }
 ]
 ```
+
 ### 2. Get Component by Tag
 
 **Endpoint:** `GET /api/components/{tag}`
 
-**Description:** Retrieve information about a specific component by its tag
+**Description:** Retrieve detailed information for a specific component by tag, including full configuration and detour info.
 
 **Parameters:**
 - `tag` (path parameter): Component tag
 
-**Response Format:**
-```
-json
+**Response Examples:**
+
+**Listen Component:**
+```json
 {
-  "tag": "component1",
-  "type": "listen"
+  "tag": "client_listen",
+  "type": "listen",
+  "listen_addr": "0.0.0.0:5202",
+  "timeout": 120,
+  "replace_old_mapping": true,
+  "detour": ["protocol_filter"]
 }
 ```
+
+**Filter Component:**
+```json
+{
+  "tag": "protocol_filter",
+  "type": "filter",
+  "use_proto_detectors": ["wireguard", "openvpn", "game_protocol"],
+  "detour": {
+    "wireguard": ["wg_forward"],
+    "openvpn": ["ovpn_forward"],
+    "game_protocol": ["game_forward"]
+  },
+  "detour_miss": ["default_forward"]
+}
+```
+
+**Load Balancer Component:**
+```json
+{
+  "tag": "load_balancer",
+  "type": "load_balancer",
+  "window_size": 10,
+  "detour": [
+    {
+      "rule": "seq % 2 == 0",
+      "targets": ["client_forward"]
+    },
+    {
+      "rule": "seq % 2 == 1",
+      "targets": ["client_forward"]
+    }
+  ]
+}
+```
+
+**Forward Component:**
+```json
+{
+  "tag": "client_forward",
+  "type": "forward",
+  "forwarders": ["127.0.0.1:5201"],
+  "reconnect_interval": 5,
+  "connection_check_time": 30,
+  "send_keepalive": true,
+  "detour": ["client_listen"]
+}
+```
+
 ### 3. Get Listen Component Connections
 
 **Endpoint:** `GET /api/listen/{tag}`
 
-**Description:** Retrieve connection status for a specified listen component
+**Description:** Get the connection status of a specified listen component.
 
 **Parameters:**
 - `tag` (path parameter): Component tag
 
-**Response Format:**
-```
-json
+**Response Example:**
+```json
 {
   "tag": "listen_component",
   "listen_addr": "0.0.0.0:8080",
@@ -91,18 +176,18 @@ json
   "count": 1
 }
 ```
+
 ### 4. Get Forward Component Connections
 
 **Endpoint:** `GET /api/forward/{tag}`
 
-**Description:** Retrieve connection status for a specified forward component
+**Description:** Get the connection status of a specified forward component.
 
 **Parameters:**
 - `tag` (path parameter): Component tag
 
-**Response Format:**
-```
-json
+**Response Example:**
+```json
 {
   "tag": "forward_component",
   "connections": [
@@ -119,16 +204,17 @@ json
   "count": 1
 }
 ```
+
 ### 5. Get TCP Tunnel Listen Connections
 
 **Endpoint:** `GET /api/tcp_tunnel_listen/{tag}`
 
-**Description:** Retrieve connection pool status for a specified TCP tunnel listen component
+**Description:** Get the connection pool status of a specified TCP tunnel listen component.
 
 **Parameters:**
 - `tag` (path parameter): Component tag
 
-**Response Format:**
+**Response Example:**
 ```json
 {
   "tag": "tcp_tunnel_listen",
@@ -153,19 +239,17 @@ json
   "total_connections": 1
 }
 ```
-```
-
 
 ### 6. Get TCP Tunnel Forward Connections
 
 **Endpoint:** `GET /api/tcp_tunnel_forward/{tag}`
 
-**Description:** Retrieve connection pool status for a specified TCP tunnel forward component
+**Description:** Get the connection pool status of a specified TCP tunnel forward component.
 
 **Parameters:**
 - `tag` (path parameter): Component tag
 
-**Response Format:**
+**Response Example:**
 ```json
 {
   "tag": "tcp_tunnel_forward",
@@ -191,17 +275,16 @@ json
 }
 ```
 
-
 ### 7. Get Load Balancer Traffic Statistics
 
 **Endpoint:** `GET /api/load_balancer/{tag}`
 
-**Description:** Retrieve traffic statistics for a specified load balancer component
+**Description:** Get traffic statistics for a specified load balancer component.
 
 **Parameters:**
 - `tag` (path parameter): Component tag
 
-**Response Format:**
+**Response Example:**
 ```json
 {
   "tag": "load_balancer",
@@ -221,8 +304,31 @@ json
 }
 ```
 
+### 8. Get Filter Component Info
 
-### 8. Serve H5 Files
+**Endpoint:** `GET /api/filter/{tag}`
+
+**Description:** Get the configuration information of a specified filter component.
+
+**Parameters:**
+- `tag` (path parameter): Component tag
+
+**Response Example:**
+```json
+{
+  "tag": "protocol_filter",
+  "type": "filter",
+  "use_proto_detectors": ["wireguard", "openvpn", "game_protocol"],
+  "detour": {
+    "wireguard": ["wg_forward"],
+    "openvpn": ["ovpn_forward"],
+    "game_protocol": ["game_forward"]
+  },
+  "detour_miss": ["default_forward"]
+}
+```
+
+### 9. Serve H5 Files
 
 **Endpoint:** `GET /h5/{file_path}`
 
@@ -231,7 +337,47 @@ json
 **Parameters:**
 - `file_path` (path parameter): Path to the H5 file relative to the configured `h5_files_path` directory
 
-**Response:** The requested H5 file content with appropriate content type.
+**Response:** The requested H5 file content, with appropriate content type.
+
+## Detour Field Explanation
+
+### Detour Field Types
+
+**Simple string array (for listen and forward components):**
+```json
+"detour": ["target_component"]
+```
+
+**Protocol mapping object (for filter components):**
+```json
+"detour": {
+  "protocol_name": ["target_component1", "target_component2"],
+  "another_protocol": ["target_component3"]
+}
+```
+
+**Load balancing rule array (for load_balancer components):**
+```json
+"detour": [
+  {
+    "rule": "seq % 2 == 0",
+    "targets": ["component1"]
+  },
+  {
+    "rule": "seq % 2 == 1",
+    "targets": ["component2"]
+  }
+]
+```
+
+### Component Type Specific Fields
+
+- **listen component**: `listen_addr`, `timeout`, `replace_old_mapping`
+- **forward component**: `forwarders`, `reconnect_interval`, `connection_check_time`, `send_keepalive`
+- **load_balancer component**: `window_size`
+- **filter component**: `use_proto_detectors`, `detour_miss`
+- **tcp_tunnel_listen component**: `listen_addr`, `pools`
+- **tcp_tunnel_forward component**: `pools`, `target_count`
 
 ## Error Handling
 
@@ -241,4 +387,4 @@ The API server uses standard HTTP status codes:
 - `400 Bad Request`: Invalid request parameters
 - `404 Not Found`: Component not found
 - `405 Method Not Allowed`: Unsupported HTTP method
-- `500 Internal Server Error`: Internal server error
+- `500 Internal Server Error`:

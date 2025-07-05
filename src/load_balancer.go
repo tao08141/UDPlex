@@ -2,19 +2,19 @@ package main
 
 import (
 	"fmt"
-	"github.com/expr-lang/expr"
-	"github.com/expr-lang/expr/vm"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	// 其他导入...
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 )
 
 // CompiledExpression represents a pre-compiled expression for faster evaluation
 type CompiledExpression struct {
-	program *vm.Program // 这里由 expr.Program 改为 *vm.Program
-	varKeys []string    // Variables found in the expression (e.g., "$seq", "$bps", "$pps")
+	program *vm.Program
+	varKeys []string // Variables found in the expression (e.g., "seq", "bps", "pps")
 }
 
 // TrafficSample represents a traffic sample for a specific interval
@@ -110,7 +110,7 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 	// Find variables in the expression
 	varKeys := lb.findVariables(exprStr)
 
-	program, err := expr.Compile(exprStr, expr.Env(map[string]interface{}{
+	program, err := expr.Compile(exprStr, expr.Env(map[string]any{
 		"seq":  uint64(0),
 		"bps":  uint64(0),
 		"pps":  uint64(0),
@@ -256,7 +256,7 @@ func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps, size uint6
 // evaluateCompiledExpression evaluates a pre-compiled expression with given variables
 func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledExpression, seq, bps, pps, size uint64) bool {
 	// Create environment with variables for expr evaluation
-	env := map[string]interface{}{}
+	env := map[string]any{}
 
 	// Add variables to environment without $ prefix
 	for _, varKey := range compiled.varKeys {
