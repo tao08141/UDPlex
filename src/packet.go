@@ -21,7 +21,7 @@ func (p *Packet) GetData() []byte {
 	return p.buffer[p.offset : p.offset+p.length]
 }
 
-// 替换buffer的地址
+// SetBuffer Replace buffer addr
 func (p *Packet) SetBuffer(buffer []byte) {
 	p.router.PutBuffer(p.buffer)
 	p.buffer = buffer

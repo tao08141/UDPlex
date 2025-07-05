@@ -185,7 +185,7 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 
 // updateStats updates traffic statistics with the current packet
 func (lb *LoadBalancerComponent) updateStats(packet *Packet) {
-	atomic.AddUint64(&lb.stats.currentBytes, uint64(len(packet.GetData())))
+	atomic.AddUint64(&lb.stats.currentBytes, uint64(packet.length))
 	atomic.AddUint64(&lb.stats.currentPackets, 1)
 }
 

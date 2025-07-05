@@ -14,40 +14,45 @@ import (
 	"time"
 )
 
+// ProtocolVersion Protocol version
+const ProtocolVersion = 2
+
+// Message types
 const (
-	ProtocolVersion = 2
+	MsgTypeAuthChallenge = 1 // Authentication challenge
+	MsgTypeAuthResponse  = 2 // Authentication response
+	MsgTypeHeartbeat     = 4 // Heartbeat packet
+	MsgTypeData          = 5 // Data packet
+	MsgTypeDisconnect    = 6 // Disconnect packet
+)
 
-	// Message Types
-	MsgTypeAuthChallenge = 1
-	MsgTypeAuthResponse  = 2
-	MsgTypeHeartbeat     = 4
-	MsgTypeData          = 5
-	MsgTypeDisconnect    = 6
+// Protocol header and authentication message sizes
+const (
+	HeaderSize    = 8                                                                    // Protocol header size
+	ChallengeSize = 32                                                                   // Authentication challenge size
+	TimestampSize = 8                                                                    // Timestamp size
+	MACSize       = 32                                                                   // Message authentication code size
+	ResponseSize  = 32                                                                   // Response message size
+	NonceSize     = 12                                                                   // Nonce size
+	ForwardIDSize = 8                                                                    // Forward ID size
+	PoolIDSize    = 8                                                                    // Connection pool ID size
+	ConnIDSize    = 8                                                                    // Connection ID size
+	HandshakeSize = ChallengeSize + TimestampSize + ForwardIDSize + PoolIDSize + MACSize // Handshake message size
+)
 
-	// Protocol header size
-	HeaderSize = 8
+// Deduplication-related constants
+const (
+	FrameIDSize     = 8               // First 8 bytes of nonce as Frame ID
+	SequenceSize    = 4               // Last 4 bytes of nonce as Sequence number
+	BitmapSize      = 65535           // Sequence bitmap size: 2^32 bits
+	FrameTimeout    = 2 * time.Minute // Frame expiration time
+	CleanupInterval = 1 * time.Minute // Cleanup interval
+)
 
-	// Auth message sizes
-	ChallengeSize = 32
-	TimestampSize = 8
-	MACSize       = 32
-	ResponseSize  = 32
-	NonceSize     = 12
-	ForwardIDSize = 8
-	PoolIDSize    = 8
-	ConnIDSize    = 8
-	HandshakeSize = ChallengeSize + TimestampSize + ForwardIDSize + PoolIDSize + MACSize
-
-	// Deduplication constants
-	FrameIDSize     = 8               // First 8 bytes of nonce
-	SequenceSize    = 4               // Last 4 bytes of nonce
-	BitmapSize      = 65535           // 2^32 bits for sequence numbers
-	FrameTimeout    = 2 * time.Minute // Frame expiry time
-	CleanupInterval = 1 * time.Minute // Cleanup frequency
-
-	// Timeouts
-	DefaultAuthTimeout = 30 * time.Second
-	DefaultDataTimeout = 65 * time.Second
+// Timeout settings
+const (
+	DefaultAuthTimeout = 30 * time.Second // Authentication timeout
+	DefaultDataTimeout = 65 * time.Second // Data wait timeout
 )
 
 // FrameTracker tracks used sequence numbers for a frame
