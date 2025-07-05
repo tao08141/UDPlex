@@ -49,7 +49,10 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	}
 
 	forwardID := ForwardID{}
-	rand.Read(forwardID[:])
+	_, err = rand.Read(forwardID[:])
+	if err != nil {
+		return nil
+	}
 
 	pools := make(map[PoolID]*TcpTunnelConnPool)
 
@@ -71,7 +74,10 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		}
 
 		poolID := PoolID{}
-		rand.Read(poolID[:])
+		_, err = rand.Read(poolID[:])
+		if err != nil {
+			return nil
+		}
 
 		pools[poolID] = NewTcpTunnelConnPool(addr, poolID, count)
 	}
@@ -141,7 +147,10 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 
 	if f.noDelay {
 		if tcpConn, ok := conn.(*net.TCPConn); ok {
-			tcpConn.SetNoDelay(true)
+			err := tcpConn.SetNoDelay(true)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -196,14 +205,14 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 	err := c.Write(&packet)
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
-		c.conn.Close()
+		c.Close()
 		return
 	}
 
 	c.heartbeatMissCount++
 	if c.heartbeatMissCount >= 5 {
 		logger.Warnf("%s: Heartbeat missed %d times, disconnecting", f.tag, c.heartbeatMissCount)
-		c.conn.Close()
+		c.Close()
 		return
 	}
 
@@ -308,7 +317,7 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 	f.pools[c.poolID].RemoveConnection(c)
 }
 
-func (f *TcpTunnelForwardComponent) SendPacket(packet *Packet, metadata any) error {
+func (f *TcpTunnelForwardComponent) SendPacket(_ *Packet, _ any) error {
 
 	// Due to the nature of TCP streams, adding send tasks to queue processing would cause packet reordering or queue blocking
 	return nil
@@ -317,7 +326,10 @@ func (f *TcpTunnelForwardComponent) SendPacket(packet *Packet, metadata any) err
 func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
-	f.authManager.WrapData(packet)
+	err := f.authManager.WrapData(packet)
+	if err != nil {
+		return err
+	}
 
 	if f.broadcastMode {
 		for _, pool := range f.pools {

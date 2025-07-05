@@ -101,7 +101,10 @@ func (l *TcpTunnelListenComponent) Start() error {
 
 			if l.noDelay {
 				if tcpConn, ok := conn.(*net.TCPConn); ok {
-					tcpConn.SetNoDelay(true)
+					err := tcpConn.SetNoDelay(true)
+					if err != nil {
+						logger.Warnf("%s: Failed to set TCP_NODELAY for connection %s: %v", l.tag, conn.RemoteAddr(), err)
+					}
 				}
 			}
 
@@ -113,7 +116,10 @@ func (l *TcpTunnelListenComponent) Start() error {
 func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
-	l.authManager.WrapData(packet)
+	err := l.authManager.WrapData(packet)
+	if err != nil {
+		return err
+	}
 
 	if l.broadcastMode {
 		connections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
@@ -139,7 +145,7 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 	return nil
 }
 
-func (l *TcpTunnelListenComponent) SendPacket(packet *Packet, metadata any) error {
+func (l *TcpTunnelListenComponent) SendPacket(_ *Packet, _ any) error {
 
 	// Due to the nature of TCP streams, adding send tasks to queue processing would cause packet reordering or queue blocking
 	return nil
@@ -185,10 +191,7 @@ func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
 		l.connections.Store(newConnections)
 	}
 
-	if c != nil {
-		c.Close()
-		c = nil
-	}
+	c.Close()
 }
 
 func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {

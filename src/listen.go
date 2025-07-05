@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -69,7 +70,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		sendTimeout:       sendTimeout,
 	}
 
-	// Initialize atomic value with empty map
+	// Initialize an atomic value with an empty map
 	initialMap := make(map[string]*AddrMapping)
 	component.mappingsAtomic.Store(initialMap)
 
@@ -118,11 +119,11 @@ func (l *ListenComponent) performCleanup() {
 	}
 }
 
-func (l *ListenComponent) syncMapping() error {
+func (l *ListenComponent) syncMapping() {
 	mappingsTemp := make(map[string]*AddrMapping)
 	maps.Copy(mappingsTemp, l.mappings)
 	l.mappingsAtomic.Store(mappingsTemp)
-	return nil
+	return
 }
 
 func (l *ListenComponent) SendPacket(packet *Packet, metadata any) error {
@@ -151,13 +152,13 @@ func (l *ListenComponent) SendPacket(packet *Packet, metadata any) error {
 }
 
 // handleAuthMessage processes authentication messages
-func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byte, addr net.Addr) error {
+func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byte, addr net.Addr) {
 
 	addrKey := addr.String()
 
 	switch header.MsgType {
 	case MsgTypeAuthChallenge:
-		// Get or create auth state
+		// Get or create an auth state
 		mapping, exists := l.mappings[addrKey]
 		if !exists {
 			mapping = &AddrMapping{
@@ -172,10 +173,10 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 
 		// Process challenge and send response
 		data := buffer[HeaderSize : HeaderSize+header.Length]
-		forwardID, poolID, err := l.authManager.ProcessAuthChallenge(data, mapping.authState)
+		forwardID, poolID, err := l.authManager.ProcessAuthChallenge(data)
 		if err != nil {
 			logger.Infof("%s: %s Authentication challenge failed: %v", l.tag, addr.String(), err)
-			return nil
+			return
 		}
 
 		if l.replaceOldMapping {
@@ -227,7 +228,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		if mapping, exists := l.mappings[addrKey]; exists {
 			mapping.lastActive = time.Now()
 			if mapping.authState != nil {
-				// Echo heartbeat back
+				// Echo's heartbeat back
 				responseBuffer := l.router.GetBuffer()
 				responseLen := CreateHeartbeat(responseBuffer)
 
@@ -237,7 +238,10 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 					}
 				}
 
-				l.conn.WriteTo(responseBuffer[:responseLen], addr)
+				_, err := l.conn.WriteTo(responseBuffer[:responseLen], addr)
+				if err != nil {
+					logger.Infof("%s: Failed to send heartbeat response: %v", l.tag, err)
+				}
 				l.router.PutBuffer(responseBuffer)
 
 			}
@@ -251,7 +255,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		logger.Infof("%s: Client %s disconnected", l.tag, addr.String())
 	}
 
-	return nil
+	return
 }
 
 // handlePackets processes incoming UDP packets
@@ -282,9 +286,8 @@ func (l *ListenComponent) handlePackets() {
 
 				length, addr, err := l.conn.ReadFrom(packet.buffer[packet.offset:])
 
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					return
-				} else if err != nil {
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
 					logger.Warnf("%s: Read error: %v", l.tag, err)
 					return
 				}
@@ -371,7 +374,10 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
 	if l.authManager != nil {
-		l.authManager.WrapData(packet)
+		err := l.authManager.WrapData(packet)
+		if err != nil {
+			return err
+		}
 	}
 
 	mappingsSnapshot := l.mappingsAtomic.Load().(map[string]*AddrMapping)

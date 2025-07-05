@@ -17,19 +17,6 @@ type Packet struct {
 	connID  ConnID // Unique connection identifier
 }
 
-func NewPacket(buffer []byte, length int, srcAddr net.Addr, srcTag string, router *Router, offset int) Packet {
-	return Packet{
-		buffer:  buffer,
-		length:  length,
-		srcAddr: srcAddr,
-		srcTag:  srcTag,
-		count:   1, // Initial reference count
-		router:  router,
-		offset:  offset,
-		connID:  ConnID{},
-	}
-}
-
 func (p *Packet) GetData() []byte {
 	return p.buffer[p.offset : p.offset+p.length]
 }

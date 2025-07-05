@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -74,7 +75,10 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 
 	forwardID := ForwardID{}
 
-	rand.Read(forwardID[:])
+	_, err = rand.Read(forwardID[:])
+	if err != nil {
+		return nil
+	}
 
 	return &ForwardComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
@@ -89,6 +93,17 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		forwardID:           forwardID,
 		sendTimeout:         sendTimeout,
 	}
+}
+
+func (f *ForwardConn) Close() {
+	if f.conn != nil {
+		err := f.conn.Close()
+		if err != nil {
+			logger.Warnf("failed to close connection: %v", err)
+		}
+	}
+
+	f.conn = nil
 }
 
 func (f *ForwardConn) Write(data []byte) (int, error) {
@@ -108,7 +123,7 @@ func (f *ForwardComponent) GetTag() string {
 	return f.tag
 }
 
-// Start initializes and starts the forwarder
+// Start initializes and starts forwarder
 func (f *ForwardComponent) Start() error {
 	// Initialize connections to all forwarders
 	for _, addr := range f.forwarders {
@@ -123,7 +138,7 @@ func (f *ForwardComponent) Start() error {
 
 	logger.Infof("%s: Forwarding to %v", f.tag, f.forwarders)
 
-	// Start connection checker routine
+	// Start a connection checker routine
 	go f.connectionChecker()
 
 	return nil
@@ -135,7 +150,7 @@ func (f *ForwardComponent) Stop() error {
 
 	for _, conn := range f.forwardConnList {
 		if conn.conn != nil {
-			conn.conn.Close()
+			conn.Close()
 		}
 	}
 
@@ -179,11 +194,14 @@ func (f *ForwardComponent) handleConnectionMaintenance(conn *ForwardConn) {
 			}
 		}
 	} else if f.sendKeepalive {
-		conn.Write([]byte{})
+		_, err := conn.Write([]byte{})
+		if err != nil {
+			return
+		}
 	}
 }
 
-// sendAuthChallenge sends authentication challenge to server
+// sendAuthChallenge sends an authentication challenge to a server
 func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
 	if atomic.LoadInt32(&conn.isConnected) == 0 {
 		return
@@ -268,7 +286,7 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 		authState:            &AuthState{},
 	}
 
-	// Start goroutine to handle receiving packets
+	// Start a goroutine to handle receiving packets
 	go f.readFromForwarder(forwardConn)
 
 	// Start authentication if required
@@ -290,8 +308,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 	conn.lastReconnectAttempt = time.Now()
 
 	if conn.conn != nil {
-		conn.conn.Close()
-		conn.conn = nil
+		conn.Close()
 	}
 
 	logger.Infof("%s: Attempting to reconnect to %s", f.tag, conn.remoteAddr)
@@ -325,7 +342,11 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 		case <-f.GetStopChannel():
 			return
 		default:
-			conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
+			err := conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
+			if err != nil {
+				logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.remoteAddr, err)
+				return
+			}
 
 			func() {
 				packet := f.router.GetPacket(f.tag)
@@ -334,7 +355,8 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 				length, err := conn.conn.Read(packet.buffer[packet.offset:])
 
 				if err != nil {
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					var netErr net.Error
+					if errors.As(err, &netErr) && netErr.Timeout() {
 						return
 					}
 
@@ -388,7 +410,7 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 	case MsgTypeAuthResponse:
 
 		data := buffer[HeaderSize : HeaderSize+header.Length]
-		_, _, err := f.authManager.ProcessAuthChallenge(data, conn.authState)
+		_, _, err := f.authManager.ProcessAuthChallenge(data)
 		if err != nil {
 			logger.Warnf("%s: Auth response verification failed: %v", f.tag, err)
 			conn.authState.SetAuthenticated(0)
@@ -414,7 +436,7 @@ func (f *ForwardComponent) SendPacket(packet *Packet, metadata any) error {
 	}
 
 	if atomic.LoadInt32(&conn.isConnected) == 0 || conn.conn == nil {
-		return nil // Connection isn't available, just skip
+		return nil // Connection isn't available, skip
 	}
 
 	_, err := conn.Write(packet.GetData())

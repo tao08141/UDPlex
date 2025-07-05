@@ -140,7 +140,7 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 		t:          &t,
 	}
 
-	// Start write goroutine
+	// Start to write goroutine
 	c.writeWg.Add(1)
 	go c.writeLoop()
 	c.writeWg.Add(1)
@@ -149,16 +149,19 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 	return c
 }
 
-func (c *TcpTunnelConn) Close() error {
+func (c *TcpTunnelConn) Close() {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		close(c.writeQueue)
 		c.writeWg.Wait() // Wait for write goroutine to finish
 		if c.conn != nil {
-			c.conn.Close()
+			err := c.conn.Close()
+			if err != nil {
+				logger.Warnf("Error closing connection to %s: %v", c.conn.RemoteAddr(), err)
+			}
 		}
 	})
-	return nil
+	return
 }
 
 type TcpTunnelComponent interface {
@@ -225,7 +228,7 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 	case c.writeQueue <- packet:
 		return nil
 	default:
-		// Queue is full, drop the packet or handle error
+		// Queue is full, drop the packet or handle the error
 		return net.ErrClosed
 	}
 }
@@ -258,13 +261,18 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
 			return
 		default:
+			var err error
 			if c.authState.IsAuthenticated() {
-				c.conn.SetReadDeadline(time.Now().Add((*c.t).GetAuthManager().dataTimeout))
+				err = c.conn.SetReadDeadline(time.Now().Add((*c.t).GetAuthManager().dataTimeout))
 			} else {
-				c.conn.SetReadDeadline(time.Now().Add((*c.t).GetAuthManager().authTimeout))
+				err = c.conn.SetReadDeadline(time.Now().Add((*c.t).GetAuthManager().authTimeout))
+			}
+			if err != nil {
+				logger.Infof("%s: %s Failed to set read deadline: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
+				return
 			}
 
-			// Calculate read size based on whether we have partial message
+			// Calculate read size based on whether we have a partial message
 			readSize := len(buffer) - (bufferOffset + bufferUsed)
 
 			if readSize <= 0 {
@@ -290,10 +298,10 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 
 			processedBytes := 0
 			for processedBytes < bufferUsed {
-				// If we don't have an expected size yet, we need to parse header
+				// If we don't have an expected size yet, we need to parse the header
 				if bufferUsed-processedBytes < HeaderSize {
 					expectedTotalSize = 0
-					break // Not enough for header
+					break // Not enough for a header
 				}
 
 				// Parse header
@@ -341,7 +349,10 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 
 						_, err := (*c.t).GetAuthManager().UnwrapData(&packet)
 						if err == nil {
-							(*c.t).GetRouter().Route(&packet, (*c.t).GetDetour())
+							err := (*c.t).GetRouter().Route(&packet, (*c.t).GetDetour())
+							if err != nil {
+								logger.Infof("%s: %s Failed to route packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
+							}
 						} else {
 							if err.Error() != "duplicate packet detected" {
 								logger.Infof("%s: %s Failed to unwrap data: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
@@ -354,7 +365,11 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							packet := (*c.t).GetRouter().GetPacket((*c.t).GetTag())
 							length := CreateHeartbeat(packet.buffer[packet.offset:])
 							packet.length = length
-							c.Write(&packet)
+							err := c.Write(&packet)
+							if err != nil {
+								logger.Infof("%s: %s Failed to write heartbeat packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
+								packet.Release(1)
+							}
 						} else if mode == TcpTunnelForwardMode {
 							c.heartbeatMissCount = 0
 						}
@@ -366,7 +381,7 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 					// Handle authentication
 					if (mode == TcpTunnelListenMode && header.MsgType == MsgTypeAuthChallenge) || (mode == TcpTunnelForwardMode && header.MsgType == MsgTypeAuthResponse) {
 						data := messageBuffer[HeaderSize:expectedTotalSize]
-						forwardID, poolID, err := (*c.t).GetAuthManager().ProcessAuthChallenge(data, c.authState)
+						forwardID, poolID, err := (*c.t).GetAuthManager().ProcessAuthChallenge(data)
 						if err != nil {
 							logger.Infof("%s: %s Failed to process auth challenge: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 							return
@@ -391,7 +406,7 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 				}
 
 				processedBytes += expectedTotalSize
-				expectedTotalSize = 0 // Reset for next message
+				expectedTotalSize = 0 // Reset for the next message
 			}
 
 			// Shift any remaining partial message to the beginning of the buffer
@@ -402,7 +417,7 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 				bufferUsed -= processedBytes
 			}
 
-			// Check if buffer is full but we couldn't process anything - likely a malformed packet
+			// Check if the buffer is full, but we couldn't process anything - likely a malformed packet
 			if bufferUsed == len(buffer[bufferOffset:]) && processedBytes == 0 {
 				logger.Infof("%s: %s Buffer full but no complete message, likely malformed data", (*c.t).GetTag(), c.conn.RemoteAddr())
 				return

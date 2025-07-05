@@ -43,7 +43,7 @@ func (f *FilterComponent) Stop() error {
 	return nil
 }
 
-func (f *FilterComponent) SendPacket(packet *Packet, addr any) error {
+func (f *FilterComponent) SendPacket(_ *Packet, _ any) error {
 	return nil
 }
 

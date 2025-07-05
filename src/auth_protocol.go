@@ -75,7 +75,10 @@ func NewDeduplicationManager() *DeduplicationManager {
 	}
 
 	// Generate initial frame ID
-	rand.Read(dm.currentFrame[:])
+	_, err := rand.Read(dm.currentFrame[:])
+	if err != nil {
+		return nil
+	}
 
 	// Start cleanup routine
 	go dm.cleanupRoutine()
@@ -144,7 +147,7 @@ func (dm *DeduplicationManager) markAsUsed(nonce [NonceSize]byte) {
 	bitIndex := sequence % 64
 
 	// Mark this sequence number as used
-	tracker.bitmap[wordIndex] |= (1 << bitIndex)
+	tracker.bitmap[wordIndex] |= 1 << bitIndex
 }
 
 // isDuplicate checks if a nonce represents a duplicate packet without marking it as used
@@ -360,7 +363,7 @@ func (am *AuthManager) CreateAuthChallenge(buffer []byte, msgType uint8, forward
 }
 
 // ProcessAuthChallenge processes an authentication challenge (server side)
-func (am *AuthManager) ProcessAuthChallenge(data []byte, authState *AuthState) (ForwardID, PoolID, error) {
+func (am *AuthManager) ProcessAuthChallenge(data []byte) (ForwardID, PoolID, error) {
 	if len(data) < HandshakeSize {
 		return ForwardID{}, PoolID{}, errors.New("invalid challenge data length")
 	}
@@ -491,7 +494,7 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 
 		if packet.offset >= HeaderSize+ConnIDSize {
 			// Shift header and connID before existing data
-			packet.offset -= (HeaderSize + ConnIDSize)
+			packet.offset -= HeaderSize + ConnIDSize
 		} else {
 			// Need new buffer
 			buffer := packet.router.GetBuffer()
@@ -507,7 +510,7 @@ func (am *AuthManager) WrapData(packet *Packet) error {
 		// Add connID after header
 		binary.BigEndian.PutUint64(packet.buffer[packet.offset+HeaderSize:], packet.connID.ToUint64())
 
-		packet.length += (HeaderSize + ConnIDSize)
+		packet.length += HeaderSize + ConnIDSize
 	}
 
 	return nil
