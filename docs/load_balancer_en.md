@@ -58,16 +58,16 @@ Matching rules for the load balancer use the [expr-lang/expr](https://github.com
 
 You can use all standard operators supported by expr, including but not limited to:
 
-| Operator | Description                  | Example                |
-|----------|------------------------------|------------------------|
-| `==`     | Equal                        | `seq == 1`            |
-| `!=`     | Not equal                    | `bps != 0`            |
-| `< > <= >=` | Comparison               | `size > 1000`         |
-| `&&`     | Logical AND                  | `seq > 100 && pps>10` |
-| `||`     | Logical OR                   | `bps > 0 || pps > 10` |
-| `!`      | Logical NOT                  | `! (seq % 2 == 0)`    |
-| `%`      | Modulo (remainder)           | `seq % 2 == 0`        |
-| `()`     | Parentheses for grouping     | `(seq > 10) && ...`   |
+| Operator    | Description                  | Example                 |
+|-------------|------------------------------|-------------------------|
+| `==`        | Equal                        | `seq == 1`              |
+| `!=`        | Not equal                    | `bps != 0`              |
+| `< > <= >=` | Comparison               | `size > 1000`           |
+| `&&`        | Logical AND                  | `seq > 100 && pps>10`   |
+| `\|\|`      | Logical OR                   | `bps > 0 \|\| pps > 10` |
+| `!`         | Logical NOT                  | `! (seq % 2 == 0)`      |
+| `%`         | Modulo (remainder)           | `seq % 2 == 0`          |
+| `()`        | Parentheses for grouping     | `(seq > 10) && ...`     |
 
 #### Built-in Functions
 
