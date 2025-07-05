@@ -40,6 +40,7 @@
     "api": {
         "enabled": true,
         "port": 8081,
-        "host": "0.0.0.0"
+        "host": "0.0.0.0",
+        "h5_files_path": "./h5"
     }
 }

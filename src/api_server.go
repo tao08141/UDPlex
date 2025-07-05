@@ -5,15 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 )
 
 // APIConfig represents the configuration for the API server
 type APIConfig struct {
-	Enabled bool   `json:"enabled"`
-	Port    int    `json:"port"`
-	Host    string `json:"host"`
+	Enabled     bool   `json:"enabled"`
+	Port        int    `json:"port"`
+	Host        string `json:"host"`
+	ServeUI     bool   `json:"serve_ui"`      // Whether to serve UI at root URL
+	H5FilesPath string `json:"h5_files_path"` // Path to H5 files directory
 }
 
 // APIServer represents the RESTful API server
@@ -53,6 +57,11 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/tcp_tunnel_listen/", a.handleGetTcpTunnelListenConnections)
 	mux.HandleFunc("/api/tcp_tunnel_forward/", a.handleGetTcpTunnelForwardConnections)
 	mux.HandleFunc("/api/load_balancer/", a.handleGetLoadBalancerTraffic)
+
+	// Register H5 files handler if path is configured
+	if a.config.H5FilesPath != "" {
+		mux.HandleFunc("/h5/", a.handleH5Files)
+	}
 
 	addr := fmt.Sprintf("%s:%d", a.config.Host, a.config.Port)
 	a.server = &http.Server{
@@ -476,5 +485,122 @@ func (a *APIServer) handleGetLoadBalancerTraffic(w http.ResponseWriter, r *http.
 	if err != nil {
 		logger.Errorf("Error encoding JSON: %v", err)
 		return
+	}
+}
+
+// handleH5Files handles GET /h5/ and serves H5 files from the configured path
+func (a *APIServer) handleH5Files(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract the file path from the URL
+	filePath := r.URL.Path[len("/h5/"):]
+
+	// If no file path is provided, try to serve index.html or index.htm
+	if filePath == "" {
+		// Try index.html first
+		indexPath := filepath.Join(a.config.H5FilesPath, "index.html")
+		if _, err := os.Stat(indexPath); err == nil {
+			filePath = "index.html"
+		} else {
+			// Try index.htm if index.html doesn't exist
+			indexPath = filepath.Join(a.config.H5FilesPath, "index.htm")
+			if _, err := os.Stat(indexPath); err == nil {
+				filePath = "index.htm"
+			} else {
+				http.Error(w, "No index file found", http.StatusNotFound)
+				return
+			}
+		}
+	}
+
+	// Ensure the file path doesn't contain any directory traversal attempts
+	if filepath.IsAbs(filePath) || filepath.Clean(filePath) != filePath {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	// Construct the full file path
+	fullPath := filepath.Join(a.config.H5FilesPath, filePath)
+
+	// Check if the file exists
+	fileInfo, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "File not found", http.StatusNotFound)
+		} else {
+			logger.Errorf("Error accessing file: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Check if it's a directory
+	if fileInfo.IsDir() {
+		http.Error(w, "Cannot serve directories", http.StatusBadRequest)
+		return
+	}
+
+	// Open and serve the file
+	file, err := os.Open(fullPath)
+	if err != nil {
+		logger.Errorf("Error opening file: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	// Set appropriate content type based on file extension
+	ext := filepath.Ext(filePath)
+	contentType := a.getContentType(ext)
+	w.Header().Set("Content-Type", contentType)
+
+	// Copy the file content to the response
+	http.ServeContent(w, r, fileInfo.Name(), fileInfo.ModTime(), file)
+}
+
+// getContentType returns the appropriate Content-Type based on file extension
+func (a *APIServer) getContentType(ext string) string {
+	switch ext {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css"
+	case ".js":
+		return "application/javascript"
+	case ".json":
+		return "application/json"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".ico":
+		return "image/x-icon"
+	case ".txt":
+		return "text/plain"
+	case ".pdf":
+		return "application/pdf"
+	case ".woff":
+		return "application/font-woff"
+	case ".woff2":
+		return "application/font-woff2"
+	case ".ttf":
+		return "application/font-sfnt"
+	case ".eot":
+		return "application/vnd.ms-fontobject"
+	case ".otf":
+		return "application/font-sfnt"
+	case ".xml":
+		return "application/xml"
+	case ".zip":
+		return "application/zip"
+	default:
+		return "application/octet-stream"
 	}
 }

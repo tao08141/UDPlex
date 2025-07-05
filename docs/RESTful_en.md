@@ -12,10 +12,21 @@ Add the following configuration to the configuration file:
   "api": {
     "enabled": true,
     "port": 8080,
-    "host": "0.0.0.0"
+    "host": "0.0.0.0",
+    "serve_ui": true,
+    "h5_files_path": "/path/to/h5/files"
   }
 }
 ```
+
+The `serve_ui` option controls whether to serve a frontend UI at the root URL ("/").
+
+### Configuration Options
+
+- `enabled`: Whether to enable the API server
+- `port`: The port on which the API server listens
+- `host`: The host address on which the API server listens
+- `h5_files_path`: Path to a directory containing H5 files to be served. When configured, the API server will serve H5 files from this directory at the "/h5/" endpoint.
 
 ## API Endpoints
 
@@ -212,6 +223,25 @@ json
 }
 ```
 
+
+### 8. Frontend Dashboard
+
+**Endpoint:** `GET /`
+
+**Description:** When `serve_ui` is enabled in the configuration, this endpoint serves a frontend dashboard that provides a user-friendly interface to access all API endpoints and view component information.
+
+**Response:** HTML page with links to all API endpoints and component information.
+
+### 9. Serve H5 Files
+
+**Endpoint:** `GET /h5/{file_path}`
+
+**Description:** When `h5_files_path` is configured, this endpoint serves H5 files from the specified directory.
+
+**Parameters:**
+- `file_path` (path parameter): Path to the H5 file relative to the configured `h5_files_path` directory
+
+**Response:** The requested H5 file content with appropriate content type.
 
 ## Error Handling
 

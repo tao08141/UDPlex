@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UDPlex API 监控仪表板</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .refresh-controls {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .refresh-controls button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+
+        .refresh-controls button:hover {
+            background: #45a049;
+        }
+
+        .refresh-controls select {
+            padding: 8px;
+            border-radius: 5px;
+            border: none;
+            margin: 5px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .status-online { background: #4CAF50; }
+        .status-offline { background: #f44336; }
+        .status-warning { background: #ff9800; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .metric:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            color: #333;
+            font-weight: bold;
+        }
+
+        .connection-list {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+
+        .connection-item {
+            background: #f8f9fa;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+
+        .loading {
+            text-align: center;
+            color: #666;
+            padding: 20px;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+
+        .component-tabs {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .tab-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tab-button {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .tab-button.active {
+            background: rgba(255, 255, 255, 0.8);
+            color: #333;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .refresh-controls {
+                flex-direction: column;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>UDPlex API 监控仪表板</h1>
+            <p>实时监控路由器组件状态</p>
+        </div>
+
+        <div class="refresh-controls">
+            <div>
+                <span style="color: white; margin-right: 10px;">自动刷新:</span>
+                <select id="refreshInterval">
+                    <option value="0">关闭</option>
+                    <option value="1000">1秒</option>
+                    <option value="5000" selected>5秒</option>
+                    <option value="10000">10秒</option>
+                    <option value="30000">30秒</option>
+                </select>
+                <button onclick="refreshAll()">立即刷新</button>
+            </div>
+            <div>
+                <span style="color: white;">
+                    <span class="status-indicator status-online"></span>
+                    最后更新: <span id="lastUpdate">-</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="component-tabs">
+            <div class="tab-buttons" id="componentTabs">
+                <!-- 动态生成标签页 -->
+            </div>
+            <div id="tabContents">
+                <!-- 动态生成内容 -->
+            </div>
+        </div>
+
+        <div class="grid" id="componentsGrid">
+            <!-- 动态生成组件卡片 -->
+        </div>
+    </div>
+
+    <script>
+        class APIMonitor {
+            constructor() {
+                this.components = [];
+                this.refreshTimer = null;
+                this.lastUpdateTime = null;
+                this.activeTab = 'all';
+                this.init();
+            }
+
+            async init() {
+                await this.loadComponents();
+                this.setupRefreshInterval();
+                this.setupEventListeners();
+            }
+
+            setupEventListeners() {
+                document.getElementById('refreshInterval').addEventListener('change', (e) => {
+                    this.setupRefreshInterval();
+                });
+            }
+
+            setupRefreshInterval() {
+                if (this.refreshTimer) {
+                    clearInterval(this.refreshTimer);
+                }
+
+                const interval = parseInt(document.getElementById('refreshInterval').value);
+                if (interval > 0) {
+                    this.refreshTimer = setInterval(() => {
+                        this.refreshAll();
+                    }, interval);
+                }
+            }
+
+            async loadComponents() {
+                try {
+                    const response = await fetch('/api/components');
+                    if (!response.ok) throw new Error('Failed to fetch components');
+                    
+                    this.components = await response.json();
+                    this.renderComponentTabs();
+                    await this.refreshAll();
+                } catch (error) {
+                    this.showError('加载组件列表失败: ' + error.message);
+                }
+            }
+
+            renderComponentTabs() {
+                const tabsContainer = document.getElementById('componentTabs');
+                const contentsContainer = document.getElementById('tabContents');
+                
+                // 清空现有内容
+                tabsContainer.innerHTML = '';
+                contentsContainer.innerHTML = '';
+
+                // 添加"全部"标签页
+                const allTab = document.createElement('button');
+                allTab.className = 'tab-button active';
+                allTab.textContent = '全部组件';
+                allTab.onclick = () => this.switchTab('all');
+                tabsContainer.appendChild(allTab);
+
+                // 按类型分组组件
+                const componentsByType = {};
+                this.components.forEach(comp => {
+                    if (!componentsByType[comp.type]) {
+                        componentsByType[comp.type] = [];
+                    }
+                    componentsByType[comp.type].push(comp);
+                });
+
+                // 为每种类型创建标签页
+                Object.keys(componentsByType).forEach(type => {
+                    const tab = document.createElement('button');
+                    tab.className = 'tab-button';
+                    tab.textContent = this.getTypeDisplayName(type);
+                    tab.onclick = () => this.switchTab(type);
+                    tabsContainer.appendChild(tab);
+                });
+            }
+
+            switchTab(tabType) {
+                this.activeTab = tabType;
+                
+                // 更新标签页样式
+                document.querySelectorAll('.tab-button').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                event.target.classList.add('active');
+
+                // 刷新显示
+                this.refreshAll();
+            }
+
+            getTypeDisplayName(type) {
+                const typeNames = {
+                    'listen': '监听组件',
+                    'forward': '转发组件',
+                    'tcp_tunnel_listen': 'TCP隧道监听',
+                    'tcp_tunnel_forward': 'TCP隧道转发',
+                    'load_balancer': '负载均衡器'
+                };
+                return typeNames[type] || type;
+            }
+
+            async refreshAll() {
+                const grid = document.getElementById('componentsGrid');
+                grid.innerHTML = '<div class="loading">正在加载数据...</div>';
+
+                try {
+                    const filteredComponents = this.activeTab === 'all' 
+                        ? this.components 
+                        : this.components.filter(comp => comp.type === this.activeTab);
+
+                    const componentData = await Promise.all(
+                        filteredComponents.map(comp => this.fetchComponentData(comp))
+                    );
+
+                    this.renderComponents(componentData);
+                    this.updateLastUpdateTime();
+                } catch (error) {
+                    this.showError('刷新数据失败: ' + error.message);
+                }
+            }
+
+            async fetchComponentData(component) {
+                try {
+                    let endpoint;
+                    switch (component.type) {
+                        case 'listen':
+                            endpoint = `/api/listen/${component.tag}`;
+                            break;
+                        case 'forward':
+                            endpoint = `/api/forward/${component.tag}`;
+                            break;
+                        case 'tcp_tunnel_listen':
+                            endpoint = `/api/tcp_tunnel_listen/${component.tag}`;
+                            break;
+                        case 'tcp_tunnel_forward':
+                            endpoint = `/api/tcp_tunnel_forward/${component.tag}`;
+                            break;
+                        case 'load_balancer':
+                            endpoint = `/api/load_balancer/${component.tag}`;
+                            break;
+                        default:
+                            return { ...component, error: '未知组件类型' };
+                    }
+
+                    const response = await fetch(endpoint);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    
+                    const data = await response.json();
+                    return { ...component, data, status: 'online' };
+                } catch (error) {
+                    return { ...component, error: error.message, status: 'offline' };
+                }
+            }
+
+            renderComponents(componentData) {
+                const grid = document.getElementById('componentsGrid');
+                grid.innerHTML = '';
+
+                componentData.forEach(comp => {
+                    const card = this.createComponentCard(comp);
+                    grid.appendChild(card);
+                });
+            }
+
+            createComponentCard(component) {
+                const card = document.createElement('div');
+                card.className = 'card';
+
+                const statusClass = component.status === 'online' ? 'status-online' : 'status-offline';
+                
+                card.innerHTML = `
+                    <h3>
+                        <span class="status-indicator ${statusClass}"></span>
+                        ${component.tag} (${this.getTypeDisplayName(component.type)})
+                    </h3>
+                    ${component.error ? `<div class="error">${component.error}</div>` : this.renderComponentData(component)}
+                `;
+
+                return card;
+            }
+
+            renderComponentData(component) {
+                if (!component.data) return '<div class="loading">无数据</div>';
+
+                switch (component.type) {
+                    case 'listen':
+                        return this.renderListenData(component.data);
+                    case 'forward':
+                        return this.renderForwardData(component.data);
+                    case 'tcp_tunnel_listen':
+                        return this.renderTcpTunnelListenData(component.data);
+                    case 'tcp_tunnel_forward':
+                        return this.renderTcpTunnelForwardData(component.data);
+                    case 'load_balancer':
+                        return this.renderLoadBalancerData(component.data);
+                    default:
+                        return '<div>未知数据格式</div>';
+                }
+            }
+
+            renderListenData(data) {
+                return `
+                    <div class="metric">
+                        <span class="metric-label">监听地址:</span>
+                        <span class="metric-value">${data.listen_addr || 'N/A'}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">连接数:</span>
+                        <span class="metric-value">${data.count || 0}</span>
+                    </div>
+                    ${data.connections && data.connections.length > 0 ? `
+                        <div class="connection-list">
+                            <strong>活跃连接:</strong>
+                            ${data.connections.map(conn => `
+                                <div class="connection-item">
+                                    <div><strong>地址:</strong> ${conn.address}</div>
+                                    <div><strong>ID:</strong> ${conn.connection_id}</div>
+                                    <div><strong>认证:</strong> ${conn.is_authenticated ? '是' : '否'}</div>
+                                    <div><strong>最后活跃:</strong> ${new Date(conn.last_active).toLocaleString()}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                `;
+            }
+
+            renderForwardData(data) {
+                return `
+                    <div class="metric">
+                        <span class="metric-label">连接数:</span>
+                        <span class="metric-value">${data.count || 0}</span>
+                    </div>
+                    ${data.connections && data.connections.length > 0 ? `
+                        <div class="connection-list">
+                            <strong>连接详情:</strong>
+                            ${data.connections.map(conn => `
+                                <div class="connection-item">
+                                    <div><strong>远程地址:</strong> ${conn.remote_addr}</div>
+                                    <div><strong>状态:</strong> ${conn.is_connected ? '已连接' : '未连接'}</div>
+                                    <div><strong>认证:</strong> ${conn.is_authenticated ? '是' : '否'}</div>
+                                    <div><strong>心跳丢失:</strong> ${conn.heartbeat_miss}</div>
+                                    <div><strong>最后心跳:</strong> ${new Date(conn.last_heartbeat).toLocaleString()}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                `;
+            }
+
+            renderTcpTunnelListenData(data) {
+                return `
+                    <div class="metric">
+                        <span class="metric-label">监听地址:</span>
+                        <span class="metric-value">${data.listen_addr || 'N/A'}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">总连接数:</span>
+                        <span class="metric-value">${data.total_connections || 0}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">连接池数:</span>
+                        <span class="metric-value">${data.pools ? data.pools.length : 0}</span>
+                    </div>
+                    ${data.pools && data.pools.length > 0 ? `
+                        <div class="connection-list">
+                            <strong>连接池:</strong>
+                            ${data.pools.map(pool => `
+                                <div class="connection-item">
+                                    <div><strong>池ID:</strong> ${pool.pool_id}</div>
+                                    <div><strong>转发ID:</strong> ${pool.forward_id}</div>
+                                    <div><strong>远程地址:</strong> ${pool.remote_addr}</div>
+                                    <div><strong>连接数:</strong> ${pool.conn_count}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                `;
+            }
+
+            renderTcpTunnelForwardData(data) {
+                return `
+                    <div class="metric">
+                        <span class="metric-label">转发ID:</span>
+                        <span class="metric-value">${data.forward_id || 'N/A'}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">总连接数:</span>
+                        <span class="metric-value">${data.total_connections || 0}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">连接池数:</span>
+                        <span class="metric-value">${data.pools ? data.pools.length : 0}</span>
+                    </div>
+                    ${data.pools && data.pools.length > 0 ? `
+                        <div class="connection-list">
+                            <strong>连接池:</strong>
+                            ${data.pools.map(pool => `
+                                <div class="connection-item">
+                                    <div><strong>池ID:</strong> ${pool.pool_id}</div>
+                                    <div><strong>远程地址:</strong> ${pool.remote_addr}</div>
+                                    <div><strong>当前连接:</strong> ${pool.conn_count}</div>
+                                    <div><strong>目标连接:</strong> ${pool.target_count}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                `;
+            }
+
+            renderLoadBalancerData(data) {
+                return `
+                    <div class="metric">
+                        <span class="metric-label">每秒字节数:</span>
+                        <span class="metric-value">${this.formatBytes(data.bytes_per_sec || 0)}/s</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">每秒包数:</span>
+                        <span class="metric-value">${data.packets_per_sec || 0}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">总字节数:</span>
+                        <span class="metric-value">${this.formatBytes(data.total_bytes || 0)}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">总包数:</span>
+                        <span class="metric-value">${data.total_packets || 0}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">当前字节:</span>
+                        <span class="metric-value">${this.formatBytes(data.current_bytes || 0)}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">窗口大小:</span>
+                        <span class="metric-value">${data.window_size || 0}s</span>
+                    </div>
+                `;
+            }
+
+            formatBytes(bytes) {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+
+            updateLastUpdateTime() {
+                this.lastUpdateTime = new Date();
+                document.getElementById('lastUpdate').textContent = this.lastUpdateTime.toLocaleTimeString();
+            }
+
+            showError(message) {
+                const grid = document.getElementById('componentsGrid');
+                grid.innerHTML = `<div class="error">${message}</div>`;
+            }
+        }
+
+        // 全局函数
+        function refreshAll() {
+            window.monitor.refreshAll();
+        }
+
+        // 初始化
+        window.addEventListener('DOMContentLoaded', () => {
+            window.monitor = new APIMonitor();
+        });
+    </script>
+</body>
+</html>
