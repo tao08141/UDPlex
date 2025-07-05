@@ -36,5 +36,10 @@
                 "heartbeat_interval": 30
             }
         }
-    ]
+    ],
+    "api": {
+        "enabled": true,
+        "port": 8080,
+        "host": "0.0.0.0"
+    }
 }

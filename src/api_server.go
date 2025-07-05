@@ -187,13 +187,22 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 	mappingsSnapshot := listenComponent.mappingsAtomic.Load().(map[string]*AddrMapping)
 	connections := make([]map[string]interface{}, 0, len(mappingsSnapshot))
 
+	// Check if auth is configured
+	hasAuth := listenComponent.authManager != nil
+
 	for addrStr, mapping := range mappingsSnapshot {
-		connections = append(connections, map[string]interface{}{
-			"address":          addrStr,
-			"last_active":      mapping.lastActive.Format(time.RFC3339),
-			"connection_id":    fmt.Sprintf("%x", mapping.connID),
-			"is_authenticated": mapping.authState != nil && mapping.authState.IsAuthenticated(),
-		})
+		connection := map[string]interface{}{
+			"address":       addrStr,
+			"last_active":   mapping.lastActive.Format(time.RFC3339),
+			"connection_id": fmt.Sprintf("%x", mapping.connID),
+		}
+
+		// Only include is_authenticated if auth is configured
+		if hasAuth {
+			connection["is_authenticated"] = mapping.authState != nil && mapping.authState.IsAuthenticated()
+		}
+
+		connections = append(connections, connection)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -236,16 +245,25 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 
 	connections := make([]map[string]interface{}, 0, len(forwardComponent.forwardConnList))
 
+	// Check if auth is configured
+	hasAuth := forwardComponent.authManager != nil
+
 	for _, conn := range forwardComponent.forwardConnList {
-		connections = append(connections, map[string]interface{}{
+		connection := map[string]interface{}{
 			"remote_addr":      conn.remoteAddr,
 			"is_connected":     atomic.LoadInt32(&conn.isConnected) == 1,
-			"is_authenticated": conn.authState != nil && conn.authState.IsAuthenticated(),
 			"last_reconnect":   conn.lastReconnectAttempt.Format(time.RFC3339),
 			"auth_retry_count": conn.authRetryCount,
 			"heartbeat_miss":   conn.heartbeatMissCount,
 			"last_heartbeat":   conn.lastHeartbeatSent.Format(time.RFC3339),
-		})
+		}
+
+		// Only include is_authenticated if auth is configured
+		if hasAuth {
+			connection["is_authenticated"] = conn.authState != nil && conn.authState.IsAuthenticated()
+		}
+
+		connections = append(connections, connection)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

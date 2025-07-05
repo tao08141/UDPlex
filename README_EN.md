@@ -124,17 +124,7 @@ UDPlex supports configuring protocol detectors to identify and classify specific
 ## RESTful API Interface
 UDPlex provides RESTful API interfaces to query component status and connection information.
 
-### Configuring API Server
-Add the following configuration to the configuration file:
-```json
-{
-  "api": {
-    "enabled": true,
-    "port": 8080,
-    "host": "0.0.0.0"
-  }
-}
-```
+- [RESTful](docs/RESTful_en.md) - RESTful interface configuration and usage instructions
 
 ### API Endpoints
 - `GET /api/components` - Get list of all components

@@ -36,5 +36,10 @@
                 "server_listen"
             ]
         }
-    ]
+    ],
+    "api": {
+        "enabled": true,
+        "port": 8081,
+        "host": "0.0.0.0"
+    }
 }

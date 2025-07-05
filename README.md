@@ -128,17 +128,7 @@ UDPlex 支持通过配置协议检测器来识别和分类 UDP 数据包中的�
 ## RESTful API 接口
 UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
 
-### 配置 API 服务器
-在配置文件中添加以下配置：
-```json
-{
-  "api": {
-    "enabled": true,
-    "port": 8080,
-    "host": "0.0.0.0"
-  }
-}
-```
+- [RESTful](docs/RESTful_zh.md) - RESTful接口配置和使用说明
 
 ### API 端点
 - `GET /api/components` - 获取所有组件列表
