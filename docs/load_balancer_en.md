@@ -33,130 +33,67 @@ The load balancer component uses a sliding window mechanism for traffic statisti
 
 
 ### detour Configuration
-| Parameter | Description |
-|-----------|-------------|
-| `rule` | Forwarding rule, see `Matching Rules` for details |
-| `target` | Forwarding target tags, an array, can have multiple entries |
+| Parameter | Description                                                  |
+|-----------|--------------------------------------------------------------|
+| `rule`    | Forwarding rule, see `Matching Rules` for details            |
+| `targets` | Forwarding targets tags, an array, can have multiple entries |
 
 
 ## Matching Rules
 
-+ Built-in Variables
+### Expression Engine
 
-| Variable Name | Description |
-|---------------|-------------|
-| `seq` | Traffic packet sequence number |
-| `bps` | Bytes in the statistics window |
-| `pps` | Number of packets in the statistics window |
-| `size` | Current packet size |
+Matching rules for the load balancer use the [expr-lang/expr](https://github.com/expr-lang/expr) engine for expression evaluation. This allows you to define flexible and complex forwarding policies using customizable logical expressions.
 
-+ Supported Expressions
+- **Built-in Variables**
 
-Matching rules support flexible expressions, and the final result of the expression is considered a match (condition is true) as long as it is not equal to zero. You can use various operators and condition combinations, such as:
+| Variable Name | Description                              |
+|---------------|------------------------------------------|
+| `seq`         | Packet sequence number                   |
+| `bps`         | Bytes per second, averaged over window   |
+| `pps`         | Packets per second, averaged over window |
+| `size`        | Current packet size                      |
 
-- Comparison operations: `==`, `!=`, `<`, `<=`, `>`, `>=`
-- Logical operations: `&&` (AND), `||` (OR), `!` (NOT)
-- Modulo operation: `%` (modulo, used for implementing round-robin, load balancing)
-- Other expressions: Can be combined with parentheses `()` to enhance expression complexity
+- **Supported Operators**
 
-### Traffic Balancing Examples
+You can use all standard operators supported by expr, including but not limited to:
 
-Using modulo operations to implement basic traffic balancing strategies, for example:
+| Operator | Description                  | Example                |
+|----------|------------------------------|------------------------|
+| `==`     | Equal                        | `seq == 1`            |
+| `!=`     | Not equal                    | `bps != 0`            |
+| `< > <= >=` | Comparison               | `size > 1000`         |
+| `&&`     | Logical AND                  | `seq > 100 && pps>10` |
+| `||`     | Logical OR                   | `bps > 0 || pps > 10` |
+| `!`      | Logical NOT                  | `! (seq % 2 == 0)`    |
+| `%`      | Modulo (remainder)           | `seq % 2 == 0`        |
+| `()`     | Parentheses for grouping     | `(seq > 10) && ...`   |
 
-- Using `$seq % 2 == 0` and `$seq % 2 == 1` to implement alternating processing by odd and even numbers, achieving traffic balancing effects.
-- Combining logical operations to build more complex distribution strategies, for example:
+#### Built-in Functions
 
+In addition to operators, you can also use standard functions provided by expr if enabled in your runtime (check with your system whether additional functions are registered).
+
+#### Rule Evaluation
+
+If the final result of the expression is not equal to zero or false, the target is selected.
+
+### Example
 ```
-($seq % 2 == 0) || ($pps > 1000)
-```
-
-This means the condition is true when the packet sequence number is even, or when the number of packets in the statistics window exceeds 1000.
-
-### Example Rule Format
-
-```
-# Only process traffic with odd sequence numbers or packet sizes exceeding 100 bytes
-($seq % 2 == 1) || ($bps > 100)
-```
-
-```
-# Route traffic based on current packet size: packets larger than 1000 bytes go to high-performance server
-$size > 1000
-```
-
-**Notes**:
-- The final result of the expression is considered true as long as it is not equal to 0.
-- You can flexibly define traffic matching rules by combining various operators and built-in variables.
-- Variables in the rules (such as `$seq`, `$bps`, `$pps`, `$size`) should be correctly declared and used in the configuration.
-
-## Configuration Example
-
-Below is a complete load balancing configuration example, showing how to distribute traffic among three servers:
-
-```json
-{
-    "services": [
-        {
-            "type": "listen",
-            "tag": "client_listen",
-            "listen_addr": "0.0.0.0:5202",
-            "timeout": 120,
-            "detour": ["load_balancer"]
-        },
-        {
-            "type": "load_balancer",
-            "tag": "load_balancer",
-            "sample_interval": "1s",
-            "window_size": 10,
-            "detour": [
-                {
-                    "rule": "$seq % 3 == 0",
-                    "target": ["server1"]
-                },
-                {
-                    "rule": "$seq % 3 == 1", 
-                    "target": ["server2"]
-                },
-                {
-                    "rule": "$seq % 3 == 2 || $pps > 1000",
-                    "target": ["server3"]
-                }
-            ]
-        },
-        {
-            "type": "forward",
-            "tag": "server1",
-            "forwarders": ["192.168.1.10:5201"],
-            "detour": ["client_listen"]
-        },
-        {
-            "type": "forward", 
-            "tag": "server2",
-            "forwarders": ["192.168.1.11:5201"],
-            "detour": ["client_listen"]
-        },
-        {
-            "type": "forward",
-            "tag": "server3", 
-            "forwarders": ["192.168.1.12:5201"],
-            "detour": ["client_listen"]
-        }
-    ]
-}
+expr
+# Forward if packet sequence number is odd or average bps > 100
+(seq % 2 == 1) || (bps > 100)
 ```
 
-### Rule Explanation
+```
+expr
+# Forward large packets to a high-performance server
+size > 1000
+```
+- You may use any combination of logical operations, comparisons, and arithmetic supported by expr.
+- Parentheses can be used to compose more complex selection logic.
 
-The above configuration implements the following load balancing strategies:
-
-1. **Round-Robin Distribution**: Based on modulo operations on packet sequence numbers, implementing basic round-robin load balancing
-   - `$seq % 3 == 0`: Every 1st packet out of 3 goes to server1
-   - `$seq % 3 == 1`: Every 2nd packet out of 3 goes to server2
-   - `$seq % 3 == 2`: Every 3rd packet out of 3 goes to server3
-
-2. **High Load Protection**: When PPS exceeds 1000, additional traffic is routed to server3
-   - `$pps > 1000`: Condition is true when the number of packets in the statistics window exceeds 1000
-
-3. **Statistics Window Configuration**:
-   - `sample_interval: "1s"`: Traffic statistics are sampled once per second
-   - `window_size: "10s"`: Statistics window is 10 seconds, statistics data is reset every 10 seconds
+#### Note
+- Expressions are parsed and evaluated using expr, so all valid syntax from expr is supported, including chained comparisons and composite logical expressions.
+- Built-in variables must exist in context to be referenced successfully.
+- If a variable is missing or a function is not supported, there will be an evaluation error; please check your runtime environment.
+- For full expr syntax, see the [expr official documentation](https://github.com/expr-lang/expr#language-definition).

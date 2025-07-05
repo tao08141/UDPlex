@@ -25,11 +25,11 @@
             "window_size": 10,
             "detour": [
                 {
-                    "rule": "$seq % 2 == 0",
+                    "rule": "seq % 2 == 0",
                     "targets": ["server_a"]
                 },
                 {
-                    "rule": "$seq % 2 == 1",
+                    "rule": "seq % 2 == 1",
                     "targets": ["server_b"]
                 }
             ]

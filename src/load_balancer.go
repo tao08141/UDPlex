@@ -45,7 +45,6 @@ type LoadBalancerComponent struct {
 	ruleTargets     [][]string                     // Corresponding targets for each rule (array of arrays)
 	compileOnce     sync.Once                      // Ensure rules are compiled only once
 	expressionCache map[string]*CompiledExpression // Cache for compiled expressions
-	cacheMutex      sync.RWMutex                   // Mutex for cache access
 }
 
 // NewLoadBalancerComponent creates a new load balancer component
@@ -104,26 +103,14 @@ func (lb *LoadBalancerComponent) precompileRules() error {
 // compileExpression compiles an expression string into an expr.Program with variable detection
 func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExpression, error) {
 	// Check cache first
-	lb.cacheMutex.RLock()
 	if cached, exists := lb.expressionCache[exprStr]; exists {
-		lb.cacheMutex.RUnlock()
 		return cached, nil
 	}
-	lb.cacheMutex.RUnlock()
 
 	// Find variables in the expression
 	varKeys := lb.findVariables(exprStr)
 
-	// Replace $ prefix in variables for expr library compatibility
-	normalizedExpr := exprStr
-	for _, varKey := range varKeys {
-		// Remove $ from variable names for expr library
-		normalizedVarKey := strings.TrimPrefix(varKey, "$")
-		normalizedExpr = strings.ReplaceAll(normalizedExpr, varKey, normalizedVarKey)
-	}
-
-	// Compile the expression
-	program, err := expr.Compile(normalizedExpr, expr.Env(map[string]interface{}{
+	program, err := expr.Compile(exprStr, expr.Env(map[string]interface{}{
 		"seq":  uint64(0),
 		"bps":  uint64(0),
 		"pps":  uint64(0),
@@ -139,24 +126,20 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 	}
 
 	// Cache the compiled expression
-	lb.cacheMutex.Lock()
 	lb.expressionCache[exprStr] = compiled
-	lb.cacheMutex.Unlock()
 
 	return compiled, nil
 }
 
-// findVariables finds all variables in the expression
+// findVariables finds all variable names used in the expression
 func (lb *LoadBalancerComponent) findVariables(exprStr string) []string {
 	var vars []string
-	variables := []string{"$seq", "$bps", "$pps", "$size"}
-
+	variables := []string{"seq", "bps", "pps", "size"}
 	for _, variable := range variables {
 		if strings.Contains(exprStr, variable) {
 			vars = append(vars, variable)
 		}
 	}
-
 	return vars
 }
 
@@ -184,7 +167,7 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 	seq := atomic.AddUint64(&lb.packetSeq, 1)
 
 	// Get current packet size
-	size := uint64(len(packet.GetData()))
+	size := uint64(packet.length)
 
 	// Evaluate detour rules to find matching targets
 	targets := lb.evaluateCompiledRules(seq, bps, pps, size)
@@ -277,16 +260,15 @@ func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledEx
 
 	// Add variables to environment without $ prefix
 	for _, varKey := range compiled.varKeys {
-		normalizedKey := strings.TrimPrefix(varKey, "$")
 		switch varKey {
-		case "$seq":
-			env[normalizedKey] = seq
-		case "$bps":
-			env[normalizedKey] = bps
-		case "$pps":
-			env[normalizedKey] = pps
-		case "$size":
-			env[normalizedKey] = size
+		case "seq":
+			env[varKey] = seq
+		case "bps":
+			env[varKey] = bps
+		case "pps":
+			env[varKey] = pps
+		case "size":
+			env[varKey] = size
 		}
 	}
 
@@ -294,61 +276,6 @@ func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledEx
 	result, err := expr.Run(compiled.program, env)
 	if err != nil {
 		logger.Errorf("%s: Error evaluating compiled expression: %v", lb.tag, err)
-		return false
-	}
-
-	// Convert result to boolean
-	switch v := result.(type) {
-	case bool:
-		return v
-	case int:
-		return v != 0
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0
-	case uint64:
-		return v != 0
-	default:
-		logger.Errorf("%s: Unexpected result type from expression: %T", lb.tag, result)
-		return false
-	}
-}
-
-// evaluateRules evaluates all detour rules and returns all matching targets
-func (lb *LoadBalancerComponent) evaluateRules(seq, bps, pps, size uint64) []string {
-	var allTargets []string
-
-	for _, rule := range lb.detour {
-		if lb.evaluateExpression(rule.Rule, seq, bps, pps, size) {
-			allTargets = append(allTargets, rule.Targets...)
-		}
-	}
-
-	return allTargets
-}
-
-// evaluateExpression evaluates a rule expression with the given variables
-func (lb *LoadBalancerComponent) evaluateExpression(exprStr string, seq, bps, pps, size uint64) bool {
-	// Replace $ prefix in variables for expr library compatibility
-	normalizedExpr := exprStr
-	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$seq", "seq")
-	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$bps", "bps")
-	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$pps", "pps")
-	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$size", "size")
-
-	// Create environment with variables
-	env := map[string]interface{}{
-		"seq":  seq,
-		"bps":  bps,
-		"pps":  pps,
-		"size": size,
-	}
-
-	// Evaluate the expression
-	result, err := expr.Eval(normalizedExpr, env)
-	if err != nil {
-		logger.Errorf("%s: Error evaluating expression '%s': %v", lb.tag, exprStr, err)
 		return false
 	}
 

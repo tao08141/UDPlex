@@ -25,11 +25,11 @@
             "window_size": 10,
             "detour": [
                 {
-                    "rule": "$bps <= 100000000",
+                    "rule": "bps <= 100000000",
                     "targets": ["server_a", "server_b"]
                 },
                 {
-                    "rule": "$bps > 100000000",
+                    "rule": "bps > 100000000",
                     "targets": ["server_a"]
                 }
             ]
