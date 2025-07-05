@@ -48,6 +48,7 @@ The load balancer component uses a sliding window mechanism for traffic statisti
 | `seq` | Traffic packet sequence number |
 | `bps` | Bytes in the statistics window |
 | `pps` | Number of packets in the statistics window |
+| `size` | Current packet size |
 
 + Supported Expressions
 
@@ -78,10 +79,15 @@ This means the condition is true when the packet sequence number is even, or whe
 ($seq % 2 == 1) || ($bps > 100)
 ```
 
+```
+# Route traffic based on current packet size: packets larger than 1000 bytes go to high-performance server
+$size > 1000
+```
+
 **Notes**:
 - The final result of the expression is considered true as long as it is not equal to 0.
 - You can flexibly define traffic matching rules by combining various operators and built-in variables.
-- Variables in the rules (such as `$seq`, `$bps`, `$pps`) should be correctly declared and used in the configuration.
+- Variables in the rules (such as `$seq`, `$bps`, `$pps`, `$size`) should be correctly declared and used in the configuration.
 
 ## Configuration Example
 

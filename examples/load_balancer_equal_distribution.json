@@ -3,7 +3,7 @@
     "queue_size": 10240,
     "worker_count": 4,
     "logging": {
-        "level": "debug", 
+        "level": "debug",
         "format": "console",
         "output_path": "stdout",
         "caller": true
@@ -22,16 +22,15 @@
         {
             "type": "load_balancer",
             "tag": "load_balancer",
-            "sample_interval": "1s",
-            "window_size": "10s",
+            "window_size": 10,
             "detour": [
                 {
                     "rule": "$seq % 2 == 0",
-                    "target": ["server_a"]
+                    "targets": ["server_a"]
                 },
                 {
                     "rule": "$seq % 2 == 1",
-                    "target": ["server_b"]
+                    "targets": ["server_b"]
                 }
             ]
         },

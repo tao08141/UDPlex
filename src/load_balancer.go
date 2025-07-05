@@ -2,20 +2,19 @@ package main
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"strconv"
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	// 其他导入...
 )
 
 // CompiledExpression represents a pre-compiled expression for faster evaluation
 type CompiledExpression struct {
-	ast     ast.Expr
-	varKeys []string // Variables found in the expression (e.g., "$seq", "$bps", "$pps")
+	program *vm.Program // 这里由 expr.Program 改为 *vm.Program
+	varKeys []string    // Variables found in the expression (e.g., "$seq", "$bps", "$pps")
 }
 
 // TrafficSample represents a traffic sample for a specific interval
@@ -51,7 +50,6 @@ type LoadBalancerComponent struct {
 
 // NewLoadBalancerComponent creates a new load balancer component
 func NewLoadBalancerComponent(cfg LoadBalancerComponentConfig, router *Router) (*LoadBalancerComponent, error) {
-
 	lb := &LoadBalancerComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, 0),
 		detour:        cfg.Detour,
@@ -86,7 +84,7 @@ func (lb *LoadBalancerComponent) Start() error {
 	return nil
 }
 
-// precompileRules compiles all detour rules into AST for faster evaluation
+// precompileRules compiles all detour rules into expr programs for faster evaluation
 func (lb *LoadBalancerComponent) precompileRules() error {
 	lb.compiledRules = make([]CompiledExpression, len(lb.detour))
 	lb.ruleTargets = make([][]string, len(lb.detour))
@@ -103,51 +101,58 @@ func (lb *LoadBalancerComponent) precompileRules() error {
 	return nil
 }
 
-// compileExpression compiles an expression string into AST with variable detection
-func (lb *LoadBalancerComponent) compileExpression(expr string) (*CompiledExpression, error) {
+// compileExpression compiles an expression string into an expr.Program with variable detection
+func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExpression, error) {
 	// Check cache first
 	lb.cacheMutex.RLock()
-	if cached, exists := lb.expressionCache[expr]; exists {
+	if cached, exists := lb.expressionCache[exprStr]; exists {
 		lb.cacheMutex.RUnlock()
 		return cached, nil
 	}
 	lb.cacheMutex.RUnlock()
 
 	// Find variables in the expression
-	varKeys := lb.findVariables(expr)
+	varKeys := lb.findVariables(exprStr)
 
-	// Create a template expression with placeholders
-	templateExpr := expr
+	// Replace $ prefix in variables for expr library compatibility
+	normalizedExpr := exprStr
 	for _, varKey := range varKeys {
-		templateExpr = strings.ReplaceAll(templateExpr, varKey, "0")
+		// Remove $ from variable names for expr library
+		normalizedVarKey := strings.TrimPrefix(varKey, "$")
+		normalizedExpr = strings.ReplaceAll(normalizedExpr, varKey, normalizedVarKey)
 	}
 
-	// Parse the template expression
-	node, err := parser.ParseExpr(templateExpr)
+	// Compile the expression
+	program, err := expr.Compile(normalizedExpr, expr.Env(map[string]interface{}{
+		"seq":  uint64(0),
+		"bps":  uint64(0),
+		"pps":  uint64(0),
+		"size": uint64(0),
+	}))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse expression: %w", err)
+		return nil, fmt.Errorf("failed to compile expression: %w", err)
 	}
 
 	compiled := &CompiledExpression{
-		ast:     node,
+		program: program,
 		varKeys: varKeys,
 	}
 
 	// Cache the compiled expression
 	lb.cacheMutex.Lock()
-	lb.expressionCache[expr] = compiled
+	lb.expressionCache[exprStr] = compiled
 	lb.cacheMutex.Unlock()
 
 	return compiled, nil
 }
 
 // findVariables finds all variables in the expression
-func (lb *LoadBalancerComponent) findVariables(expr string) []string {
+func (lb *LoadBalancerComponent) findVariables(exprStr string) []string {
 	var vars []string
-	variables := []string{"$seq", "$bps", "$pps"}
+	variables := []string{"$seq", "$bps", "$pps", "$size"}
 
 	for _, variable := range variables {
-		if strings.Contains(expr, variable) {
+		if strings.Contains(exprStr, variable) {
 			vars = append(vars, variable)
 		}
 	}
@@ -178,10 +183,13 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 	// Increment packet sequence atomically
 	seq := atomic.AddUint64(&lb.packetSeq, 1)
 
+	// Get current packet size
+	size := uint64(len(packet.GetData()))
+
 	// Evaluate detour rules to find matching targets
-	targets := lb.evaluateCompiledRules(seq, bps, pps)
+	targets := lb.evaluateCompiledRules(seq, bps, pps, size)
 	if len(targets) == 0 {
-		return fmt.Errorf("%s: No matching rule found for packet", lb.tag)
+		return nil
 	}
 
 	// Route packet to all determined targets
@@ -250,11 +258,11 @@ func (lb *LoadBalancerComponent) sampleStats() {
 }
 
 // evaluateCompiledRules evaluates all pre-compiled detour rules and returns all matching targets
-func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps uint64) []string {
+func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps, size uint64) []string {
 	var allTargets []string
 
 	for i, compiledRule := range lb.compiledRules {
-		if lb.evaluateCompiledExpression(&compiledRule, seq, bps, pps) {
+		if lb.evaluateCompiledExpression(&compiledRule, seq, bps, pps, size) {
 			allTargets = append(allTargets, lb.ruleTargets[i]...)
 		}
 	}
@@ -263,36 +271,56 @@ func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps uint64) []s
 }
 
 // evaluateCompiledExpression evaluates a pre-compiled expression with given variables
-func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledExpression, seq, bps, pps uint64) bool {
-	// Create variable map for substitution
-	varMap := make(map[string]uint64)
+func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledExpression, seq, bps, pps, size uint64) bool {
+	// Create environment with variables for expr evaluation
+	env := map[string]interface{}{}
+
+	// Add variables to environment without $ prefix
 	for _, varKey := range compiled.varKeys {
+		normalizedKey := strings.TrimPrefix(varKey, "$")
 		switch varKey {
 		case "$seq":
-			varMap[varKey] = seq
+			env[normalizedKey] = seq
 		case "$bps":
-			varMap[varKey] = bps
+			env[normalizedKey] = bps
 		case "$pps":
-			varMap[varKey] = pps
+			env[normalizedKey] = pps
+		case "$size":
+			env[normalizedKey] = size
 		}
 	}
 
-	// Evaluate the pre-compiled AST with variable substitution
-	result, err := lb.evaluateNodeWithVars(compiled.ast, varMap)
+	// Evaluate the expression
+	result, err := expr.Run(compiled.program, env)
 	if err != nil {
 		logger.Errorf("%s: Error evaluating compiled expression: %v", lb.tag, err)
 		return false
 	}
 
-	return result != 0
+	// Convert result to boolean
+	switch v := result.(type) {
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case uint64:
+		return v != 0
+	default:
+		logger.Errorf("%s: Unexpected result type from expression: %T", lb.tag, result)
+		return false
+	}
 }
 
 // evaluateRules evaluates all detour rules and returns all matching targets
-func (lb *LoadBalancerComponent) evaluateRules(seq, bps, pps uint64) []string {
+func (lb *LoadBalancerComponent) evaluateRules(seq, bps, pps, size uint64) []string {
 	var allTargets []string
 
 	for _, rule := range lb.detour {
-		if lb.evaluateExpression(rule.Rule, seq, bps, pps) {
+		if lb.evaluateExpression(rule.Rule, seq, bps, pps, size) {
 			allTargets = append(allTargets, rule.Targets...)
 		}
 	}
@@ -301,265 +329,43 @@ func (lb *LoadBalancerComponent) evaluateRules(seq, bps, pps uint64) []string {
 }
 
 // evaluateExpression evaluates a rule expression with the given variables
-func (lb *LoadBalancerComponent) evaluateExpression(expr string, seq, bps, pps uint64) bool {
-	// Replace variables in expression
-	expr = strings.ReplaceAll(expr, "$seq", fmt.Sprintf("%d", seq))
-	expr = strings.ReplaceAll(expr, "$bps", fmt.Sprintf("%d", bps))
-	expr = strings.ReplaceAll(expr, "$pps", fmt.Sprintf("%d", pps))
+func (lb *LoadBalancerComponent) evaluateExpression(exprStr string, seq, bps, pps, size uint64) bool {
+	// Replace $ prefix in variables for expr library compatibility
+	normalizedExpr := exprStr
+	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$seq", "seq")
+	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$bps", "bps")
+	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$pps", "pps")
+	normalizedExpr = strings.ReplaceAll(normalizedExpr, "$size", "size")
 
-	// Parse and evaluate the expression
-	result, err := lb.parseAndEvaluate(expr)
+	// Create environment with variables
+	env := map[string]interface{}{
+		"seq":  seq,
+		"bps":  bps,
+		"pps":  pps,
+		"size": size,
+	}
+
+	// Evaluate the expression
+	result, err := expr.Eval(normalizedExpr, env)
 	if err != nil {
-		logger.Errorf("%s: Error evaluating expression '%s': %v", lb.tag, expr, err)
+		logger.Errorf("%s: Error evaluating expression '%s': %v", lb.tag, exprStr, err)
 		return false
 	}
 
-	// Non-zero result means condition is met
-	return result != 0
-}
-
-// parseAndEvaluate parses and evaluates a mathematical/logical expression
-func (lb *LoadBalancerComponent) parseAndEvaluate(expr string) (int64, error) {
-	// Parse the expression into an AST
-	node, err := parser.ParseExpr(expr)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse expression: %w", err)
-	}
-
-	// Evaluate the AST
-	return lb.evaluateNode(node)
-}
-
-// evaluateNodeWithVars evaluates AST nodes with variable substitution
-func (lb *LoadBalancerComponent) evaluateNodeWithVars(node ast.Expr, varMap map[string]uint64) (int64, error) {
-	switch n := node.(type) {
-	case *ast.BasicLit:
-		// Handle literal values (numbers)
-		if n.Kind == token.INT {
-			val, err := strconv.ParseInt(n.Value, 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("invalid integer: %s", n.Value)
-			}
-			return val, nil
-		}
-		return 0, fmt.Errorf("unsupported literal type: %s", n.Kind)
-
-	case *ast.BinaryExpr:
-		// Handle binary operations
-		left, err := lb.evaluateNodeWithVars(n.X, varMap)
-		if err != nil {
-			return 0, err
-		}
-
-		right, err := lb.evaluateNodeWithVars(n.Y, varMap)
-		if err != nil {
-			return 0, err
-		}
-
-		switch n.Op {
-		case token.ADD:
-			return left + right, nil
-		case token.SUB:
-			return left - right, nil
-		case token.MUL:
-			return left * right, nil
-		case token.QUO:
-			if right == 0 {
-				return 0, fmt.Errorf("division by zero")
-			}
-			return left / right, nil
-		case token.REM:
-			if right == 0 {
-				return 0, fmt.Errorf("modulo by zero")
-			}
-			return left % right, nil
-		case token.EQL:
-			if left == right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.NEQ:
-			if left != right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LSS:
-			if left < right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LEQ:
-			if left <= right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.GTR:
-			if left > right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.GEQ:
-			if left >= right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LAND:
-			if left != 0 && right != 0 {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LOR:
-			if left != 0 || right != 0 {
-				return 1, nil
-			}
-			return 0, nil
-		default:
-			return 0, fmt.Errorf("unsupported binary operator: %s", n.Op)
-		}
-
-	case *ast.UnaryExpr:
-		// Handle unary operations
-		operand, err := lb.evaluateNodeWithVars(n.X, varMap)
-		if err != nil {
-			return 0, err
-		}
-
-		switch n.Op {
-		case token.NOT:
-			if operand == 0 {
-				return 1, nil
-			}
-			return 0, nil
-		case token.SUB:
-			return -operand, nil
-		case token.ADD:
-			return operand, nil
-		default:
-			return 0, fmt.Errorf("unsupported unary operator: %s", n.Op)
-		}
-
-	case *ast.ParenExpr:
-		// Handle parentheses
-		return lb.evaluateNodeWithVars(n.X, varMap)
-
+	// Convert result to boolean
+	switch v := result.(type) {
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case uint64:
+		return v != 0
 	default:
-		return 0, fmt.Errorf("unsupported expression type: %T", node)
-	}
-}
-
-// evaluateNode recursively evaluates AST nodes
-func (lb *LoadBalancerComponent) evaluateNode(node ast.Expr) (int64, error) {
-	switch n := node.(type) {
-	case *ast.BasicLit:
-		// Handle literal values (numbers)
-		if n.Kind == token.INT {
-			val, err := strconv.ParseInt(n.Value, 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("invalid integer: %s", n.Value)
-			}
-			return val, nil
-		}
-		return 0, fmt.Errorf("unsupported literal type: %s", n.Kind)
-
-	case *ast.BinaryExpr:
-		// Handle binary operations
-		left, err := lb.evaluateNode(n.X)
-		if err != nil {
-			return 0, err
-		}
-
-		right, err := lb.evaluateNode(n.Y)
-		if err != nil {
-			return 0, err
-		}
-
-		switch n.Op {
-		case token.ADD:
-			return left + right, nil
-		case token.SUB:
-			return left - right, nil
-		case token.MUL:
-			return left * right, nil
-		case token.QUO:
-			if right == 0 {
-				return 0, fmt.Errorf("division by zero")
-			}
-			return left / right, nil
-		case token.REM:
-			if right == 0 {
-				return 0, fmt.Errorf("modulo by zero")
-			}
-			return left % right, nil
-		case token.EQL:
-			if left == right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.NEQ:
-			if left != right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LSS:
-			if left < right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LEQ:
-			if left <= right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.GTR:
-			if left > right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.GEQ:
-			if left >= right {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LAND:
-			if left != 0 && right != 0 {
-				return 1, nil
-			}
-			return 0, nil
-		case token.LOR:
-			if left != 0 || right != 0 {
-				return 1, nil
-			}
-			return 0, nil
-		default:
-			return 0, fmt.Errorf("unsupported binary operator: %s", n.Op)
-		}
-
-	case *ast.UnaryExpr:
-		// Handle unary operations
-		operand, err := lb.evaluateNode(n.X)
-		if err != nil {
-			return 0, err
-		}
-
-		switch n.Op {
-		case token.NOT:
-			if operand == 0 {
-				return 1, nil
-			}
-			return 0, nil
-		case token.SUB:
-			return -operand, nil
-		case token.ADD:
-			return operand, nil
-		default:
-			return 0, fmt.Errorf("unsupported unary operator: %s", n.Op)
-		}
-
-	case *ast.ParenExpr:
-		// Handle parentheses
-		return lb.evaluateNode(n.X)
-
-	default:
-		return 0, fmt.Errorf("unsupported expression type: %T", node)
+		logger.Errorf("%s: Unexpected result type from expression: %T", lb.tag, result)
+		return false
 	}
 }

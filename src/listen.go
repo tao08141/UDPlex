@@ -288,6 +288,8 @@ func (l *ListenComponent) handlePackets() {
 
 				var netErr net.Error
 				if errors.As(err, &netErr) && netErr.Timeout() {
+					return
+				} else if err != nil {
 					logger.Warnf("%s: Read error: %v", l.tag, err)
 					return
 				}
