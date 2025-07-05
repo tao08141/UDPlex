@@ -1,36 +1,35 @@
 # UDPlex
-
 [English](README_EN.md) | [中文](README.md)
 
-UDPlex is an efficient bidirectional UDP packet forwarding tool that supports forwarding UDP traffic to multiple target servers simultaneously, handling return traffic, and providing authentication and encryption features. It is suitable for game acceleration, network redundancy, and traffic distribution scenarios.
+UDPlex is an efficient UDP packet bidirectional forwarding tool that supports forwarding UDP traffic to multiple target servers simultaneously, handling return traffic, and supporting authentication, encryption, and other features. It is suitable for gaming acceleration, network redundancy, and traffic distribution scenarios.
 
 ## Features
 
 - Listen on specified UDP ports to receive packets
 - Forward packets in parallel to multiple target servers
 - Support bidirectional traffic forwarding
-- Automatically reconnect broken connections
-- Configurable buffer size and timeout parameters
-- Support for authentication and encrypted transmission
-- Support for protocol detection and filtering
-- Support for Docker deployment
+- Automatic reconnection for broken connections
+- Configurable buffer sizes and timeout parameters
+- Support authentication and encrypted transmission
+- Support protocol detection and filtering
+- Support Docker deployment
 
 ## Usage
 
-1. Edit the config.json file to configure listening address and forwarding targets
+1. Edit the config.json file to configure listening addresses and forwarding targets
 2. Run the program:
 
 ```bash
-# Use the default configuration file
+# Use default configuration file
 ./UDPlex
 
-# Or specify a configuration file path
+# Or specify configuration file path
 ./UDPlex -c /path/to/config.json
 ```
 
 ## Docker Usage
 
-### Using Docker Command
+### Using Docker Commands
 
 ```bash
 # Pull the image
@@ -78,68 +77,91 @@ docker-compose logs -f
 docker-compose down
 ```
 
-> Note: For UDP forwarding applications, it's recommended to use host network mode (network_mode: host) for best performance. If you need precise control over port mapping, you can use port mapping mode.
+> Note: For UDP forwarding applications, it is recommended to use host network mode (network_mode: host) for optimal performance. If precise port mapping control is needed, you can use port mapping mode.
 
-# UDPlex Parameter Guide
+# UDPlex Parameter Details
 
 ## Global Configuration
 
 | Parameter | Description |
 |-----------|-------------|
-| `buffer_size` | UDP packet buffer size (bytes), recommended to set to MTU size, typically 1500 |
-| `queue_size` | Size of packet queues between components, increase this value for high traffic scenarios |
-| `worker_count` | Number of worker threads, affects concurrent processing capacity |
+| `buffer_size` | UDP packet buffer size (bytes), recommended to set to MTU size, usually 1500 |
+| `queue_size` | Inter-component packet queue size, increase for high traffic scenarios |
+| `worker_count` | Number of worker threads, affects concurrent processing capability |
 | `services` | Component configuration array, defines all processing components in the system |
-| `protocol_detectors` | Protocol detector configuration, used to identify and filter specific protocol packets |
+| `protocol_detectors` | Protocol detector configuration for identifying and filtering packets of specific protocols |
 
 ## Service Component Parameters
 
-UDPlex supports various component types, each with specific functions and configuration parameters. For detailed documentation, please refer to:
+UDPlex supports multiple component types, each with specific functions and configuration parameters. For detailed documentation, please refer to:
 
 - [Listen Component](docs/listen_en.md) - Listen on UDP ports and receive packets
 - [Forward Component](docs/forward_en.md) - Forward packets to target servers
-- [Filter Component](docs/filter_en.md) - Filter and categorize packets based on protocol characteristics
-- [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening end
-- [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding end
+- [Filter Component](docs/filter_en.md) - Filter and classify packets based on protocol characteristics
+- [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening endpoint
+- [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding endpoint
 - [Load Balancer Component](docs/load_balancer_en.md) - Load balancing component
 
 ### Authentication Configuration
 
 UDPlex supports packet authentication and encryption features. For detailed documentation, please refer to:
 
-- [Authentication Protocol](docs/auth_protocol_en.md) - Detailed explanation of the authentication protocol
+- [Authentication Protocol](docs/auth_protocol_en.md) - Detailed authentication protocol description
 
-## Protocol Detector
+## Protocol Detectors
 
-UDPlex supports configuring protocol detectors to identify and categorize specific protocols in UDP packets. For detailed documentation, please refer to:
+UDPlex supports configuring protocol detectors to identify and classify specific protocols in UDP packets. For detailed documentation, please refer to:
 
-- [Protocol Detector](docs/protocol_detector_en.md) - Protocol detector configuration and usage instructions
+- [Protocol Detectors](docs/protocol_detector_en.md) - Protocol detector configuration and usage instructions
 
 ## Development Roadmap
 - [X] Support packet filtering and selective forwarding
 - [X] Support authentication, encryption, deduplication, and other features
-- [X] Support UDP Over TCP forwarding
+- [X] Support UDP over TCP forwarding
 - [X] Support more complex load balancing algorithms
-- [ ] RESTful API interface
+- [X] RESTful API interface
+
+## RESTful API Interface
+UDPlex provides RESTful API interfaces to query component status and connection information.
+
+### Configuring API Server
+Add the following configuration to the configuration file:
+```json
+{
+  "api": {
+    "enabled": true,
+    "port": 8080,
+    "host": "0.0.0.0"
+  }
+}
+```
+
+### API Endpoints
+- `GET /api/components` - Get list of all components
+- `GET /api/components/{tag}` - Get information for specified component
+- `GET /api/listen/{tag}` - Get connection information for Listen component
+- `GET /api/forward/{tag}` - Get connection information for Forward component
+- `GET /api/tcp_tunnel_listen/{tag}` - Get connection information for TCP Tunnel Listen component
+- `GET /api/tcp_tunnel_forward/{tag}` - Get connection information for TCP Tunnel Forward component
+- `GET /api/load_balancer/{tag}` - Get traffic information for Load Balancer component
 
 ## Use Cases
-- Game acceleration: Forward game traffic to multiple servers simultaneously, selecting the fastest response
+- Gaming acceleration: Forward game traffic to multiple servers simultaneously, selecting the fastest response
 - Network redundancy: Ensure important UDP data can be transmitted through multiple paths
 - Traffic distribution: Replicate UDP traffic to multiple targets for processing
 
-
 ## Configuration Examples
 
-The examples directory contains configuration examples for various usage scenarios:
+The examples directory contains configuration examples for various use cases:
 
-- [**basic.json**](examples/basic.json) - Basic configuration example for UDP forwarding
-- [**auth_client.json**](examples/auth_client.json) - UDP client configuration with authentication
-- [**auth_server.json**](examples/auth_server.json) - UDP server configuration with authentication
-- [**redundant_client.json**](examples/redundant_client.json) - UDP redundant client configuration, sending traffic to multiple servers simultaneously
-- [**redundant_server.json**](examples/redundant_server.json) - UDP redundant server configuration, receiving client traffic and forwarding
-- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP bidirectional separated communication client configuration
-- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP bidirectional separated communication server configuration
-- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP tunnel server configuration, listening for TCP connections and forwarding UDP traffic
-- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP tunnel client configuration, connecting to a TCP tunnel server and forwarding UDP traffic
-- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - Bandwidth threshold-based load balancing configuration, forwarding to two servers when traffic is less than or equal to 100M, and to only one server when traffic is greater than 100M
-- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - Equal load balancing configuration that distributes data to two servers in a 1:1 ratio
+- [**basic.json**](examples/basic.json) - Basic UDP forwarding configuration example
+- [**auth_client.json**](examples/auth_client.json) - Authenticated UDP client configuration
+- [**auth_server.json**](examples/auth_server.json) - Authenticated UDP server configuration
+- [**redundant_client.json**](examples/redundant_client.json) - UDP redundancy client configuration, sends traffic to multiple servers simultaneously
+- [**redundant_server.json**](examples/redundant_server.json) - UDP redundancy server configuration, receives client traffic and forwards
+- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP upstream/downstream separation client configuration
+- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP upstream/downstream separation server configuration
+- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic
+- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
+- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M
+- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - Equal load distribution configuration, distributes data to two servers in 1:1 ratio

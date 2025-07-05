@@ -123,7 +123,31 @@ UDPlex 支持通过配置协议检测器来识别和分类 UDP 数据包中的�
 - [X] 支持鉴权、加密、去重等功能
 - [X] 支持UDP Over TCP的转发
 - [X] 支持更复杂的负载均衡算法
-- [ ] RESTful API 接口
+- [X] RESTful API 接口
+
+## RESTful API 接口
+UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
+
+### 配置 API 服务器
+在配置文件中添加以下配置：
+```json
+{
+  "api": {
+    "enabled": true,
+    "port": 8080,
+    "host": "0.0.0.0"
+  }
+}
+```
+
+### API 端点
+- `GET /api/components` - 获取所有组件列表
+- `GET /api/components/{tag}` - 获取指定组件信息
+- `GET /api/listen/{tag}` - 获取 Listen 组件的连接信息
+- `GET /api/forward/{tag}` - 获取 Forward 组件的连接信息
+- `GET /api/tcp_tunnel_listen/{tag}` - 获取 TCP Tunnel Listen 组件的连接信息
+- `GET /api/tcp_tunnel_forward/{tag}` - 获取 TCP Tunnel Forward 组件的连接信息
+- `GET /api/load_balancer/{tag}` - 获取 Load Balancer 组件的流量信息
 
 ## 使用场景
 - 游戏加速：将游戏流量同时转发到多个服务器，选择最快的响应

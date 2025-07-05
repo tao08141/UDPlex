@@ -208,5 +208,23 @@ func main() {
 
 	logger.Info("UDPlex started and ready")
 
+	// Initialize and start API server
+	apiConfig := config.API
+	if apiConfig.Enabled {
+		if apiConfig.Port == 0 {
+			apiConfig.Port = 8080 // Default port
+		}
+		if apiConfig.Host == "" {
+			apiConfig.Host = "0.0.0.0" // Default host
+		}
+
+		apiServer := NewAPIServer(apiConfig, router)
+		if err := apiServer.Start(); err != nil {
+			logger.Warnf("Failed to start API server: %v", err)
+		} else {
+			logger.Infof("API server started on %s:%d", apiConfig.Host, apiConfig.Port)
+		}
+	}
+
 	select {}
 }

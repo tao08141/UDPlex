@@ -9,6 +9,7 @@ type Config struct {
 	Services          []map[string]any              `json:"services"`
 	ProtocolDetectors map[string]ProtocolDefinition `json:"protocol_detectors"`
 	Logging           LoggingConfig                 `json:"logging"`
+	API               APIConfig                     `json:"api"`
 }
 
 // ComponentConfig represents the common configuration for all components

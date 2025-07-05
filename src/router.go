@@ -308,3 +308,21 @@ func (r *Router) StopAll() {
 	r.wg.Wait()
 	logger.Infof("All router workers stopped")
 }
+
+// GetComponentByTag returns a component by its tag or nil if not found
+func (r *Router) GetComponentByTag(tag string) Component {
+	c, exists := r.components[tag]
+	if !exists {
+		return nil
+	}
+	return c
+}
+
+// GetComponents returns a slice of all registered components
+func (r *Router) GetComponents() []Component {
+	components := make([]Component, 0, len(r.components))
+	for _, c := range r.components {
+		components = append(components, c)
+	}
+	return components
+}

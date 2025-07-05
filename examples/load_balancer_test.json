@@ -47,5 +47,10 @@
                 "client_listen"
             ]
         }
-    ]
+    ],
+    "api": {
+        "enabled": true,
+        "port": 8080,
+        "host": "0.0.0.0"
+    }
 }
