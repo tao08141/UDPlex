@@ -141,3 +141,5 @@ The examples directory contains configuration examples for various usage scenari
 - [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP bidirectional separated communication server configuration
 - [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP tunnel server configuration, listening for TCP connections and forwarding UDP traffic
 - [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP tunnel client configuration, connecting to a TCP tunnel server and forwarding UDP traffic
+- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - Bandwidth threshold-based load balancing configuration, forwarding to two servers when traffic is less than or equal to 100M, and to only one server when traffic is greater than 100M
+- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - Equal load balancing configuration that distributes data to two servers in a 1:1 ratio

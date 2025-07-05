@@ -3,7 +3,7 @@
     "queue_size": 10240,
     "worker_count": 4,
     "logging": {
-        "level": "debug",
+        "level": "debug", 
         "format": "console",
         "output_path": "stdout",
         "caller": true
@@ -26,22 +26,18 @@
             "window_size": "10s",
             "detour": [
                 {
-                    "rule": "$seq % 3 == 0",
-                    "target": "server1"
+                    "rule": "$bps <= 100000000",
+                    "target": ["server_a", "server_b"]
                 },
                 {
-                    "rule": "$seq % 3 == 1",
-                    "target": "server2"
-                },
-                {
-                    "rule": "$seq % 3 == 2 || $pps > 1000",
-                    "target": "server3"
+                    "rule": "$bps > 100000000",
+                    "target": ["server_a"]
                 }
             ]
         },
         {
             "type": "forward",
-            "tag": "server1",
+            "tag": "server_a",
             "forwarders": [
                 "192.168.1.10:5201"
             ],
@@ -54,22 +50,9 @@
         },
         {
             "type": "forward",
-            "tag": "server2",
+            "tag": "server_b",
             "forwarders": [
                 "192.168.1.11:5201"
-            ],
-            "reconnect_interval": 5,
-            "connection_check_time": 30,
-            "send_keepalive": true,
-            "detour": [
-                "client_listen"
-            ]
-        },
-        {
-            "type": "forward",
-            "tag": "server3",
-            "forwarders": [
-                "192.168.1.12:5201"
             ],
             "reconnect_interval": 5,
             "connection_check_time": 30,

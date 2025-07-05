@@ -144,3 +144,5 @@ examples目录包含多种使用场景的配置示例：
 - [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP上下行分离通信服务端配置
 - [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP隧道服务端配置，监听TCP连接并转发UDP流量
 - [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
+- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - 基于带宽阈值的负载均衡配置，当流量小于等于100M时向两个服务器转发，大于100M时只向一个服务器转发
+- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - 均衡负载配置，以1:1的比例向两个服务器分发数据
