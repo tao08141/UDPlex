@@ -368,7 +368,15 @@
                     for (const component of this.components.values()) {
                         await this.fetchComponentDetails(component);
                     }
+                    // 记录当前高亮tag
+                    const highlighted = Array.from(document.querySelectorAll('.component-card.highlight'))
+                        .map(card => card.dataset.tag);
                     this.renderComponents();
+                    // 恢复高亮
+                    highlighted.forEach(tag => {
+                        const card = document.querySelector(`[data-tag="${tag}"]`);
+                        if (card) card.classList.add('highlight');
+                    });
                     this.updateStatus('在线', true);
                     document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
                 } catch (error) {
