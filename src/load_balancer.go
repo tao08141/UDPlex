@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,8 +12,10 @@ import (
 
 // CompiledExpression represents a pre-compiled expression for faster evaluation
 type CompiledExpression struct {
-	program *vm.Program
-	varKeys []string // Variables found in the expression (e.g., "seq", "bps", "pps")
+	program      *vm.Program
+	varKeys      []string // Variables found in the expression (e.g., "seq", "bps", "pps")
+	canCache     bool     // Whether this expression can be cached (no seq/size dependency)
+	cachedResult uint64   // Cached evaluation result (0=false, 1=true) - atomic
 }
 
 // TrafficSample represents a traffic sample for a specific interval
@@ -38,12 +39,10 @@ type TrafficStats struct {
 type LoadBalancerComponent struct {
 	BaseComponent
 	detour          []LoadBalancerDetourRule
-	windowSize      uint32
 	stats           *TrafficStats
 	packetSeq       uint64                         // Atomic counter for packet sequence
 	compiledRules   []CompiledExpression           // Pre-compiled expressions
 	ruleTargets     [][]string                     // Corresponding targets for each rule (array of arrays)
-	compileOnce     sync.Once                      // Ensure rules are compiled only once
 	expressionCache map[string]*CompiledExpression // Cache for compiled expressions
 }
 
@@ -120,9 +119,20 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 		return nil, fmt.Errorf("failed to compile expression: %w", err)
 	}
 
+	// Determine if this expression can be cached (no seq/size dependency)
+	canCache := true
+	for _, varKey := range varKeys {
+		if varKey == "seq" || varKey == "size" {
+			canCache = false
+			break
+		}
+	}
+
 	compiled := &CompiledExpression{
-		program: program,
-		varKeys: varKeys,
+		program:      program,
+		varKeys:      varKeys,
+		canCache:     canCache,
+		cachedResult: 0,
 	}
 
 	// Cache the compiled expression
@@ -238,6 +248,30 @@ func (lb *LoadBalancerComponent) sampleStats() {
 		Bytes:   currentBytes,
 		Packets: currentPackets,
 	}
+
+	// Update cached expression results for rules that don't depend on seq/size
+	lb.updateCachedResults()
+}
+
+// updateCachedResults updates cached results for expressions that only depend on bps/pps
+func (lb *LoadBalancerComponent) updateCachedResults() {
+	bps, pps := lb.getCurrentStats()
+
+	// Update each cacheable rule
+	for i := range lb.compiledRules {
+		if lb.compiledRules[i].canCache {
+			result := lb.evaluateExpressionDirect(&lb.compiledRules[i], 0, bps, pps, 0)
+
+			// Store result as 0 (false) or 1 (true)
+			var resultValue uint64
+			if result {
+				resultValue = 1
+			}
+
+			// Atomically update cached result and version
+			atomic.StoreUint64(&lb.compiledRules[i].cachedResult, resultValue)
+		}
+	}
 }
 
 // evaluateCompiledRules evaluates all pre-compiled detour rules and returns all matching targets
@@ -245,7 +279,18 @@ func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps, size uint6
 	var allTargets []string
 
 	for i, compiledRule := range lb.compiledRules {
-		if lb.evaluateCompiledExpression(&compiledRule, seq, bps, pps, size) {
+		var result bool
+
+		if compiledRule.canCache {
+			// Use cached result
+			cachedResult := atomic.LoadUint64(&compiledRule.cachedResult)
+			result = cachedResult == 1
+		} else {
+			// Direct evaluation for expressions that depend on seq/size
+			result = lb.evaluateExpressionDirect(&compiledRule, seq, bps, pps, size)
+		}
+
+		if result {
 			allTargets = append(allTargets, lb.ruleTargets[i]...)
 		}
 	}
@@ -253,8 +298,8 @@ func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps, size uint6
 	return allTargets
 }
 
-// evaluateCompiledExpression evaluates a pre-compiled expression with given variables
-func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledExpression, seq, bps, pps, size uint64) bool {
+// evaluateExpressionDirect performs direct expression evaluation without caching
+func (lb *LoadBalancerComponent) evaluateExpressionDirect(compiled *CompiledExpression, seq, bps, pps, size uint64) bool {
 	// Create environment with variables for expr evaluation
 	env := map[string]any{}
 
@@ -283,13 +328,7 @@ func (lb *LoadBalancerComponent) evaluateCompiledExpression(compiled *CompiledEx
 	switch v := result.(type) {
 	case bool:
 		return v
-	case int:
-		return v != 0
-	case int64:
-		return v != 0
-	case float64:
-		return v != 0
-	case uint64:
+	case int, int64, float64, uint64:
 		return v != 0
 	default:
 		logger.Errorf("%s: Unexpected result type from expression: %T", lb.tag, result)
