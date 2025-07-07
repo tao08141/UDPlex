@@ -616,6 +616,21 @@
                                 ${pool.target_count ? ` (目标: ${pool.target_count})` : ''}
                             </div>
                         `;
+                        // 展示该池的所有连接
+                        if (pool.connections && pool.connections.length > 0) {
+                            pool.connections.forEach(conn => {
+                                const status = conn.is_connected !== undefined
+                                    ? (conn.is_connected ? 'online' : 'offline')
+                                    : (conn.is_authenticated ? 'online' : 'warning');
+                                html += `
+                                    <div class="connection-item" style="margin-left: 24px;">
+                                        <span class="status-indicator status-${status}"></span>
+                                        ${conn.address || conn.remote_addr}
+                                        ${conn.last_active ? ` (${new Date(conn.last_active).toLocaleTimeString()})` : ''}
+                                    </div>
+                                `;
+                            });
+                        }
                     });
                 }
 
