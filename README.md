@@ -1,153 +1,148 @@
 # UDPlex
 [English](README_EN.md) | [中文](README.md)
 
-UDPlex 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量同时转发到多个目标服务器，并能处理返回流量，并支持鉴权、加密等功能。它适用于游戏加速、网络冗余和流量分流等场景。
+UDPlex is an efficient UDP packet bidirectional forwarding tool that supports forwarding UDP traffic to multiple target servers simultaneously, handling return traffic, and supporting authentication, encryption, and other features. It is suitable for gaming acceleration, network redundancy, and traffic distribution scenarios.
 
-## 功能特点
+## Features
 
-- 监听指定 UDP 端口接收数据包
-- 将数据包并行转发到多个目标服务器
-- 支持双向流量转发
-- 自动重连断开的连接
-- 可配置的缓冲区大小和超时参数
-- 支持鉴权和加密传输
-- 支持协议检测和过滤
-- 支持 Docker 部署
+- Listen on specified UDP ports to receive packets
+- Forward packets in parallel to multiple target servers
+- Support bidirectional traffic forwarding
+- Automatic reconnection for broken connections
+- Configurable buffer sizes and timeout parameters
+- Support authentication and encrypted transmission
+- Support protocol detection and filtering
+- Support Docker deployment
 
+## Usage
 
-## 使用方法
-
-1. 编辑 config.json 文件配置监听地址和转发目标
-2. 运行程序：
+1. Edit the config.json file to configure listening addresses and forwarding targets
+2. Run the program:
 
 ```bash
-# 使用默认配置文件
+# Use default configuration file
 ./UDPlex
 
-# 或指定配置文件路径
+# Or specify configuration file path
 ./UDPlex -c /path/to/config.json
 ```
 
-## Docker 使用方法
+## Docker Usage
 
-### 使用 Docker 命令
+### Using Docker Commands
 
 ```bash
-# 拉取镜像
+# Pull the image
 docker pull ghcr.io/tao08141/udplex:latest
 
-# 运行容器 (使用主机网络模式)
+# Run container (using host network mode)
 docker run -d --name udplex --network host \
   -v $(pwd)/config.json:/app/config.json \
   ghcr.io/tao08141/udplex:latest
 
-# 使用端口映射模式 (如果不使用主机网络模式)
+# Using port mapping mode (if not using host network mode)
 docker run -d --name udplex \
   -v $(pwd)/config.json:/app/config.json \
   -p 9000:9000/udp \
   ghcr.io/tao08141/udplex:latest
 ```
 
-### 使用 Docker Compose
+### Using Docker Compose
 
-1. 下载 docker-compose.yml 文件:
+1. Download the docker-compose.yml file:
 
 ```bash
 mkdir udplex && cd udplex
-# 下载 docker-compose.yml 文件
+# Download docker-compose.yml file
 curl -o docker-compose.yml https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/docker-compose.yml
-# 下载配置文件
+# Download configuration file
 curl -o config.json https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/examples/basic.json
 ```
 
-2. 启动服务:
+2. Start the service:
 
 ```bash
 docker-compose up -d
 ```
 
-3. 查看日志:
+3. View logs:
 
 ```bash
 docker-compose logs -f
 ```
 
-4. 停止服务:
+4. Stop the service:
 
 ```bash
 docker-compose down
 ```
 
-> 注意：对于 UDP 转发应用，建议使用主机网络模式 (network_mode: host) 以获得最佳性能。如果需要精确控制端口映射，可以使用端口映射模式。
+> Note: For UDP forwarding applications, it is recommended to use host network mode (network_mode: host) for optimal performance. If precise port mapping control is needed, you can use port mapping mode.
 
-# UDPlex 参数详解
+# UDPlex Parameter Details
 
-## 全局配置
+## Global Configuration
 
-| 参数 | 说明 |
-|------|------|
-| `buffer_size` | UDP数据包缓冲区大小（字节），建议设置为MTU大小，通常为1500 |
-| `queue_size` | 组件间数据包队列大小，高流量场景建议增大此值 |
-| `worker_count` | 工作线程数量，影响并发处理能力 |
-| `services` | 组件配置数组，定义系统中所有的处理组件 |
-| `protocol_detectors` | 协议检测器配置，用于识别和过滤特定协议的数据包 |
+| Parameter | Description |
+|-----------|-------------|
+| `buffer_size` | UDP packet buffer size (bytes), recommended to set to MTU size, usually 1500 |
+| `queue_size` | Inter-component packet queue size, increase for high traffic scenarios |
+| `worker_count` | Number of worker threads, affects concurrent processing capability |
+| `services` | Component configuration array, defines all processing components in the system |
+| `protocol_detectors` | Protocol detector configuration for identifying and filtering packets of specific protocols |
 
-## 服务组件参数
+## Service Component Parameters
 
-UDPlex 支持多种组件类型，每种组件都有特定的功能和配置参数。详细文档请参考：
+UDPlex supports multiple component types, each with specific functions and configuration parameters. For detailed documentation, please refer to:
 
-- [Listen 组件](docs/listen_zh.md) - 监听 UDP 端口并接收数据包
-- [Forward 组件](docs/forward_zh.md) - 将数据包转发到目标服务器
-- [Filter 组件](docs/filter_zh.md) - 根据协议特征过滤和分类数据包
-- [TCP Tunnel Listen 组件](docs/tcp_tunnel_listen_zh.md) - TCP 隧道监听端
-- [TCP Tunnel Forward 组件](docs/tcp_tunnel_forward_zh.md) - TCP 隧道转发端
-- [Load Balancer 组件](docs/load_balancer_zh.md) - 负载均衡组件
+- [Listen Component](docs/listen_en.md) - Listen on UDP ports and receive packets
+- [Forward Component](docs/forward_en.md) - Forward packets to target servers
+- [Filter Component](docs/filter_en.md) - Filter and classify packets based on protocol characteristics
+- [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening endpoint
+- [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding endpoint
+- [Load Balancer Component](docs/load_balancer_en.md) - Load balancing component
 
+### Authentication Configuration
 
-### 鉴权配置
+UDPlex supports packet authentication and encryption features. For detailed documentation, please refer to:
 
-UDPlex 支持数据包鉴权与加密功能，详细文档请参考：
+- [Authentication Protocol](docs/auth_protocol_en.md) - Detailed authentication protocol description
 
-- [鉴权协议](docs/auth_protocol_zh.md) - 鉴权协议详细说明
+## Protocol Detectors
 
+UDPlex supports configuring protocol detectors to identify and classify specific protocols in UDP packets. For detailed documentation, please refer to:
 
-## 协议检测器
+- [Protocol Detectors](docs/protocol_detector_en.md) - Protocol detector configuration and usage instructions
 
-UDPlex 支持通过配置协议检测器来识别和分类 UDP 数据包中的特定协议，详细文档请参考：
+## Development Roadmap
+- [X] Support packet filtering and selective forwarding
+- [X] Support authentication, encryption, deduplication, and other features
+- [X] Support UDP over TCP forwarding
+- [X] Support more complex load balancing algorithms
+- [X] RESTful API interface
 
-- [协议检测器](docs/protocol_detector_zh.md) - 协议检测器配置和使用说明
+## RESTful API Interface
+UDPlex provides RESTful API interfaces to query component status and connection information.
 
+- [RESTful](docs/RESTful_en.md) - RESTful interface configuration and usage instructions
 
-## 开发计划
-- [X] 支持包过滤和选择性转发
-- [X] 支持鉴权、加密、去重等功能
-- [X] 支持UDP Over TCP的转发
-- [X] 支持更复杂的负载均衡算法
-- [X] RESTful API 接口
+## Use Cases
+- Gaming acceleration: Forward game traffic to multiple servers simultaneously, selecting the fastest response
+- Network redundancy: Ensure important UDP data can be transmitted through multiple paths
+- Traffic distribution: Replicate UDP traffic to multiple targets for processing
 
-## RESTful API 接口
-UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
+## Configuration Examples
 
-- [RESTful](docs/RESTful_zh.md) - RESTful接口配置和使用说明
+The examples directory contains configuration examples for various use cases:
 
-## 使用场景
-- 游戏加速：将游戏流量同时转发到多个服务器，选择最快的响应
-- 网络冗余：确保重要的 UDP 数据能通过多条路径传输
-- 流量分流：将 UDP 流量复制到多个目标进行处理
-
-
-## 配置示例
-
-examples目录包含多种使用场景的配置示例：
-
-- [**basic.json**](examples/basic.json) - UDP转发的基本配置示例
-- [**auth_client.json**](examples/auth_client.json) - 带鉴权的UDP客户端配置
-- [**auth_server.json**](examples/auth_server.json) - 带鉴权的UDP服务端配置
-- [**redundant_client.json**](examples/redundant_client.json) - UDP冗余客户端配置，将流量同时发送到多个服务器
-- [**redundant_server.json**](examples/redundant_server.json) - UDP冗余服务端配置，接收客户端流量并转发
-- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP上下行分离通信客户端配置
-- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP上下行分离通信服务端配置
-- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP隧道服务端配置，监听TCP连接并转发UDP流量
-- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
-- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - 基于带宽阈值的负载均衡配置，当流量小于等于100M时向两个服务器转发，大于100M时只向一个服务器转发
-- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - 均衡负载配置，以1:1的比例向两个服务器分发数据
+- [**basic.json**](examples/basic.json) - Basic UDP forwarding configuration example
+- [**auth_client.json**](examples/auth_client.json) - Authenticated UDP client configuration
+- [**auth_server.json**](examples/auth_server.json) - Authenticated UDP server configuration
+- [**redundant_client.json**](examples/redundant_client.json) - UDP redundancy client configuration, sends traffic to multiple servers simultaneously
+- [**redundant_server.json**](examples/redundant_server.json) - UDP redundancy server configuration, receives client traffic and forwards
+- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP upstream/downstream separation client configuration
+- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP upstream/downstream separation server configuration
+- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic
+- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
+- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M
+- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - Equal load distribution configuration, distributes data to two servers in 1:1 ratio
