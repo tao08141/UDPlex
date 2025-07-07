@@ -19,6 +19,7 @@ type TcpTunnelListenComponent struct {
 	connections       atomic.Value
 	authManager       *AuthManager
 	sendTimeout       time.Duration
+	listener          net.Listener
 }
 
 func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnelListenComponent {
@@ -77,6 +78,8 @@ func (l *TcpTunnelListenComponent) Start() error {
 		logger.Errorf("%s: Failed to start listening on %s: %v", l.tag, l.listenAddr, err)
 		return err
 	}
+
+	l.listener = ln
 
 	if l.authManager == nil {
 		logger.Warnf("%s: AuthManager is nil, cannot start component", l.tag)
@@ -153,6 +156,14 @@ func (l *TcpTunnelListenComponent) SendPacket(_ *Packet, _ any) error {
 
 func (l *TcpTunnelListenComponent) Stop() error {
 	close(l.stopCh)
+
+	if l.listener != nil {
+		err := l.listener.Close()
+		if err != nil {
+			logger.Errorf("%s: Error closing listener: %v", l.tag, err)
+		}
+		l.listener = nil
+	}
 
 	logger.Infof("%s: Stopped listening on %s", l.tag, l.listenAddr)
 	return nil

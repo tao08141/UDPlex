@@ -135,6 +135,28 @@ func (f *TcpTunnelForwardComponent) Start() error {
 func (f *TcpTunnelForwardComponent) Stop() error {
 	close(f.stopCh)
 
+	// Close all connections in all pools
+	for poolID, pool := range f.pools {
+		if pool == nil {
+			logger.Warnf("%s: Pool for %x is nil, skipping", f.tag, poolID)
+			continue
+		}
+
+		// Get current slice of connections atomically
+		connsPtr := pool.conns.Load()
+		conns := *connsPtr
+
+		for i := range conns {
+			conn := conns[i]
+			if conn == nil {
+				continue
+			}
+
+			logger.Infof("%s: Closing connection to %s", f.tag, conn.conn.RemoteAddr())
+			conn.Close()
+		}
+	}
+
 	return nil
 }
 
