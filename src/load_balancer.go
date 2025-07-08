@@ -207,7 +207,7 @@ func (lb *LoadBalancerComponent) getCurrentStats() (uint64, uint64) {
 	totalPackets += atomic.LoadUint64(&lb.stats.totalPackets) + atomic.LoadUint64(&lb.stats.currentPackets)
 
 	sampleCount := lb.stats.windowSize + 1
-	bps := totalBytes / uint64(sampleCount)
+	bps := totalBytes / uint64(sampleCount) * 8 // Convert bytes to bits
 	pps := totalPackets / uint64(sampleCount)
 
 	return bps, pps

@@ -19,7 +19,7 @@ The load balancer component uses a sliding window mechanism for traffic statisti
 **Example**:
 - `window_size: 10` 
 - The window saves 10 samples, each representing 1 second of traffic statistics
-- `bps` and `pps` are the average bytes per second and packets per second over the past 10 seconds
+- `bps` and `pps` are the average bits per second and packets per second over the past 10 seconds
 
 ## Configuration Parameters
 
@@ -50,7 +50,7 @@ Matching rules for the load balancer use the [expr-lang/expr](https://github.com
 | Variable Name | Description                              |
 |---------------|------------------------------------------|
 | `seq`         | Packet sequence number                   |
-| `bps`         | Bytes per second, averaged over window   |
+| `bps`         | Bits per second, averaged over window    |
 | `pps`         | Packets per second, averaged over window |
 | `size`        | Current packet size                      |
 
