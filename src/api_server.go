@@ -535,7 +535,7 @@ func (a *APIServer) handleGetLoadBalancerTraffic(w http.ResponseWriter, r *http.
 
 	result := map[string]interface{}{
 		"tag":             loadBalancerComponent.GetTag(),
-		"bytes_per_sec":   bps,
+		"bits_per_sec":    bps,
 		"packets_per_sec": pps,
 		"total_bytes":     atomic.LoadUint64(&loadBalancerComponent.stats.totalBytes) + atomic.LoadUint64(&loadBalancerComponent.stats.currentBytes),
 		"total_packets":   atomic.LoadUint64(&loadBalancerComponent.stats.totalPackets) + atomic.LoadUint64(&loadBalancerComponent.stats.currentPackets),

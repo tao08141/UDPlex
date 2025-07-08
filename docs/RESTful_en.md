@@ -288,7 +288,7 @@ Add the following configuration to your config file:
 ```json
 {
   "tag": "load_balancer",
-  "bytes_per_sec": 1024000,
+  "bits_per_sec": 8192000,
   "packets_per_sec": 100,
   "total_bytes": 10240000,
   "total_packets": 1000,
@@ -303,6 +303,7 @@ Add the following configuration to your config file:
   "window_size": 60
 }
 ```
+> **Note:** The `bits_per_sec` field is in bits per second (bit/s). The old `bytes_per_sec` field is deprecated.
 
 ### 8. Get Filter Component Info
 

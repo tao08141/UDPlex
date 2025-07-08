@@ -199,7 +199,7 @@ func (lb *LoadBalancerComponent) updateStats(packet *Packet) {
 	atomic.AddUint64(&lb.stats.currentPackets, 1)
 }
 
-// getCurrentStats returns average BPS and PPS values across the window
+// getCurrentStats returns average bps (bits per second) and pps values across the window
 func (lb *LoadBalancerComponent) getCurrentStats() (uint64, uint64) {
 	var totalBytes, totalPackets uint64
 
@@ -207,7 +207,7 @@ func (lb *LoadBalancerComponent) getCurrentStats() (uint64, uint64) {
 	totalPackets += atomic.LoadUint64(&lb.stats.totalPackets) + atomic.LoadUint64(&lb.stats.currentPackets)
 
 	sampleCount := lb.stats.windowSize + 1
-	bps := totalBytes / uint64(sampleCount) * 8 // Convert bytes to bits
+	bps := totalBytes * 8 / uint64(sampleCount) // Convert bytes to bits per second
 	pps := totalPackets / uint64(sampleCount)
 
 	return bps, pps
@@ -256,6 +256,7 @@ func (lb *LoadBalancerComponent) sampleStats() {
 // updateCachedResults updates cached results for expressions that only depend on bps/pps
 func (lb *LoadBalancerComponent) updateCachedResults() {
 	bps, pps := lb.getCurrentStats()
+	// bps is bits per second now
 
 	// Update each cacheable rule
 	for i := range lb.compiledRules {

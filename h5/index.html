@@ -461,15 +461,15 @@
             }
 
             // 新增：自适应速率单位
-            formatRate(bytesPerSec) {
-                if (bytesPerSec >= 1024 * 1024 * 1024) {
-                    return (bytesPerSec / (1024 * 1024 * 1024)).toFixed(2) + ' GB/s';
-                } else if (bytesPerSec >= 1024 * 1024) {
-                    return (bytesPerSec / (1024 * 1024)).toFixed(2) + ' MB/s';
-                } else if (bytesPerSec >= 1024) {
-                    return (bytesPerSec / 1024).toFixed(2) + ' KB/s';
+            formatRate(bitsPerSec) {
+                if (bitsPerSec >= 1024 * 1024 * 1024) {
+                    return (bitsPerSec / (1024 * 1024 * 1024)).toFixed(2) + ' Gbps';
+                } else if (bitsPerSec >= 1024 * 1024) {
+                    return (bitsPerSec / (1024 * 1024)).toFixed(2) + ' Mbps';
+                } else if (bitsPerSec >= 1024) {
+                    return (bitsPerSec / 1024).toFixed(2) + ' Kbps';
                 } else {
-                    return bytesPerSec + ' B/s';
+                    return bitsPerSec + ' bps';
                 }
             }
 
@@ -502,10 +502,10 @@
                         details.push(['总连接数', detailedData.total_connections]);
                     }
                     // 修改：load_balancer速率自适应单位
-                    if (detailedData.bytes_per_sec !== undefined) {
+                    if (detailedData.bits_per_sec !== undefined) {
                         const rate = component.type === 'load_balancer'
-                            ? this.formatRate(detailedData.bytes_per_sec)
-                            : ((detailedData.bytes_per_sec / 1024).toFixed(2) + ' KB/s');
+                            ? this.formatRate(detailedData.bits_per_sec)
+                            : ((detailedData.bits_per_sec / 1024).toFixed(2) + ' Kbps');
                         details.push(['流量速率', rate]);
                     }
                     if (detailedData.packets_per_sec !== undefined) {

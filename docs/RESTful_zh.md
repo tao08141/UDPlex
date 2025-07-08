@@ -288,7 +288,7 @@ API服务器提供RESTful API接口，用于监控和管理路由器组件的状
 ```json
 {
   "tag": "load_balancer",
-  "bytes_per_sec": 1024000,
+  "bits_per_sec": 8192000,
   "packets_per_sec": 100,
   "total_bytes": 10240000,
   "total_packets": 1000,
@@ -303,6 +303,7 @@ API服务器提供RESTful API接口，用于监控和管理路由器组件的状
   "window_size": 60
 }
 ```
+> **说明：** `bits_per_sec` 字段为比特每秒（bit/s），原 `bytes_per_sec` 字段已废弃。
 
 ### 8. 获取过滤器组件信息
 
