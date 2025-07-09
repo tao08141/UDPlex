@@ -14,3 +14,8 @@ func (r *Router) decrementBufferRef() {
 func (r *Router) logBufferRef() {
 	// No-op in production
 }
+
+// initPprof Do not start pprof in production environment
+func initPprof() {
+	// No-op in production
+}

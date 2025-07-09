@@ -91,6 +91,9 @@ func main() {
 	logger = defaultLogger.Sugar()
 	logger.Warnf("UDPlex version: %s", version)
 
+	// Start pprof in the dev environment
+	initPprof()
+
 	configPath := flag.String("c", "config.json", "Path to configuration file")
 	flag.Parse()
 
