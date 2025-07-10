@@ -1,5 +1,5 @@
 # UDPlex
-[English](README_EN.md) | [中文](README.md)
+[English](README.md) | [中文](README_ZH.md)
 
 UDPlex is an efficient UDP packet bidirectional forwarding tool that supports forwarding UDP traffic to multiple target servers simultaneously, handling return traffic, and supporting authentication, encryption, and other features. It is suitable for gaming acceleration, network redundancy, and traffic distribution scenarios.
 
@@ -127,9 +127,12 @@ UDPlex provides RESTful API interfaces to query component status and connection 
 - [RESTful](docs/RESTful_en.md) - RESTful interface configuration and usage instructions
 
 ## Use Cases
-- Gaming acceleration: Forward game traffic to multiple servers simultaneously, selecting the fastest response
-- Network redundancy: Ensure important UDP data can be transmitted through multiple paths
-- Traffic distribution: Replicate UDP traffic to multiple targets for processing
+- **Game Acceleration**: Simultaneously forwards game traffic through multiple paths, greatly reducing packet loss.
+- **Bandwidth Aggregation**: Aggregates the bandwidth of multiple network connections to improve overall network speed.
+- **Protocol-based Classification**: Uses protocol detectors to distribute different protocol traffic to different processing paths, such as prioritizing important heartbeat packets.
+- **UDP over TCP Tunnel**: Transmits UDP traffic in network environments that do not support UDP.
+- **Network Debugging**: Forwards UDP traffic to a specified server for debugging and analysis without affecting the original network structure.
+- **Load Balancing**: Intelligently distributes packets based on traffic volume and load balancing strategies, supporting various algorithms. For example, when traffic is low, packets are forwarded to both servers to avoid packet loss; when traffic exceeds a certain threshold, packets are distributed in a round-robin manner to ensure bandwidth.
 
 ## Configuration Examples
 
