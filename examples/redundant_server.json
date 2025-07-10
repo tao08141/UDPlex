@@ -8,10 +8,16 @@
             "tag": "server_listen",
             "listen_addr": "0.0.0.0:9000",
             "timeout": 120,
-            "replace_old_mapping": true,
+            "replace_old_mapping": false,
             "detour": [
                 "server_forward"
-            ]
+            ],
+            "auth": {
+                "secret": "your-secret-key-here",
+                "enabled": true,
+                "enable_encryption": false,
+                "heartbeat_interval": 30
+            }
         },
         {
             "type": "forward",

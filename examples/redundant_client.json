@@ -25,7 +25,13 @@
             "send_keepalive": true,
             "detour": [
                 "client_listen"
-            ]
+            ],
+            "auth": {
+                "secret": "your-secret-key-here",
+                "enabled": true,
+                "enable_encryption": false,
+                "heartbeat_interval": 30
+            }
         }
     ]
 }
