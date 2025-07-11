@@ -42,6 +42,10 @@ type ForwardComponent struct {
 	// Authentication
 	authManager *AuthManager
 	sendTimeout time.Duration
+
+	// Socket optimizations
+	sendBufferSize int // UDP socket send buffer size
+	recvBufferSize int // UDP socket receive buffer size
 }
 
 // NewForwardComponent creates a new forward component
@@ -92,6 +96,8 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		authManager:         authManager,
 		forwardID:           forwardID,
 		sendTimeout:         sendTimeout,
+		recvBufferSize:      cfg.RecvBufferSize,
+		sendBufferSize:      cfg.SendBufferSize,
 	}
 }
 
@@ -277,6 +283,23 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 		return nil, err
 	}
 
+	// Apply socket optimizations if configured
+	if f.sendBufferSize > 0 {
+		if err := conn.SetWriteBuffer(f.sendBufferSize); err != nil {
+			logger.Warnf("%s: Failed to set write buffer size to %d: %v", f.tag, f.sendBufferSize, err)
+		} else {
+			logger.Infof("%s: Set UDP write buffer size to %d bytes for %s", f.tag, f.sendBufferSize, remoteAddr)
+		}
+	}
+
+	if f.recvBufferSize > 0 {
+		if err := conn.SetReadBuffer(f.recvBufferSize); err != nil {
+			logger.Warnf("%s: Failed to set read buffer size to %d: %v", f.tag, f.recvBufferSize, err)
+		} else {
+			logger.Infof("%s: Set UDP read buffer size to %d bytes for %s", f.tag, f.recvBufferSize, remoteAddr)
+		}
+	}
+
 	forwardConn := &ForwardConn{
 		conn:                 conn,
 		isConnected:          1,
@@ -317,6 +340,19 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 	if err != nil {
 		logger.Infof("%s: Reconnection to %s failed: %v", f.tag, conn.remoteAddr, err)
 		return
+	}
+
+	// Apply socket optimizations if configured
+	if f.sendBufferSize > 0 {
+		if err := newConn.SetWriteBuffer(f.sendBufferSize); err != nil {
+			logger.Warnf("%s: Failed to set write buffer size to %d: %v", f.tag, f.sendBufferSize, err)
+		}
+	}
+
+	if f.recvBufferSize > 0 {
+		if err := newConn.SetReadBuffer(f.recvBufferSize); err != nil {
+			logger.Warnf("%s: Failed to set read buffer size to %d: %v", f.tag, f.recvBufferSize, err)
+		}
 	}
 
 	conn.conn = newConn

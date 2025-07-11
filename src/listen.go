@@ -31,6 +31,8 @@ type ListenComponent struct {
 	mappingsAtomic    atomic.Value
 	authManager       *AuthManager
 	sendTimeout       time.Duration
+	recvBufferSize    int // UDP socket receive buffer size
+	sendBufferSize    int // UDP socket send buffer size
 }
 
 // NewListenComponent creates a new listen component
@@ -56,7 +58,6 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	if sendTimeout == 0 {
 		sendTimeout = 500 * time.Millisecond
 	}
-
 	component := &ListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
@@ -68,6 +69,8 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
 		sendTimeout:       sendTimeout,
+		recvBufferSize:    cfg.RecvBufferSize,
+		sendBufferSize:    cfg.SendBufferSize,
 	}
 
 	// Initialize an atomic value with an empty map
@@ -79,9 +82,33 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 
 // Start initializes and starts the listener
 func (l *ListenComponent) Start() error {
-	conn, err := net.ListenPacket("udp", l.listenAddr)
+	// Create UDP address to listen on
+	udpAddr, err := net.ResolveUDPAddr("udp", l.listenAddr)
 	if err != nil {
-		return fmt.Errorf("failed to set up packet listener: %w", err)
+		return fmt.Errorf("failed to resolve UDP address: %w", err)
+	}
+
+	// Create UDP connection with specific options
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to set up UDP listener: %w", err)
+	}
+
+	// Apply socket optimizations if configured
+	if l.recvBufferSize > 0 {
+		if err := conn.SetReadBuffer(l.recvBufferSize); err != nil {
+			logger.Warnf("%s: Failed to set read buffer size to %d: %v", l.tag, l.recvBufferSize, err)
+		} else {
+			logger.Infof("%s: Set UDP read buffer size to %d bytes", l.tag, l.recvBufferSize)
+		}
+	}
+
+	if l.sendBufferSize > 0 {
+		if err := conn.SetWriteBuffer(l.sendBufferSize); err != nil {
+			logger.Warnf("%s: Failed to set write buffer size to %d: %v", l.tag, l.sendBufferSize, err)
+		} else {
+			logger.Infof("%s: Set UDP write buffer size to %d bytes", l.tag, l.sendBufferSize)
+		}
 	}
 
 	l.conn = conn

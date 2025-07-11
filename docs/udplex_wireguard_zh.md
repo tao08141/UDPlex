@@ -111,21 +111,35 @@ PersistentKeepalive = 25
 
 ### 3.1 创建项目目录
 
-**在入口机器：**
+**在入口与入口机器分别执行：**
 ```bash
-mkdir -p ~/udplex/client
-cd ~/udplex/client
+mkdir -p ~/udplex
+cd ~/udplex
 ```
 
-**在出口机器：**
-```bash
-mkdir -p ~/udplex/server
-cd ~/udplex/server
-```
+**创建 `~/udplex/docker-compose.yml`：**
+
+````yaml
+
+services:
+  udplex:
+    image: ghcr.io/tao08141/udplex:latest
+    container_name: udplex
+    restart: always
+    volumes:
+      - ./config.json:/app/config.json
+    network_mode: host
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+````
+
 
 ### 3.2 配置入口机器（Client）
 
-**创建 `~/udplex/client/config.json`：**
+**创建 `~/udplex/config.json`：**
 
 ````json
 {
@@ -173,28 +187,11 @@ cd ~/udplex/server
 }
 ````
 
-**创建 `~/udplex/client/docker-compose.yml`：**
 
-````yaml
-
-services:
-  udplex:
-    image: ghcr.io/tao08141/udplex:latest
-    container_name: udplex
-    restart: always
-    volumes:
-      - ./config.json:/app/config.json
-    network_mode: host
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-````
 
 ### 3.3 配置出口机器（Server）
 
-**创建 `~/udplex/server/config.json`：**
+**创建 `~/udplex/config.json`：**
 
 ````json
 {
@@ -239,23 +236,6 @@ services:
         }
     ]
 }
-````
-
-**创建 `~/udplex/server/docker-compose.yml`：**
-
-````yaml
-services:
-  udplex:
-    image: ghcr.io/tao08141/udplex:latest
-    container_name: udplex
-    restart: always
-    volumes:
-      - ./config.json:/app/config.json
-    network_mode: host
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "3"
 ````
 
 ## 步骤四：启动服务
@@ -307,10 +287,10 @@ ping 10.0.0.2
 ### 查看 UDPlex 日志
 ```bash
 # 入口机器
-cd ~/udplex/client && docker-compose logs -f
+cd ~/udplex && docker-compose logs -f
 
 # 出口机器
-cd ~/udplex/server && docker-compose logs -f
+cd ~/udplex && docker-compose logs -f
 ```
 
 ### 重启服务

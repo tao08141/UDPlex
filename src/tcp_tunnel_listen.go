@@ -20,6 +20,8 @@ type TcpTunnelListenComponent struct {
 	authManager       *AuthManager
 	sendTimeout       time.Duration
 	listener          net.Listener
+	recvBufferSize    int
+	sendBufferSize    int
 }
 
 func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnelListenComponent {
@@ -49,6 +51,9 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		sendTimeout = 500 * time.Millisecond
 	}
 
+	recvBufferSize := cfg.RecvBufferSize
+	sendBufferSize := cfg.SendBufferSize
+
 	component := &TcpTunnelListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
@@ -60,6 +65,8 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		broadcastMode:     broadcastMode,
 		noDelay:           noDelay,
 		sendTimeout:       sendTimeout,
+		recvBufferSize:    recvBufferSize,
+		sendBufferSize:    sendBufferSize,
 	}
 
 	emptyConnections := make(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
@@ -97,6 +104,16 @@ func (l *TcpTunnelListenComponent) Start() error {
 				default:
 				}
 				continue
+			}
+
+			// 设置TCP缓冲区大小
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				if l.recvBufferSize > 0 {
+					_ = tcpConn.SetReadBuffer(l.recvBufferSize)
+				}
+				if l.sendBufferSize > 0 {
+					_ = tcpConn.SetWriteBuffer(l.sendBufferSize)
+				}
 			}
 
 			logger.Infof("%s: Accepted connection from %s", l.tag, conn.RemoteAddr())

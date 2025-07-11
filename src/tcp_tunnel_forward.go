@@ -19,6 +19,9 @@ type TcpTunnelForwardComponent struct {
 	authManager         *AuthManager
 	pools               map[PoolID]*TcpTunnelConnPool
 	noDelay             bool
+
+	recvBufferSize int
+	sendBufferSize int
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
@@ -47,6 +50,9 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	if sendTimeout == 0 {
 		sendTimeout = 500 * time.Millisecond
 	}
+
+	recvBufferSize := cfg.RecvBufferSize
+	sendBufferSize := cfg.SendBufferSize
 
 	forwardID := ForwardID{}
 	_, err = rand.Read(forwardID[:])
@@ -91,6 +97,8 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		pools:               pools,
 		detour:              cfg.Detour,
 		noDelay:             noDelay,
+		recvBufferSize:      recvBufferSize,
+		sendBufferSize:      sendBufferSize,
 	}
 }
 
@@ -173,6 +181,16 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 			if err != nil {
 				return nil, err
 			}
+		}
+	}
+
+	// 设置TCP缓冲区大小
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		if f.recvBufferSize > 0 {
+			_ = tcpConn.SetReadBuffer(f.recvBufferSize)
+		}
+		if f.sendBufferSize > 0 {
+			_ = tcpConn.SetWriteBuffer(f.sendBufferSize)
 		}
 	}
 
