@@ -161,7 +161,6 @@ func (c *TcpTunnelConn) Close() {
 			}
 		}
 	})
-	return
 }
 
 type TcpTunnelComponent interface {
@@ -233,10 +232,13 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 	case <-c.closed:
 		// Connection is closed
 		return net.ErrClosed
+	default:
+	}
+
+	select {
 	case c.writeQueue <- packet:
 		return nil
 	default:
-		// Queue is full, drop the packet or handle the error
 		return net.ErrClosed
 	}
 }
