@@ -124,7 +124,7 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 	// Determine if this expression can be cached
 	canCache := true
 	for _, varKey := range varKeys {
-		if lb.enableCache {
+		if !lb.enableCache {
 			canCache = false
 			break
 		}

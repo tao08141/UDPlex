@@ -239,6 +239,7 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 	case c.writeQueue <- packet:
 		return nil
 	default:
+		// Queue is full, drop the packet or handle the error
 		return net.ErrClosed
 	}
 }
