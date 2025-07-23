@@ -44,6 +44,7 @@ type LoadBalancerComponent struct {
 	compiledRules   []CompiledExpression           // Pre-compiled expressions
 	ruleTargets     [][]string                     // Corresponding targets for each rule (array of arrays)
 	expressionCache map[string]*CompiledExpression // Cache for compiled expressions
+	enableCache     bool
 }
 
 // NewLoadBalancerComponent creates a new load balancer component
@@ -57,6 +58,7 @@ func NewLoadBalancerComponent(cfg LoadBalancerComponentConfig, router *Router) (
 		},
 		packetSeq:       0,
 		expressionCache: make(map[string]*CompiledExpression),
+		enableCache:     cfg.EnableCache,
 	}
 
 	return lb, nil
@@ -119,9 +121,14 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 		return nil, fmt.Errorf("failed to compile expression: %w", err)
 	}
 
-	// Determine if this expression can be cached (no seq/size dependency)
+	// Determine if this expression can be cached
 	canCache := true
 	for _, varKey := range varKeys {
+		if lb.enableCache {
+			canCache = false
+			break
+		}
+
 		if varKey == "seq" || varKey == "size" {
 			canCache = false
 			break
@@ -255,6 +262,10 @@ func (lb *LoadBalancerComponent) sampleStats() {
 
 // updateCachedResults updates cached results for expressions that only depend on bps/pps
 func (lb *LoadBalancerComponent) updateCachedResults() {
+	if !lb.enableCache {
+		return
+	}
+
 	bps, pps := lb.getCurrentStats()
 	// bps is bits per second now
 
@@ -287,7 +298,7 @@ func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps, size uint6
 			cachedResult := atomic.LoadUint64(&compiledRule.cachedResult)
 			result = cachedResult == 1
 		} else {
-			// Direct evaluation for expressions that depend on seq/size
+			// Direct evaluation for expressions that depend on seq/size or when cache is disabled
 			result = lb.evaluateExpressionDirect(&compiledRule, seq, bps, pps, size)
 		}
 

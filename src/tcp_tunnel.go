@@ -187,7 +187,12 @@ func (c *TcpTunnelConn) writeLoop() {
 		case <-(*c.t).GetStopChannel():
 			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
 			return
-		case packet := <-c.writeQueue:
+		case packet, ok := <-c.writeQueue:
+			if !ok {
+				// Channel is closed
+				logger.Infof("Write queue for %s closed", c.conn.RemoteAddr())
+				return
+			}
 			if c.conn == nil {
 				packet.Release(1)
 				return
@@ -225,6 +230,9 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 	}
 
 	select {
+	case <-c.closed:
+		// Connection is closed
+		return net.ErrClosed
 	case c.writeQueue <- packet:
 		return nil
 	default:
