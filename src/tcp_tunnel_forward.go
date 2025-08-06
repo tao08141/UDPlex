@@ -231,6 +231,30 @@ func (f *TcpTunnelForwardComponent) GetAuthManager() *AuthManager {
 	return f.authManager
 }
 
+// IsAvailable checks if the component has at least one valid connection
+func (f *TcpTunnelForwardComponent) IsAvailable() bool {
+	for _, pool := range f.pools {
+		if pool == nil {
+			continue
+		}
+
+		// Get current slice of connections atomically
+		connsPtr := pool.conns.Load()
+		if connsPtr == nil {
+			continue
+		}
+
+		conns := *connsPtr
+		for i := range conns {
+			if conns[i] != nil && conns[i].conn != nil {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 	if !c.authState.IsAuthenticated() {
 		return

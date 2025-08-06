@@ -112,6 +112,11 @@ func (f *ForwardConn) Close() {
 	f.conn = nil
 }
 
+// IsAvailable checks if the connection is available
+func (f *ForwardConn) IsAvailable() bool {
+	return atomic.LoadInt32(&f.isConnected) == 1 && f.conn != nil
+}
+
 func (f *ForwardConn) Write(data []byte) (int, error) {
 	if atomic.LoadInt32(&f.isConnected) == 0 || f.conn == nil {
 		return 0, fmt.Errorf("connection is not available")
@@ -127,6 +132,16 @@ func (f *ForwardConn) Write(data []byte) (int, error) {
 // GetTag returns the component's tag
 func (f *ForwardComponent) GetTag() string {
 	return f.tag
+}
+
+// IsAvailable checks if any of the component's connections are available
+func (f *ForwardComponent) IsAvailable() bool {
+	for _, conn := range f.forwardConnList {
+		if conn != nil && conn.IsAvailable() {
+			return true
+		}
+	}
+	return false
 }
 
 // Start initializes and starts forwarder

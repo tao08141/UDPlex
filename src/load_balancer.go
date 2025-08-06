@@ -111,12 +111,22 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 	// Find variables in the expression
 	varKeys := lb.findVariables(exprStr)
 
-	program, err := expr.Compile(exprStr, expr.Env(map[string]any{
+	// Create environment for compilation
+	env := map[string]any{
 		"seq":  uint64(0),
 		"bps":  uint64(0),
 		"pps":  uint64(0),
 		"size": uint64(0),
-	}))
+	}
+
+	// Add availability variables to the environment
+	for _, varKey := range varKeys {
+		if len(varKey) > 10 && varKey[:10] == "available." {
+			env[varKey] = false // Default value for compilation
+		}
+	}
+
+	program, err := expr.Compile(exprStr, expr.Env(env))
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile expression: %w", err)
 	}
@@ -129,7 +139,8 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 			break
 		}
 
-		if varKey == "seq" || varKey == "size" {
+		// Expressions with seq, size, or availability variables cannot be cached
+		if varKey == "seq" || varKey == "size" || (len(varKey) > 10 && varKey[:10] == "available.") {
 			canCache = false
 			break
 		}
@@ -151,12 +162,28 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 // findVariables finds all variable names used in the expression
 func (lb *LoadBalancerComponent) findVariables(exprStr string) []string {
 	var vars []string
+
+	// Standard variables
 	variables := []string{"seq", "bps", "pps", "size"}
 	for _, variable := range variables {
 		if strings.Contains(exprStr, variable) {
 			vars = append(vars, variable)
 		}
 	}
+
+	// Check for tag availability variables (available.tag)
+	if strings.Contains(exprStr, "available.") {
+		// Get all components from the router
+		components := lb.router.GetComponents()
+		for _, component := range components {
+			tag := component.GetTag()
+			availableVar := "available." + tag
+			if strings.Contains(exprStr, availableVar) {
+				vars = append(vars, availableVar)
+			}
+		}
+	}
+
 	return vars
 }
 
@@ -204,6 +231,25 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 func (lb *LoadBalancerComponent) updateStats(packet *Packet) {
 	atomic.AddUint64(&lb.stats.currentBytes, uint64(packet.length))
 	atomic.AddUint64(&lb.stats.currentPackets, 1)
+}
+
+// checkTagAvailability checks if a component with the given tag is available
+func (lb *LoadBalancerComponent) checkTagAvailability(tag string) bool {
+	// Get the component from the router
+	component, found := lb.router.GetComponent(tag)
+	if !found {
+		// Component not found, consider it unavailable
+		return false
+	}
+
+	// Check if the component implements the AvailabilityChecker interface
+	if checker, ok := component.(AvailabilityChecker); ok {
+		// Component supports availability checking, call its IsAvailable method
+		return checker.IsAvailable()
+	}
+
+	// Component doesn't support availability checking, return true by default
+	return true
 }
 
 // getCurrentStats returns average bps (bits per second) and pps values across the window
@@ -326,6 +372,12 @@ func (lb *LoadBalancerComponent) evaluateExpressionDirect(compiled *CompiledExpr
 			env[varKey] = pps
 		case "size":
 			env[varKey] = size
+		default:
+			// Check if this is an availability variable (available.tag)
+			if len(varKey) > 10 && varKey[:10] == "available." {
+				tag := varKey[10:] // Extract the tag part
+				env[varKey] = lb.checkTagAvailability(tag)
+			}
 		}
 	}
 

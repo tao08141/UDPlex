@@ -6,6 +6,7 @@
 - 支持多种负载均衡算法
 - 动态调整转发策略
 - 支持权重配置
+- 支持组件可用性检查，根据组件状态动态调整路由
 
 ## 流量统计机制
 
@@ -53,6 +54,7 @@
 | `bps`   | 窗口内平均每秒比特数     |
 | `pps`   | 窗口内平均每秒包数       |
 | `size`  | 当前包大小              |
+| `available.tag` | 组件可用性状态，其中tag为组件标识 |
 
 - **支持的运算符**
 
@@ -98,3 +100,66 @@ size > 1000
 - 变量必须有效，否则计算会报错；
 - 如引用未声明变量或禁用函数，将抛出表达式错误，建议在调试或配置时先做校验。
 - 若需更复杂的语法，请查阅 [expr 官方文档](https://github.com/expr-lang/expr#language-definition)。
+
+## 可用性检查功能
+
+UDPlex 支持在 LoadBalancerComponent 中进行组件可用性检查。这允许在负载均衡表达式中使用组件的可用性状态来做出路由决策。
+
+### 支持可用性检查的组件
+
+以下组件支持可用性检查：
+
+- TcpTunnelComponent
+- TcpTunnelForwardComponent
+- ListenComponent
+- ForwardConn
+
+对于不支持可用性检查的组件，可用性变量将统一返回"可用"（true）。
+
+### 在表达式中使用可用性变量
+
+在 LoadBalancerComponent 的规则表达式中，可以使用 `available.tag` 格式的变量来检查组件的可用性，其中 `tag` 是组件的标签。
+
+例如：
+
+```json
+{
+    "type": "load_balancer",
+    "tag": "load_balancer",
+    "detour": [
+        {
+            "rule": "available.client_forward",
+            "targets": ["client_forward"]
+        },
+        {
+            "rule": "available.backup_listen",
+            "targets": ["backup_listen"]
+        },
+        {
+            "rule": "!available.client_forward && !available.backup_listen",
+            "targets": ["fallback_forward"]
+        }
+    ]
+}
+```
+
+在这个例子中：
+- 如果 `client_forward` 组件可用，数据包将被路由到该组件
+- 如果 `client_forward` 不可用但 `backup_listen` 可用，数据包将被路由到 `backup_listen`
+- 如果两者都不可用，数据包将被路由到 `fallback_forward`
+
+### 可用性检查的实现
+
+每个支持可用性检查的组件都实现了 `IsAvailable()` 方法，该方法返回一个布尔值，指示组件是否可用：
+
+- **TcpTunnelForwardComponent**: 如果至少有一个有效的连接，则返回 true
+- **TcpTunnelListenComponent**: 如果监听器已启动且有已建立的连接，则返回 true
+- **ListenComponent**: 如果监听器已启动且有已建立的连接，则返回 true
+- **ForwardConn**: 如果连接已建立，则返回 true
+- **ForwardComponent**: 如果至少有一个可用的 ForwardConn，则返回 true
+
+对于不支持可用性检查的组件，LoadBalancerComponent 将默认返回 true（可用）。
+
+### 示例配置
+
+查看 `examples/load_balancer_availability_test.json` 文件，了解如何在配置中使用可用性检查功能。

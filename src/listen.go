@@ -126,6 +126,18 @@ func (l *ListenComponent) Stop() error {
 	return l.conn.Close()
 }
 
+// IsAvailable checks if the component has any established connections
+func (l *ListenComponent) IsAvailable() bool {
+	// First check if the listener is active
+	if l.conn == nil {
+		return false
+	}
+
+	// Check if there are any established connections
+	mappings := l.mappingsAtomic.Load().(map[string]*AddrMapping)
+	return len(mappings) > 0
+}
+
 // performCleanup handles the cleaning of inactive mappings
 func (l *ListenComponent) performCleanup() {
 	now := time.Now()

@@ -42,6 +42,11 @@ func PoolIDFromBytes(data []byte) PoolID {
 	return id
 }
 
+// AvailabilityChecker is the interface for components that support availability checking
+type AvailabilityChecker interface {
+	IsAvailable() bool
+}
+
 // Component is the interface that all network components must implement
 type Component interface {
 	Start() error

@@ -6,6 +6,7 @@
 - Support for multiple load balancing algorithms
 - Dynamic adjustment of forwarding strategies
 - Support for weight configuration
+- Component availability checking for dynamic routing based on component status
 
 ## Traffic Statistics Mechanism
 
@@ -53,6 +54,7 @@ Matching rules for the load balancer use the [expr-lang/expr](https://github.com
 | `bps`         | Bits per second, averaged over window    |
 | `pps`         | Packets per second, averaged over window |
 | `size`        | Current packet size                      |
+| `available.tag` | Component availability status, where tag is the component identifier |
 
 - **Supported Operators**
 
@@ -97,3 +99,66 @@ size > 1000
 - Built-in variables must exist in context to be referenced successfully.
 - If a variable is missing or a function is not supported, there will be an evaluation error; please check your runtime environment.
 - For full expr syntax, see the [expr official documentation](https://github.com/expr-lang/expr#language-definition).
+
+## Availability Checking Feature
+
+UDPlex supports component availability checking in the LoadBalancerComponent. This allows you to use component availability status in load balancing expressions to make routing decisions.
+
+### Components Supporting Availability Checking
+
+The following components support availability checking:
+
+- TcpTunnelComponent
+- TcpTunnelForwardComponent
+- ListenComponent
+- ForwardConn
+
+For components that do not support availability checking, the availability variable will uniformly return "available" (true).
+
+### Using Availability Variables in Expressions
+
+In LoadBalancerComponent rule expressions, you can use variables in the format `available.tag` to check component availability, where `tag` is the component identifier.
+
+For example:
+
+```json
+{
+    "type": "load_balancer",
+    "tag": "load_balancer",
+    "detour": [
+        {
+            "rule": "available.client_forward",
+            "targets": ["client_forward"]
+        },
+        {
+            "rule": "available.backup_listen",
+            "targets": ["backup_listen"]
+        },
+        {
+            "rule": "!available.client_forward && !available.backup_listen",
+            "targets": ["fallback_forward"]
+        }
+    ]
+}
+```
+
+In this example:
+- If the `client_forward` component is available, packets will be routed to that component
+- If `client_forward` is unavailable but `backup_listen` is available, packets will be routed to `backup_listen`
+- If both are unavailable, packets will be routed to `fallback_forward`
+
+### Implementation of Availability Checking
+
+Each component that supports availability checking implements the `IsAvailable()` method, which returns a boolean value indicating whether the component is available:
+
+- **TcpTunnelForwardComponent**: Returns true if at least one valid connection exists
+- **TcpTunnelListenComponent**: Returns true if the listener is started and there are established connections
+- **ListenComponent**: Returns true if the listener is started and there are established connections
+- **ForwardConn**: Returns true if the connection is established
+- **ForwardComponent**: Returns true if at least one ForwardConn is available
+
+For components that do not support availability checking, the LoadBalancerComponent will default to returning true (available).
+
+### Example Configuration
+
+See the `examples/load_balancer_availability_test.json` file to learn how to use the availability checking feature in your configuration.

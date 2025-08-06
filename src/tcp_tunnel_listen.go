@@ -190,6 +190,36 @@ func (l *TcpTunnelListenComponent) GetAuthManager() *AuthManager {
 	return l.authManager
 }
 
+// IsAvailable checks if the component has any established connections
+func (l *TcpTunnelListenComponent) IsAvailable() bool {
+	// First check if the listener is active
+	if l.listener == nil {
+		return false
+	}
+
+	// Check if there are any established connections
+	connections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
+
+	// Check if there are any forward IDs
+	if len(connections) == 0 {
+		return false
+	}
+
+	// Check if any of the forward IDs have pool IDs
+	for _, pools := range connections {
+		if len(pools) > 0 {
+			// Check if any of the pools have connections
+			for _, pool := range pools {
+				if pool != nil && pool.ConnectionCount() > 0 {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
 	logger.Infof("%s: Disconnecting %s", l.tag, c.conn.RemoteAddr())
 
