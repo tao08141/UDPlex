@@ -290,7 +290,7 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 
 	delayWindowSize := config.DelayWindowSize
 	if delayWindowSize <= 0 {
-		delayWindowSize = 5 // Default to 5 measurements if not specified
+		delayWindowSize = 10 // Default to 10 measurements if not specified
 	}
 
 	// Create a fixed-size array for delay measurements

@@ -298,7 +298,6 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 					if l.authManager != nil {
 						l.authManager.RecordDelayMeasurement(delay)
 					}
-					logger.Infof("%s: Heartbeat delay for %s: %v", l.tag, addr.String(), delay)
 				}
 				mapping.lastHeartbeatSent = time.Time{} // Reset last heartbeat sent
 			}
