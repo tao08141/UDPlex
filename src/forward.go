@@ -486,6 +486,12 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 				logger.Debugf("%s: Recorded delay measurement: %v, average: %v", f.tag, delay, f.authManager.GetAverageDelay())
 			}
 		}
+
+		responseBuffer := f.router.GetBuffer()
+		responseLen := CreateHeartbeatAck(responseBuffer)
+		conn.Write(responseBuffer[:responseLen])
+		f.router.PutBuffer(responseBuffer)
+
 	}
 }
 
