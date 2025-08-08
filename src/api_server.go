@@ -279,13 +279,27 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 		connections = append(connections, connection)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(map[string]interface{}{
+	// Get average delay if auth is configured
+	var averageDelay float64
+	if hasAuth && listenComponent.authManager != nil {
+		avgDelay := listenComponent.authManager.GetAverageDelay()
+		averageDelay = float64(avgDelay.Nanoseconds()) / 1000000.0 // Convert to milliseconds
+	}
+
+	result := map[string]interface{}{
 		"tag":         listenComponent.GetTag(),
 		"listen_addr": listenComponent.listenAddr,
 		"connections": connections,
 		"count":       len(connections),
-	})
+	}
+
+	// Only include average_delay if auth is configured
+	if hasAuth {
+		result["average_delay_ms"] = averageDelay
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	err := json.NewEncoder(w).Encode(result)
 	if err != nil {
 		logger.Errorf("Error encoding JSON: %v", err)
 		return
@@ -340,12 +354,26 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 		connections = append(connections, connection)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(map[string]interface{}{
+	// Get average delay if auth is configured
+	var averageDelay float64
+	if hasAuth && forwardComponent.authManager != nil {
+		avgDelay := forwardComponent.authManager.GetAverageDelay()
+		averageDelay = float64(avgDelay.Nanoseconds()) / 1000000.0 // Convert to milliseconds
+	}
+
+	result := map[string]interface{}{
 		"tag":         forwardComponent.GetTag(),
 		"connections": connections,
 		"count":       len(connections),
-	})
+	}
+
+	// Only include average_delay if auth is configured
+	if hasAuth {
+		result["average_delay_ms"] = averageDelay
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	err := json.NewEncoder(w).Encode(result)
 	if err != nil {
 		logger.Errorf("Error encoding JSON: %v", err)
 		return
@@ -418,6 +446,13 @@ func (a *APIServer) handleGetTcpTunnelListenConnections(w http.ResponseWriter, r
 	result["pools"] = pools
 	result["total_connections"] = totalConnections
 
+	// Get average delay if auth is configured
+	if tcpTunnelListenComponent.authManager != nil {
+		avgDelay := tcpTunnelListenComponent.authManager.GetAverageDelay()
+		averageDelay := float64(avgDelay.Nanoseconds()) / 1000000.0 // Convert to milliseconds
+		result["average_delay_ms"] = averageDelay
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(result)
 	if err != nil {
@@ -488,6 +523,13 @@ func (a *APIServer) handleGetTcpTunnelForwardConnections(w http.ResponseWriter, 
 
 	result["pools"] = pools
 	result["total_connections"] = totalConnections
+
+	// Get average delay if auth is configured
+	if tcpTunnelForwardComponent.authManager != nil {
+		avgDelay := tcpTunnelForwardComponent.authManager.GetAverageDelay()
+		averageDelay := float64(avgDelay.Nanoseconds()) / 1000000.0 // Convert to milliseconds
+		result["average_delay_ms"] = averageDelay
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(result)

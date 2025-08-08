@@ -24,6 +24,7 @@ const (
 	MsgTypeHeartbeat     = 4 // Heartbeat packet
 	MsgTypeData          = 5 // Data packet
 	MsgTypeDisconnect    = 6 // Disconnect packet
+	MsgTypeHeartbeatAck  = 7 // Heartbeat response
 )
 
 // Protocol header and authentication message sizes
@@ -244,6 +245,9 @@ type AuthManager struct {
 	deduplicationMgr  *DeduplicationManager
 	challengeCache    map[[ChallengeSize]byte]time.Time
 	challengeMu       sync.RWMutex
+	delayWindowSize   int
+	delays            []time.Duration // Fixed-size array for circular buffer
+	delayIndex        atomic.Uint32   // Current index in the circular buffer
 }
 
 // NewAuthManager creates a new authentication manager
@@ -284,6 +288,14 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 		authTimeout = DefaultAuthTimeout
 	}
 
+	delayWindowSize := config.DelayWindowSize
+	if delayWindowSize <= 0 {
+		delayWindowSize = 5 // Default to 5 measurements if not specified
+	}
+
+	// Create a fixed-size array for delay measurements
+	delays := make([]time.Duration, delayWindowSize)
+
 	return &AuthManager{
 		secret:            secret,
 		enableEncryption:  config.EnableEncryption,
@@ -294,6 +306,8 @@ func NewAuthManager(config *AuthConfig, router *Router) (*AuthManager, error) {
 		router:            router,
 		deduplicationMgr:  NewDeduplicationManager(),
 		challengeCache:    make(map[[ChallengeSize]byte]time.Time),
+		delays:            delays,
+		delayWindowSize:   delayWindowSize,
 	}, nil
 }
 
@@ -438,6 +452,12 @@ func (am *AuthManager) cleanupExpiredChallenges() {
 // CreateHeartbeat creates a heartbeat message
 func CreateHeartbeat(buffer []byte) int {
 	WriteHeader(buffer, MsgTypeHeartbeat, 0)
+	return HeaderSize
+}
+
+// CreateHeartbeat creates a heartbeat message
+func CreateHeartbeatAck(buffer []byte) int {
+	WriteHeader(buffer, MsgTypeHeartbeatAck, 0)
 	return HeaderSize
 }
 
@@ -616,4 +636,33 @@ func (authState *AuthState) IsAuthenticated() bool {
 
 func (authState *AuthState) SetAuthenticated(authenticated int32) {
 	atomic.StoreInt32(&authState.authenticated, authenticated)
+}
+
+// RecordDelayMeasurement records a delay measurement in the circular buffer
+func (am *AuthManager) RecordDelayMeasurement(delay time.Duration) {
+	// Get the current index to write to
+	index := am.delayIndex.Add(1) % uint32(am.delayWindowSize)
+
+	// Store the measurement at the current index
+	am.delays[index] = delay
+}
+
+// GetAverageDelay returns the current average delay
+func (am *AuthManager) GetAverageDelay() time.Duration {
+	count := 0
+
+	// Calculate the sum of all measurements
+	var sum time.Duration
+	for i := 0; i < am.delayWindowSize; i++ {
+		if am.delays[i] > 0 {
+			sum += am.delays[i]
+			count++
+		}
+	}
+
+	// Return the average
+	if count > 0 {
+		return sum / time.Duration(count)
+	}
+	return 0
 }

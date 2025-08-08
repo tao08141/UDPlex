@@ -511,6 +511,10 @@
                     if (detailedData.packets_per_sec !== undefined) {
                         details.push(['包速率', `${detailedData.packets_per_sec} pps`]);
                     }
+                    // 平均延迟信息
+                    if (detailedData.average_delay_ms !== undefined && detailedData.average_delay_ms > 0) {
+                        details.push(['平均延迟', `${detailedData.average_delay_ms.toFixed(2)} ms`]);
+                    }
                 }
 
                 if (details.length === 0) {

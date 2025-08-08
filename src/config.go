@@ -40,6 +40,7 @@ type AuthConfig struct {
 	EnableEncryption  bool   `json:"enable_encryption"`
 	HeartbeatInterval int    `json:"heartbeat_interval"` // seconds
 	AuthTimeout       int    `json:"auth_timeout"`       // seconds
+	DelayWindowSize   int    `json:"delay_window_size"`  // number of delay measurements to record for averaging
 }
 
 // FilterComponentConfig represents the configuration for a filter component

@@ -477,6 +477,15 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 	case MsgTypeHeartbeat:
 		// Reset heartbeat miss count
 		conn.heartbeatMissCount = 0
+
+		// If this is the second heartbeat (response to our response), measure delay
+		if !conn.lastHeartbeatSent.IsZero() {
+			delay := time.Since(conn.lastHeartbeatSent)
+			if f.authManager != nil {
+				f.authManager.RecordDelayMeasurement(delay)
+				logger.Debugf("%s: Recorded delay measurement: %v, average: %v", f.tag, delay, f.authManager.GetAverageDelay())
+			}
+		}
 	}
 }
 

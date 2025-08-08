@@ -11,10 +11,11 @@ import (
 
 // AddrMapping stores each mapped address and its last active timestamp
 type AddrMapping struct {
-	addr       net.Addr
-	lastActive time.Time
-	authState  *AuthState // Authentication state for this connection
-	connID     ConnID     // Unique connection identifier
+	addr              net.Addr
+	lastActive        time.Time
+	authState         *AuthState // Authentication state for this connection
+	connID            ConnID     // Unique connection identifier
+	lastHeartbeatSent time.Time  // Last heartbeat sent time
 }
 
 // ListenComponent implements a UDP listener with authentication
@@ -282,7 +283,24 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 					logger.Infof("%s: Failed to send heartbeat response: %v", l.tag, err)
 				}
 				l.router.PutBuffer(responseBuffer)
+				mapping.lastHeartbeatSent = time.Now()
+			}
+		}
 
+	case MsgTypeHeartbeatAck:
+		// Update mapping if exists
+		if mapping, exists := l.mappings[addrKey]; exists {
+			mapping.lastActive = time.Now()
+			if mapping.authState != nil {
+				// If this is a response to our heartbeat, measure delay
+				if !mapping.lastHeartbeatSent.IsZero() {
+					delay := time.Since(mapping.lastHeartbeatSent)
+					if l.authManager != nil {
+						l.authManager.RecordDelayMeasurement(delay)
+					}
+					logger.Infof("%s: Heartbeat delay for %s: %v", l.tag, addr.String(), delay)
+				}
+				mapping.lastHeartbeatSent = time.Time{} // Reset last heartbeat sent
 			}
 		}
 
@@ -294,7 +312,6 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		logger.Infof("%s: Client %s disconnected", l.tag, addr.String())
 	}
 
-	return
 }
 
 // handlePackets processes incoming UDP packets
