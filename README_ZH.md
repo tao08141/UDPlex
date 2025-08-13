@@ -80,6 +80,10 @@ docker-compose down
 
 > 注意：对于 UDP 转发应用，建议使用主机网络模式 (network_mode: host) 以获得最佳性能。如果需要精确控制端口映射，可以使用端口映射模式。
 
+## WireGuard 一键部署教程
+
+- UDPlex + WireGuard 一键部署指南（中文）: [docs/udplex_wireguard_zh.md](docs/udplex_wireguard_zh.md)
+
 # UDPlex 参数详解
 
 ## 全局配置

@@ -79,6 +79,10 @@ docker-compose down
 
 > Note: For UDP forwarding applications, it is recommended to use host network mode (network_mode: host) for optimal performance. If precise port mapping control is needed, you can use port mapping mode.
 
+## WireGuard One-click Deployment Tutorial
+
+- UDPlex + WireGuard: One-click deployment guide (English): [docs/udplex_wireguard_en.md](docs/udplex_wireguard_en.md)
+
 # UDPlex Parameter Details
 
 ## Global Configuration
