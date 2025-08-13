@@ -483,15 +483,13 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 			delay := time.Since(conn.lastHeartbeatSent)
 			if f.authManager != nil {
 				f.authManager.RecordDelayMeasurement(delay)
+				logger.Debugf("%s: Recorded delay measurement: %v, average: %v", f.tag, delay, f.authManager.GetAverageDelay())
 			}
 		}
 
 		responseBuffer := f.router.GetBuffer()
 		responseLen := CreateHeartbeatAck(responseBuffer)
-		_, err := conn.Write(responseBuffer[:responseLen])
-		if err != nil {
-			return
-		}
+		conn.Write(responseBuffer[:responseLen])
 		f.router.PutBuffer(responseBuffer)
 
 	}
