@@ -397,7 +397,7 @@ write_client_config() {
     {
       "type": "listen",
       "tag": "wg_input",
-      "listen_addr": "0.0.0.0:${WG_INPUT_PORT}",
+      "listen_addr": "127.0.0.1:${WG_INPUT_PORT}",
       "timeout": 120,
       "replace_old_mapping": true,
       "detour": ["load_balancer"]
