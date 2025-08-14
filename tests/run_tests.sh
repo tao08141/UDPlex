@@ -26,6 +26,8 @@ FAILED_TESTS=0
 run_test_dir() {
     local test_dir="$1"
     local test_name="$(basename "$test_dir")"
+    local original_dir
+    original_dir="$(pwd)"
     
     echo -e "${YELLOW}Running $test_name tests...${NC}"
     
@@ -33,13 +35,16 @@ run_test_dir() {
     
     if go test -v .; then
         echo -e "${GREEN}✓ $test_name tests passed${NC}"
-        ((PASSED_TESTS++))
+        ((++PASSED_TESTS))
     else
         echo -e "${RED}✗ $test_name tests failed${NC}"
-        ((FAILED_TESTS++))
+        ((++FAILED_TESTS))
     fi
     
-    ((TOTAL_TESTS++))
+    ((++TOTAL_TESTS))
+    
+    # Return to original directory for next iteration
+    cd "$original_dir"
     echo
 }
 
@@ -60,12 +65,12 @@ if [ -d "integration" ] && [ -f "integration/run_integration_tests.sh" ]; then
     cd integration
     if bash run_integration_tests.sh; then
         echo -e "${GREEN}✓ Integration tests passed${NC}"
-        ((PASSED_TESTS++))
+        ((++PASSED_TESTS))
     else
         echo -e "${RED}✗ Integration tests failed${NC}"
-        ((FAILED_TESTS++))
+        ((++FAILED_TESTS))
     fi
-    ((TOTAL_TESTS++))
+    ((++TOTAL_TESTS))
     cd ..
     echo
 else
