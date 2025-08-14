@@ -25,6 +25,11 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
+
+      - name: Run All Tests
+        run: |
+          echo "Running all tests (unit + integration)..."
+          make test
           
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
