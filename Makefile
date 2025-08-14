@@ -17,12 +17,9 @@ build-test:
 	@cd src && go build -o ../udplex_test .
 	@echo "✓ Test build complete"
 
-# Run all tests
-test: test-unit test-integration
-
-# Run only unit tests
-test-unit:
-	@echo "Running unit tests..."
+# Run tests
+test:
+	@echo "Running  tests..."
 	@cd tests && chmod +x run_tests.sh && ./run_tests.sh
 
 # Run only integration tests
