@@ -258,7 +258,7 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 	}
 
 	// Get mappings from the component
-	mappingsSnapshot := listenComponent.mappingsAtomic.Load().(map[string]*AddrMapping)
+	mappingsSnapshot := listenComponent.mappingsAtomic.Load().(map[string]*ListenConn)
 	connections := make([]map[string]interface{}, 0, len(mappingsSnapshot))
 
 	// Check if auth is configured

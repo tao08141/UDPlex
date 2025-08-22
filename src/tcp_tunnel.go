@@ -351,12 +351,12 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 
 						if bufferUsed-processedBytes == expectedTotalSize {
 							packet = (*c.t).GetRouter().GetPacketWithBuffer((*c.t).GetTag(), buffer, bufferOffset+processedBytes)
-							packet.length = expectedTotalSize
+							packet.SetLength(expectedTotalSize)
 							buffer = (*c.t).GetRouter().GetBuffer()
 						} else {
 							packet = (*c.t).GetRouter().GetPacket((*c.t).GetTag())
-							packet.length = expectedTotalSize
-							copy(packet.buffer[packet.offset:], messageBuffer)
+							packet.SetLength(expectedTotalSize)
+							copy(packet.BufAtOffset(), messageBuffer)
 						}
 
 						_, err := (*c.t).GetAuthManager().UnwrapData(&packet)
@@ -377,8 +377,8 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 						case TcpTunnelListenMode:
 							// Echo heartbeat back
 							packet := (*c.t).GetRouter().GetPacket((*c.t).GetTag())
-							length := CreateHeartbeat(packet.buffer[packet.offset:])
-							packet.length = length
+							length := CreateHeartbeat(packet.BufAtOffset())
+							packet.SetLength(length)
 							err := c.Write(&packet)
 							if err != nil {
 								logger.Infof("%s: %s Failed to write heartbeat packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
@@ -398,8 +398,8 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							}
 
 							packet := (*c.t).GetRouter().GetPacket((*c.t).GetTag())
-							length := CreateHeartbeatAck(packet.buffer[packet.offset:])
-							packet.length = length
+							length := CreateHeartbeatAck(packet.BufAtOffset())
+							packet.SetLength(length)
 							err := c.Write(&packet)
 							if err != nil {
 								logger.Infof("%s: %s Failed to write heartbeat packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)

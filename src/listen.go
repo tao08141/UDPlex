@@ -9,14 +9,29 @@ import (
 	"time"
 )
 
-// AddrMapping stores each mapped address and its last active timestamp
-type AddrMapping struct {
+// ListenConn represents a logical UDP "connection" from a remote address
+// It encapsulates per-peer state like authentication and activity timestamps.
+type ListenConn struct {
 	addr              net.Addr
 	lastActive        time.Time
 	authState         *AuthState // Authentication state for this connection
 	connID            ConnID     // Unique connection identifier
 	lastHeartbeatSent time.Time  // Last heartbeat sent time
 }
+
+// Address returns the remote address associated with this logical connection.
+func (c *ListenConn) Address() net.Addr { return c.addr }
+
+// ConnID returns the unique identifier for this logical connection.
+func (c *ListenConn) ConnID() ConnID { return c.connID }
+
+// IsAuthenticated reports whether this connection has passed authentication.
+func (c *ListenConn) IsAuthenticated() bool {
+	return c.authState != nil && c.authState.IsAuthenticated()
+}
+
+// Touch updates the last active timestamp to now.
+func (c *ListenConn) Touch() { c.lastActive = time.Now() }
 
 // ListenComponent implements a UDP listener with authentication
 type ListenComponent struct {
@@ -28,7 +43,7 @@ type ListenComponent struct {
 	detour            []string
 	broadcastMode     bool
 	conn              net.PacketConn
-	mappings          map[string]*AddrMapping
+	mappings          map[string]*ListenConn
 	mappingsAtomic    atomic.Value
 	authManager       *AuthManager
 	sendTimeout       time.Duration
@@ -66,7 +81,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		timeout:           timeout,
 		replaceOldMapping: cfg.ReplaceOldMapping,
 		detour:            cfg.Detour,
-		mappings:          make(map[string]*AddrMapping),
+		mappings:          make(map[string]*ListenConn),
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
 		sendTimeout:       sendTimeout,
@@ -75,7 +90,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	}
 
 	// Initialize an atomic value with an empty map
-	initialMap := make(map[string]*AddrMapping)
+	initialMap := make(map[string]*ListenConn)
 	component.mappingsAtomic.Store(initialMap)
 
 	return component
@@ -135,7 +150,7 @@ func (l *ListenComponent) IsAvailable() bool {
 	}
 
 	// Check if there are any established connections
-	mappings := l.mappingsAtomic.Load().(map[string]*AddrMapping)
+	mappings := l.mappingsAtomic.Load().(map[string]*ListenConn)
 	return len(mappings) > 0
 }
 
@@ -160,10 +175,9 @@ func (l *ListenComponent) performCleanup() {
 }
 
 func (l *ListenComponent) syncMapping() {
-	mappingsTemp := make(map[string]*AddrMapping)
+	mappingsTemp := make(map[string]*ListenConn)
 	maps.Copy(mappingsTemp, l.mappings)
 	l.mappingsAtomic.Store(mappingsTemp)
-	return
 }
 
 func (l *ListenComponent) SendPacket(packet *Packet, metadata any) error {
@@ -201,7 +215,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		// Get or create an auth state
 		mapping, exists := l.mappings[addrKey]
 		if !exists {
-			mapping = &AddrMapping{
+			mapping = &ListenConn{
 				addr:       addr,
 				lastActive: time.Now(),
 				authState:  &AuthState{},
@@ -339,7 +353,7 @@ func (l *ListenComponent) handlePackets() {
 				packet := l.router.GetPacket(l.tag)
 				defer packet.Release(1)
 
-				length, addr, err := l.conn.ReadFrom(packet.buffer[packet.offset:])
+				length, addr, err := l.conn.ReadFrom(packet.BufAtOffset())
 
 				var netErr net.Error
 				if errors.As(err, &netErr) && netErr.Timeout() {
@@ -349,7 +363,7 @@ func (l *ListenComponent) handlePackets() {
 					return
 				}
 
-				packet.length = length
+				packet.SetLength(length)
 
 				// Handle authentication if enabled
 				if l.authManager != nil {
@@ -404,17 +418,17 @@ func (l *ListenComponent) handlePackets() {
 						// Add the new mapping
 						logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
 						connID := l.generateConnID()
-						l.mappings[addrKey] = &AddrMapping{addr: addr, lastActive: time.Now(), connID: connID}
+						l.mappings[addrKey] = &ListenConn{addr: addr, lastActive: time.Now(), connID: connID}
 						l.syncMapping()
-						packet.connID = connID
+						packet.SetConnID(connID)
 					} else {
 						// Update the last active time for existing mapping
 						l.mappings[addrKey].lastActive = time.Now()
-						packet.connID = l.mappings[addr.String()].connID
+						packet.SetConnID(l.mappings[addr.String()].connID)
 					}
 				}
 
-				packet.srcAddr = addr
+				packet.SetSrcAddr(addr)
 
 				// Forward the packet to detour components
 				if err := l.router.Route(&packet, l.detour); err != nil {
@@ -437,7 +451,7 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 		}
 	}
 
-	mappingsSnapshot := l.mappingsAtomic.Load().(map[string]*AddrMapping)
+	mappingsSnapshot := l.mappingsAtomic.Load().(map[string]*ListenConn)
 
 	if l.broadcastMode {
 		for _, mapping := range mappingsSnapshot {
@@ -450,12 +464,12 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 			}
 		}
 	} else {
-		if packet.connID == (ConnID{}) {
+		if packet.ConnID() == (ConnID{}) {
 			logger.Infof("%s: Packet has no connection ID, dropping", l.tag)
 			return nil
 		}
 		for _, mapping := range mappingsSnapshot {
-			if mapping.connID == packet.connID {
+			if mapping.connID == packet.ConnID() {
 				// Check authentication if required
 				if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
 					logger.Debugf("%s: Connection not authenticated, dropping packet", l.tag)
@@ -469,7 +483,7 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 			}
 		}
 
-		logger.Debugf("%s: No mapping found for connection ID: %s", l.tag, packet.connID)
+		logger.Debugf("%s: No mapping found for connection ID: %s", l.tag, packet.ConnID())
 	}
 
 	return nil

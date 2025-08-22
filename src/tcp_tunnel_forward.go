@@ -198,7 +198,7 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 
 	packet := f.router.GetPacket(f.GetTag())
 
-	length, err := f.authManager.CreateAuthChallenge(packet.buffer[packet.offset:], MsgTypeAuthChallenge, f.forwardID, poolID)
+	length, err := f.authManager.CreateAuthChallenge(packet.BufAtOffset(), MsgTypeAuthChallenge, f.forwardID, poolID)
 	if err != nil {
 		logger.Warnf("%s: Failed to create auth challenge: %v", f.tag, err)
 		ttc.Close()
@@ -206,7 +206,7 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 		return nil, err
 	}
 
-	packet.length = length
+	packet.SetLength(length)
 
 	err = ttc.Write(&packet)
 	if err != nil {
@@ -262,9 +262,9 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 
 	packet := f.router.GetPacket(f.GetTag())
 
-	length := CreateHeartbeat(packet.buffer[packet.offset:])
+	length := CreateHeartbeat(packet.BufAtOffset())
 	c.lastHeartbeatSent = time.Now()
-	packet.length = length
+	packet.SetLength(length)
 
 	err := c.Write(&packet)
 	if err != nil {

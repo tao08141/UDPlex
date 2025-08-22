@@ -43,7 +43,6 @@ help:
 	@echo "  build            - Build the UDPlex binary"
 	@echo "  build-test       - Build UDPlex for testing"
 	@echo "  test             - Run all tests (unit + integration)"
-	@echo "  test-unit        - Run only unit tests"
 	@echo "  test-integration - Run only integration tests"
 	@echo "  clean            - Clean build artifacts"
 	@echo "  help             - Show this help message"

@@ -25,6 +25,48 @@ type ForwardConn struct {
 	poolID             PoolID
 }
 
+// Address returns the remote address string for this forward connection
+func (c *ForwardConn) Address() string { return c.remoteAddr }
+
+// UDPAddr returns the UDP address for this forward connection
+func (c *ForwardConn) UDPAddr() *net.UDPAddr { return c.udpAddr }
+
+// IsConnected reports whether the underlying UDP connection is considered connected
+func (c *ForwardConn) IsConnected() bool {
+	return atomic.LoadInt32(&c.isConnected) == 1 && c.conn != nil
+}
+
+// IsAuthenticated reports whether the connection has completed authentication
+func (c *ForwardConn) IsAuthenticated() bool {
+	return c.authState != nil && c.authState.IsAuthenticated()
+}
+
+// NoteHeartbeatSent records the time a heartbeat was sent
+func (c *ForwardConn) NoteHeartbeatSent() { c.lastHeartbeatSent = time.Now() }
+
+// ResetHeartbeatMiss resets the missed heartbeat counter
+func (c *ForwardConn) ResetHeartbeatMiss() { c.heartbeatMissCount = 0 }
+
+// IncHeartbeatMiss increments the missed heartbeat counter
+func (c *ForwardConn) IncHeartbeatMiss() { c.heartbeatMissCount++ }
+
+// SetDisconnected marks the connection as disconnected and closes the socket if present
+func (c *ForwardConn) SetDisconnected() {
+	atomic.StoreInt32(&c.isConnected, 0)
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
+}
+
+// SetConnected assigns the socket and marks the connection as connected
+func (c *ForwardConn) SetConnected(newConn *net.UDPConn) {
+	c.conn = newConn
+	atomic.StoreInt32(&c.isConnected, 1)
+}
+
+// TouchReconnectAttempt updates the last reconnect attempt timestamp to now
+func (c *ForwardConn) TouchReconnectAttempt() { c.lastReconnectAttempt = time.Now() }
+
 // ForwardComponent implements a UDP forwarder with authentication
 type ForwardComponent struct {
 	BaseComponent
@@ -114,11 +156,11 @@ func (f *ForwardConn) Close() {
 
 // IsAvailable checks if the connection is available
 func (f *ForwardConn) IsAvailable() bool {
-	return atomic.LoadInt32(&f.isConnected) == 1 && f.conn != nil
+	return f.IsConnected()
 }
 
 func (f *ForwardConn) Write(data []byte) (int, error) {
-	if atomic.LoadInt32(&f.isConnected) == 0 || f.conn == nil {
+	if !f.IsConnected() {
 		return 0, fmt.Errorf("connection is not available")
 	}
 
@@ -189,7 +231,7 @@ func (f *ForwardComponent) connectionChecker() {
 			return
 		case <-ticker.C:
 			for _, conn := range f.forwardConnList {
-				if atomic.LoadInt32(&conn.isConnected) == 0 {
+				if !conn.IsConnected() {
 					go f.tryReconnect(conn)
 				} else {
 					f.handleConnectionMaintenance(conn)
@@ -205,7 +247,7 @@ func (f *ForwardComponent) handleConnectionMaintenance(conn *ForwardConn) {
 
 	if f.authManager != nil {
 
-		if !conn.authState.IsAuthenticated() {
+		if !conn.IsAuthenticated() {
 			// Need authentication
 			go f.sendAuthChallenge(conn)
 		} else {
@@ -224,7 +266,7 @@ func (f *ForwardComponent) handleConnectionMaintenance(conn *ForwardConn) {
 
 // sendAuthChallenge sends an authentication challenge to a server
 func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
-	if atomic.LoadInt32(&conn.isConnected) == 0 {
+	if !conn.IsConnected() {
 		return
 	}
 
@@ -233,7 +275,7 @@ func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
 	if conn.authRetryCount > 5 {
 		// Too many auth failures - mark as disconnected
 		logger.Warnf("%s: Too many auth failures for %s", f.tag, conn.remoteAddr)
-		atomic.StoreInt32(&conn.isConnected, 0)
+		conn.SetDisconnected()
 		return
 	}
 
@@ -249,13 +291,13 @@ func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
 	_, err = conn.Write(buffer[:length])
 	if err != nil {
 		logger.Warnf("%s: Failed to send auth challenge: %v", f.tag, err)
-		atomic.StoreInt32(&conn.isConnected, 0)
+		conn.SetDisconnected()
 	}
 }
 
 // sendHeartbeat sends heartbeat to server
 func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
-	if atomic.LoadInt32(&conn.isConnected) == 0 || !conn.authState.IsAuthenticated() {
+	if !conn.IsConnected() || !conn.IsAuthenticated() {
 		return
 	}
 
@@ -263,12 +305,12 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 	defer f.router.PutBuffer(buffer)
 
 	length := CreateHeartbeat(buffer)
-	conn.lastHeartbeatSent = time.Now()
+	conn.NoteHeartbeatSent()
 
 	_, err := conn.Write(buffer[:length])
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
-		atomic.StoreInt32(&conn.isConnected, 0)
+		conn.SetDisconnected()
 		return
 	}
 
@@ -277,12 +319,12 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 	}
 
 	// Increment miss count - will be reset when response received
-	conn.heartbeatMissCount++
+	conn.IncHeartbeatMiss()
 	if conn.heartbeatMissCount >= 5 {
 		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.remoteAddr)
-		atomic.StoreInt32(&conn.isConnected, 0)
+		conn.SetDisconnected()
 		conn.authState.SetAuthenticated(0)
-		conn.heartbeatMissCount = 0
+		conn.ResetHeartbeatMiss()
 	}
 }
 
@@ -343,7 +385,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 		return
 	}
 
-	conn.lastReconnectAttempt = time.Now()
+	conn.TouchReconnectAttempt()
 
 	if conn.conn != nil {
 		conn.Close()
@@ -370,8 +412,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 		}
 	}
 
-	conn.conn = newConn
-	atomic.StoreInt32(&conn.isConnected, 1)
+	conn.SetConnected(newConn)
 	conn.authRetryCount = 0
 	conn.heartbeatMissCount = 0
 	logger.Infof("%s: Successfully reconnected to %s", f.tag, conn.remoteAddr)
@@ -388,7 +429,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 
 // readFromForwarder handles receiving packets from a forwarder
 func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
-	for atomic.LoadInt32(&conn.isConnected) == 1 {
+	for conn.IsConnected() {
 		select {
 		case <-f.GetStopChannel():
 			return
@@ -403,7 +444,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 				packet := f.router.GetPacket(f.tag)
 				defer packet.Release(1)
 
-				length, err := conn.conn.Read(packet.buffer[packet.offset:])
+				length, err := conn.conn.Read(packet.BufAtOffset())
 
 				if err != nil {
 					var netErr net.Error
@@ -412,11 +453,11 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 					}
 
 					logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.remoteAddr, err)
-					atomic.StoreInt32(&conn.isConnected, 0)
+					conn.SetDisconnected()
 					return
 				}
 
-				packet.length = length
+				packet.SetLength(length)
 
 				// Handle authentication if enabled
 				if f.authManager != nil {
@@ -439,7 +480,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 					}
 
 					// For data messages, check authentication
-					if !conn.authState.IsAuthenticated() {
+					if !conn.IsAuthenticated() {
 						return
 					}
 
@@ -476,7 +517,7 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 
 	case MsgTypeHeartbeat:
 		// Reset heartbeat miss count
-		conn.heartbeatMissCount = 0
+		conn.ResetHeartbeatMiss()
 
 		// If this is the second heartbeat (response to our response), measure delay
 		if !conn.lastHeartbeatSent.IsZero() {
@@ -501,14 +542,14 @@ func (f *ForwardComponent) SendPacket(packet *Packet, metadata any) error {
 		return fmt.Errorf("invalid connection type")
 	}
 
-	if atomic.LoadInt32(&conn.isConnected) == 0 || conn.conn == nil {
+	if !conn.IsConnected() {
 		return nil // Connection isn't available, skip
 	}
 
 	_, err := conn.Write(packet.GetData())
 	if err != nil {
 		logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
-		atomic.StoreInt32(&conn.isConnected, 0)
+		conn.SetDisconnected()
 		return err
 	}
 
@@ -529,9 +570,9 @@ func (f *ForwardComponent) HandlePacket(packet *Packet) error {
 	}
 
 	for _, conn := range f.forwardConnList {
-		if atomic.LoadInt32(&conn.isConnected) == 1 {
+		if conn.IsConnected() {
 			// Check authentication if required
-			if f.authManager != nil && !conn.authState.IsAuthenticated() {
+			if f.authManager != nil && !conn.IsAuthenticated() {
 				continue
 			}
 
