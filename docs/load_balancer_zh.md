@@ -54,7 +54,7 @@
 | `bps`   | 窗口内平均每秒比特数     |
 | `pps`   | 窗口内平均每秒包数       |
 | `size`  | 当前包大小              |
-| `available.tag` | 组件可用性状态，其中tag为组件标识 |
+| `available_<tag>` | 组件可用性状态，其中tag为组件标识 |
 
 - **支持的运算符**
 
@@ -118,7 +118,7 @@ UDPlex 支持在 LoadBalancerComponent 中进行组件可用性检查。这允�
 
 ### 在表达式中使用可用性变量
 
-在 LoadBalancerComponent 的规则表达式中，可以使用 `available.tag` 格式的变量来检查组件的可用性，其中 `tag` 是组件的标签。
+在 LoadBalancerComponent 的规则表达式中，可以使用 `available_<tag>` 格式的变量来检查组件的可用性，其中 `tag` 是组件的标签。
 
 例如：
 
@@ -128,15 +128,15 @@ UDPlex 支持在 LoadBalancerComponent 中进行组件可用性检查。这允�
     "tag": "load_balancer",
     "detour": [
         {
-            "rule": "available.client_forward",
+            "rule": "available_client_forward",
             "targets": ["client_forward"]
         },
         {
-            "rule": "available.backup_listen",
+            "rule": "available_backup_listen",
             "targets": ["backup_listen"]
         },
         {
-            "rule": "!available.client_forward && !available.backup_listen",
+            "rule": "!available_client_forward && !available_backup_listen",
             "targets": ["fallback_forward"]
         }
     ]

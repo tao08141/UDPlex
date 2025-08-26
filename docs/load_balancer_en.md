@@ -54,7 +54,7 @@ Matching rules for the load balancer use the [expr-lang/expr](https://github.com
 | `bps`         | Bits per second, averaged over window    |
 | `pps`         | Packets per second, averaged over window |
 | `size`        | Current packet size                      |
-| `available.tag` | Component availability status, where tag is the component identifier |
+| `available_<tag>` | Component availability status, where tag is the component identifier |
 
 - **Supported Operators**
 
@@ -117,7 +117,7 @@ For components that do not support availability checking, the availability varia
 
 ### Using Availability Variables in Expressions
 
-In LoadBalancerComponent rule expressions, you can use variables in the format `available.tag` to check component availability, where `tag` is the component identifier.
+In LoadBalancerComponent rule expressions, you can use variables in the format `available_<tag>` to check component availability, where `tag` is the component identifier.
 
 For example:
 
@@ -127,15 +127,15 @@ For example:
     "tag": "load_balancer",
     "detour": [
         {
-            "rule": "available.client_forward",
+            "rule": "available_client_forward",
             "targets": ["client_forward"]
         },
         {
-            "rule": "available.backup_listen",
+            "rule": "available_backup_listen",
             "targets": ["backup_listen"]
         },
         {
-            "rule": "!available.client_forward && !available.backup_listen",
+            "rule": "!available_client_forward && !available_backup_listen",
             "targets": ["fallback_forward"]
         }
     ]

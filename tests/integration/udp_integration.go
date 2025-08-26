@@ -133,14 +133,24 @@ func main() {
 	var results []TestResult
 
 	for _, config := range testConfigs {
-		fmt.Printf("\n=== Testing %s ===\n", config.Name)
-		result := runTest(projectRoot, examplesDir, config)
-		results = append(results, result)
-
-		if result.Success {
-			fmt.Printf("✓ %s: PASSED\n", config.Name)
+		// Packet loss-focused test (with Sleep)
+		fmt.Printf("\n=== %s - Packet Loss Test ===\n", config.Name)
+		resultSleep := runTest(projectRoot, examplesDir, config, "Packet Loss Test", true)
+		results = append(results, resultSleep)
+		if resultSleep.Success {
+			fmt.Printf("✓ %s - Packet Loss Test: PASSED\n", config.Name)
 		} else {
-			fmt.Printf("✗ %s: FAILED - %s\n", config.Name, result.Error)
+			fmt.Printf("✗ %s - Packet Loss Test: FAILED - %s\n", config.Name, resultSleep.Error)
+		}
+
+		// Performance-focused test (no Sleep)
+		fmt.Printf("\n=== %s - Performance Test ===\n", config.Name)
+		resultNoSleep := runTest(projectRoot, examplesDir, config, "Performance Test", false)
+		results = append(results, resultNoSleep)
+		if resultNoSleep.Success {
+			fmt.Printf("✓ %s - Performance Test: PASSED\n", config.Name)
+		} else {
+			fmt.Printf("✗ %s - Performance Test: FAILED - %s\n", config.Name, resultNoSleep.Error)
 		}
 	}
 
@@ -209,9 +219,9 @@ func buildUDPlex(projectRoot string) error {
 	return nil
 }
 
-func runTest(projectRoot, examplesDir string, config TestConfig) TestResult {
+func runTest(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {
 	result := TestResult{
-		ConfigName:    config.Name,
+		ConfigName:    fmt.Sprintf("%s %s", config.Name, label),
 		TotalDuration: config.Duration,
 	}
 
@@ -256,7 +266,7 @@ func runTest(projectRoot, examplesDir string, config TestConfig) TestResult {
 	}()
 
 	// Run UDP test
-	sent, received, errorPackets := runUDPTest(config.TestPort, config.TargetPort, config.Duration)
+	sent, received, errorPackets := runUDPTest(config.TestPort, config.TargetPort, config.Duration, withSleep)
 
 	result.Sent = sent
 	result.Received = received
@@ -271,14 +281,26 @@ func runTest(projectRoot, examplesDir string, config TestConfig) TestResult {
 	// Determine if test passed
 	if sent == 0 {
 		result.Error = "No packets sent"
-	} else if errorPackets > 0 {
-		result.Error = fmt.Sprintf("Error packets detected: %d", errorPackets)
-	} else if result.LossRate > MAX_PACKET_LOSS {
-		result.Error = fmt.Sprintf("High packet loss: %.2f%%", result.LossRate*100)
-	} else if received == 0 {
-		result.Error = "No packets received"
+	} else if withSleep {
+		// In loss-check mode, enforce integrity and loss thresholds
+		if errorPackets > 0 {
+			result.Error = fmt.Sprintf("Error packets detected: %d", errorPackets)
+		} else if result.LossRate > MAX_PACKET_LOSS {
+			result.Error = fmt.Sprintf("High packet loss: %.2f%%", result.LossRate*100)
+		} else if received == 0 {
+			result.Error = "No packets received"
+		} else {
+			result.Success = true
+		}
 	} else {
-		result.Success = true
+		// In performance mode, don't enforce loss rate, but integrity must hold and some packets must be received
+		if errorPackets > 0 {
+			result.Error = fmt.Sprintf("Error packets detected (perf): %d", errorPackets)
+		} else if received == 0 {
+			result.Error = "No packets received (perf)"
+		} else {
+			result.Success = true
+		}
 	}
 
 	return result
@@ -377,7 +399,7 @@ func startUDPlexProcess(projectRoot, configPath string) *exec.Cmd {
 	}
 }
 
-func runUDPTest(listenPort, sendPort int, duration time.Duration) (sent, received, errorPackets int64) {
+func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool) (sent, received, errorPackets int64) {
 	var sentCount, receivedCount int64
 	var errorCount int64
 	var wg sync.WaitGroup
@@ -479,7 +501,9 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration) (sent, receive
 				atomic.AddInt64(&sentCount, 1)
 			}
 
-			time.Sleep(1 * time.Microsecond)
+			if withSleep {
+				time.Sleep(1 * time.Microsecond)
+			}
 		}
 	}()
 

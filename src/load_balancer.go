@@ -121,7 +121,7 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 
 	// Add availability variables to the environment
 	for _, varKey := range varKeys {
-		if len(varKey) > 10 && varKey[:10] == "available." {
+		if len(varKey) > 10 && varKey[:10] == "available_" {
 			env[varKey] = false // Default value for compilation
 		}
 	}
@@ -140,7 +140,7 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 		}
 
 		// Expressions with seq, size, or availability variables cannot be cached
-		if varKey == "seq" || varKey == "size" || (len(varKey) > 10 && varKey[:10] == "available.") {
+		if varKey == "seq" || varKey == "size" || (len(varKey) > 10 && varKey[:10] == "available_") {
 			canCache = false
 			break
 		}
@@ -171,13 +171,13 @@ func (lb *LoadBalancerComponent) findVariables(exprStr string) []string {
 		}
 	}
 
-	// Check for tag availability variables (available.tag)
-	if strings.Contains(exprStr, "available.") {
+	// Check for tag availability variables (available_tag)
+	if strings.Contains(exprStr, "available_") {
 		// Get all components from the router
 		components := lb.router.GetComponents()
 		for _, component := range components {
 			tag := component.GetTag()
-			availableVar := "available." + tag
+			availableVar := "available_" + tag
 			if strings.Contains(exprStr, availableVar) {
 				vars = append(vars, availableVar)
 			}
@@ -373,8 +373,8 @@ func (lb *LoadBalancerComponent) evaluateExpressionDirect(compiled *CompiledExpr
 		case "size":
 			env[varKey] = size
 		default:
-			// Check if this is an availability variable (available.tag)
-			if len(varKey) > 10 && varKey[:10] == "available." {
+			// Check if this is an availability variable (available_tag)
+			if len(varKey) > 10 && varKey[:10] == "available_" {
 				tag := varKey[10:] // Extract the tag part
 				env[varKey] = lb.checkTagAvailability(tag)
 			}
