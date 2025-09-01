@@ -54,8 +54,8 @@ jobs:
           else
             git checkout --orphan metrics
           fi
-          # Clean working tree (safe here; this is an isolated clone)
-          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          # Clean non-metrics files only; preserve existing metrics history
+          find . -mindepth 1 -maxdepth 1 ! -name .git ! -name metrics -exec rm -rf {} +
           mkdir -p metrics
           cp -r "$GITHUB_WORKSPACE/metrics/." metrics/ || true
 
