@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -43,6 +44,29 @@ type PacketData struct {
 	Timestamp int64
 	Checksum  [32]byte
 	Payload   [1024]byte
+}
+
+// JSON structures for metrics persistence
+type MetricsFile struct {
+	Repo        string        `json:"repo"`
+	Branch      string        `json:"branch"`
+	SHA         string        `json:"sha"`
+	RunID       string        `json:"run_id"`
+	RunnerOS    string        `json:"runner_os"`
+	Timestamp   time.Time     `json:"timestamp"`
+	DurationSec float64       `json:"duration_sec"`
+	Results     []MetricEntry `json:"results"`
+}
+
+type MetricEntry struct {
+	Name         string  `json:"name"`
+	Sent         int64   `json:"sent"`
+	Received     int64   `json:"received"`
+	ErrorPackets int64   `json:"error_packets"`
+	LossRate     float64 `json:"loss_rate"`
+	Throughput   float64 `json:"throughput_pps"`
+	Success      bool    `json:"success"`
+	Error        string  `json:"error,omitempty"`
 }
 
 // Bitset is a compact bitmap used to track seen packet IDs with minimal memory.
@@ -175,6 +199,11 @@ func main() {
 	}
 
 	fmt.Printf("\nTotal: %d/%d tests passed\n", passed, len(results))
+
+	// Always write JSON metrics before exiting
+	if err := writeJSONMetrics(projectRoot, results, TEST_DURATION); err != nil {
+		fmt.Printf("Failed to write metrics JSON: %v\n", err)
+	}
 
 	if passed != len(results) {
 		os.Exit(1)
@@ -527,3 +556,73 @@ func calculateChecksum(id uint32, timestamp int64, payload []byte) [32]byte {
 	copy(result[:], h.Sum(nil))
 	return result
 }
+
+// writeJSONMetrics writes metrics to metrics/latest.json and metrics/<timestamp>.json under project root.
+func writeJSONMetrics(projectRoot string, results []TestResult, testDuration time.Duration) error {
+	metricsDir := filepath.Join(projectRoot, "metrics")
+	if err := os.MkdirAll(metricsDir, 0o755); err != nil {
+		return err
+	}
+
+	// collect environment metadata (works in GitHub Actions, falls back locally)
+	repo := getenvDefault("GITHUB_REPOSITORY", "local")
+	branch := getenvDefault("GITHUB_REF_NAME", currentBranch())
+	sha := getenvDefault("GITHUB_SHA", currentSHA())
+	runID := getenvDefault("GITHUB_RUN_ID", "0")
+	runnerOS := getenvDefault("RUNNER_OS", runtimeGOOS())
+
+	mf := MetricsFile{
+		Repo:        repo,
+		Branch:      branch,
+		SHA:         sha,
+		RunID:       runID,
+		RunnerOS:    runnerOS,
+		Timestamp:   time.Now().UTC(),
+		DurationSec: testDuration.Seconds(),
+		Results:     make([]MetricEntry, 0, len(results)),
+	}
+
+	for _, r := range results {
+		mf.Results = append(mf.Results, MetricEntry{
+			Name:         r.ConfigName,
+			Sent:         r.Sent,
+			Received:     r.Received,
+			ErrorPackets: r.ErrorPackets,
+			LossRate:     r.LossRate,
+			Throughput:   r.Throughput,
+			Success:      r.Success,
+			Error:        r.Error,
+		})
+	}
+
+	data, err := json.MarshalIndent(mf, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	ts := mf.Timestamp.Format("20060102T150405Z")
+	latestPath := filepath.Join(metricsDir, "latest.json")
+	versionedPath := filepath.Join(metricsDir, fmt.Sprintf("%s.json", ts))
+
+	if err := os.WriteFile(latestPath, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(versionedPath, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("Metrics written to %s and %s\n", latestPath, versionedPath)
+	return nil
+}
+
+func getenvDefault(key, def string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// lightweight helpers; safe fallbacks when not in git
+func currentBranch() string { return os.Getenv("GIT_BRANCH") }
+func currentSHA() string    { return os.Getenv("GIT_SHA") }
+func runtimeGOOS() string   { return strings.ToLower(os.Getenv("RUNNER_OS")) }
