@@ -33,35 +33,39 @@ jobs:
       
       - name: Push metrics to dedicated branch
         if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           echo "Publishing metrics to 'metrics' branch..."
-          # Stash metrics from current workspace (if present)
-          TMP_DIR=$(mktemp -d)
-          if [ -d metrics ]; then
-            cp -r metrics "$TMP_DIR/" || true
+          if [ ! -d metrics ]; then
+            echo "No metrics directory found; skipping publish."
+            exit 0
           fi
-          
-          # Switch to metrics branch (create if missing)
-          git fetch origin metrics || true
-          if git rev-parse --verify origin/metrics >/dev/null 2>&1; then
+
+          REPO="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
+          AUTH_REPO="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          CLONE_DIR=$(mktemp -d)
+          echo "Cloning metrics branch into temp dir..."
+          git clone --no-checkout "$AUTH_REPO" "$CLONE_DIR"
+          cd "$CLONE_DIR"
+          if git ls-remote --exit-code origin metrics >/dev/null 2>&1; then
             git checkout -B metrics origin/metrics
           else
             git checkout --orphan metrics
-            rm -rf ./* ./.github || true
           fi
-          
+          # Clean working tree (safe here; this is an isolated clone)
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           mkdir -p metrics
-          if [ -d "$TMP_DIR/metrics" ]; then
-            cp -r "$TMP_DIR/metrics/." metrics/ || true
-          fi
-          
+          cp -r "$GITHUB_WORKSPACE/metrics/." metrics/ || true
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add metrics
+          # Stage both new metrics content and deletions of any other files
+          git add -A
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "chore(metrics): update for ${GITHUB_SHA} (run ${GITHUB_RUN_ID})"
-            git push origin metrics
+            git push --set-upstream origin metrics
             echo "Metrics pushed to 'metrics' branch."
           else
             echo "No metrics changes to commit."
