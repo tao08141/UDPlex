@@ -139,6 +139,13 @@ func main() {
 			Duration:    TEST_DURATION,
 		},
 		{
+			Name:        "Filter",
+			ConfigFiles: []string{"filter_test.json"},
+			TestPort:    LISTEN_PORT,
+			TargetPort:  SEND_PORT,
+			Duration:    TEST_DURATION,
+		},
+		{
 			Name:        "Load Balancer",
 			ConfigFiles: []string{"load_balancer_test.json"},
 			TestPort:    LISTEN_PORT,
