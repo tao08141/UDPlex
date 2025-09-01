@@ -1,0 +1,83 @@
+{
+  "repo": "tao08141/UDPlex",
+  "branch": "master",
+  "sha": "8b819e529658848757bb03864952f66eae44d2b0",
+  "run_id": "17373351759",
+  "runner_os": "Linux",
+  "timestamp": "2025-09-01T09:24:05.589124857Z",
+  "duration_sec": 10,
+  "results": [
+    {
+      "name": "Basic Packet Loss Test",
+      "sent": 384630,
+      "received": 384630,
+      "error_packets": 0,
+      "loss_rate": 0,
+      "throughput_pps": 38463,
+      "success": true
+    },
+    {
+      "name": "Basic Performance Test",
+      "sent": 984825,
+      "received": 984812,
+      "error_packets": 0,
+      "loss_rate": 0.000013200314776736983,
+      "throughput_pps": 98481.2,
+      "success": true
+    },
+    {
+      "name": "Auth Client-Server Packet Loss Test",
+      "sent": 319332,
+      "received": 319332,
+      "error_packets": 0,
+      "loss_rate": 0,
+      "throughput_pps": 31933.2,
+      "success": true
+    },
+    {
+      "name": "Auth Client-Server Performance Test",
+      "sent": 849148,
+      "received": 847306,
+      "error_packets": 0,
+      "loss_rate": 0.002169233160768205,
+      "throughput_pps": 84730.6,
+      "success": true
+    },
+    {
+      "name": "Load Balancer Packet Loss Test",
+      "sent": 378321,
+      "received": 378321,
+      "error_packets": 0,
+      "loss_rate": 0,
+      "throughput_pps": 37832.1,
+      "success": true
+    },
+    {
+      "name": "Load Balancer Performance Test",
+      "sent": 983091,
+      "received": 983085,
+      "error_packets": 0,
+      "loss_rate": 0.000006103198991751526,
+      "throughput_pps": 98308.5,
+      "success": true
+    },
+    {
+      "name": "TCP Tunnel Packet Loss Test",
+      "sent": 304306,
+      "received": 304306,
+      "error_packets": 0,
+      "loss_rate": 0,
+      "throughput_pps": 30430.6,
+      "success": true
+    },
+    {
+      "name": "TCP Tunnel Performance Test",
+      "sent": 801207,
+      "received": 799200,
+      "error_packets": 0,
+      "loss_rate": 0.0025049706255686733,
+      "throughput_pps": 79920,
+      "success": true
+    }
+  ]
+}
