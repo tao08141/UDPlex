@@ -8,23 +8,23 @@ import (
 
 // LengthMatch represents length requirements for the packet
 type LengthMatch struct {
-	Min int `json:"min,omitempty"` // Minimum length
-	Max int `json:"max,omitempty"` // Maximum length
+	Min int `json:"min,omitempty" yaml:"min,omitempty"` // Minimum length
+	Max int `json:"max,omitempty" yaml:"max,omitempty"` // Maximum length
 }
 
 // SignatureRule represents a single matching rule
 type SignatureRule struct {
 	// Byte pattern matching at specific offset
-	Offset int    `json:"offset,omitempty"`
-	Bytes  string `json:"bytes,omitempty"`
-	Mask   string `json:"mask,omitempty"`
+	Offset int    `json:"offset,omitempty" yaml:"offset,omitempty"`
+	Bytes  string `json:"bytes,omitempty" yaml:"bytes,omitempty"`
+	Mask   string `json:"mask,omitempty" yaml:"mask,omitempty"`
 
 	// Contains matching
-	Contains string `json:"contains,omitempty"`
-	Hex      bool   `json:"hex,omitempty"`
+	Contains string `json:"contains,omitempty" yaml:"contains,omitempty"`
+	Hex      bool   `json:"hex,omitempty" yaml:"hex,omitempty"`
 
 	// Length as an object
-	Length *LengthMatch `json:"length,omitempty"`
+	Length *LengthMatch `json:"length,omitempty" yaml:"length,omitempty"`
 
 	// Pre-decoded data for performance
 	decodedBytes    []byte
@@ -34,10 +34,10 @@ type SignatureRule struct {
 
 // ProtocolDefinition represents a complete protocol detection rule
 type ProtocolDefinition struct {
-	Signatures  []SignatureRule `json:"signatures"`
-	MatchLogic  string          `json:"match_logic"`
-	Description string          `json:"description,omitempty"`
-	Priority    int             `json:"priority,omitempty"`
+	Signatures  []SignatureRule `json:"signatures" yaml:"signatures"`
+	MatchLogic  string          `json:"match_logic" yaml:"match_logic"`
+	Description string          `json:"description,omitempty" yaml:"description,omitempty"`
+	Priority    int             `json:"priority,omitempty" yaml:"priority,omitempty"`
 }
 
 // ProtocolDetector contains all protocol detection rules
