@@ -1,0 +1,30 @@
+buffer_size: 1600
+queue_size: 10240
+worker_count: 4
+logging:
+  level: debug
+  format: console
+  output_path: stdout
+  caller: true
+services:
+  - type: tcp_tunnel_listen
+    tag: server_listen
+    listen_addr: 0.0.0.0:5203
+    replace_old_mapping: true
+    detour: [server_forward]
+    auth:
+      secret: your-secret-key-here
+      enabled: true
+      enable_encryption: true
+  - type: forward
+    tag: server_forward
+    forwarders: [127.0.0.1:5201]
+    reconnect_interval: 5
+    connection_check_time: 10
+    send_keepalive: false
+    detour: [server_listen]
+api:
+  enabled: true
+  port: 8081
+  host: 0.0.0.0
+  h5_files_path: ./h5

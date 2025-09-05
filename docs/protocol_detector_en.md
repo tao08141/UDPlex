@@ -5,26 +5,21 @@ Protocol detectors are used to identify and categorize specific protocols in UDP
 
 ## Configuration Format
 
-```json
-{
-  "protocol_detectors": {
-    "name": {
-      "signatures": [
-        {
-          "offset": 0,
-          "bytes": "matching_byte_sequence",
-          "mask": "applied_bit_mask",
-          "hex": true,
-          "length": { "min": 20, "max": 1500 },
-          "contains": "contained_byte_sequence",
-          "description": "signature_description"
-        }
-      ],
-      "match_logic": "AND",
-      "description": "protocol_detector_description"
-    }
-  }
-}
+```yaml
+protocol_detectors:
+  name:
+    signatures:
+      - offset: 0
+        bytes: matching_byte_sequence
+        mask: applied_bit_mask
+        hex: true
+        length:
+          min: 20
+          max: 1500
+        contains: contained_byte_sequence
+        description: signature_description
+    match_logic: AND
+    description: protocol_detector_description
 ```
 
 **Note**:
@@ -53,40 +48,29 @@ Protocol detectors are used to identify and categorize specific protocols in UDP
 
 ## Configuration Example
 
-```json
-{
-  "protocol_detectors": {
-    "wireguard": {
-      "signatures": [
-        {
-          "offset": 0,
-          "bytes": "0400000000",
-          "hex": true,
-          "length": { "min": 20, "max": 1500 },
-          "description": "WireGuard handshake initialization packet"
-        }
-      ],
-      "match_logic": "OR",
-      "description": "WireGuard VPN protocol detector"
-    },
-    "game_protocol": {
-      "signatures": [
-        {
-          "offset": 0,
-          "bytes": "4741",
-          "hex": true,
-          "description": "Game protocol header identifier"
-        },
-        {
-          "contains": "GAME_SERVER",
-          "description": "Game server identifier string"
-        }
-      ],
-      "match_logic": "AND",
-      "description": "Specific game protocol detector"
-    }
-  }
-}
+```yaml
+protocol_detectors:
+  wireguard:
+    signatures:
+      - offset: 0
+        bytes: "0400000000"
+        hex: true
+        length:
+          min: 20
+          max: 1500
+        description: WireGuard handshake initialization packet
+    match_logic: OR
+    description: WireGuard VPN protocol detector
+  game_protocol:
+    signatures:
+      - offset: 0
+        bytes: "4741"
+        hex: true
+        description: Game protocol header identifier
+      - contains: GAME_SERVER
+        description: Game server identifier string
+    match_logic: AND
+    description: Specific game protocol detector
 ```
 
 ## How It Works

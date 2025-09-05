@@ -17,21 +17,19 @@ The TCP Tunnel Listen component is responsible for listening for TCP connections
 
 ## Configuration Example
 
-```json
-{
-    "type": "tcp_tunnel_listen",
-    "tag": "tcp_tunnel_server",
-    "listen_addr": "0.0.0.0:9001",
-    "timeout": 300,
-    "no_delay": true,
-    "detour": ["forward_component"],
-    "auth": {
-        "enabled": true,
-        "secret": "your-strong-password",
-        "enable_encryption": true,
-        "heartbeat_interval": 30
-    }
-}
+```yaml
+type: tcp_tunnel_listen
+tag: tcp_tunnel_server
+listen_addr: 0.0.0.0:9001
+timeout: 300
+no_delay: true
+detour:
+  - forward_component
+auth:
+  enabled: true
+  secret: your-strong-password
+  enable_encryption: true
+  heartbeat_interval: 30
 ```
 
 ## How It Works

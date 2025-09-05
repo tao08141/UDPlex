@@ -1,0 +1,24 @@
+buffer_size: 1500
+queue_size: 10240
+worker_count: 4
+services:
+  - type: listen
+    tag: client_listen
+    listen_addr: 0.0.0.0:7000
+    timeout: 120
+    replace_old_mapping: true
+    detour: [client_forward]
+  - type: forward
+    tag: client_forward
+    forwarders:
+      - server1.example.com:9000
+      - server2.example.com:9000
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: true
+    detour: [client_listen]
+    auth:
+      secret: your-secret-key-here
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30

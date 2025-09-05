@@ -19,7 +19,7 @@ set -euo pipefail
 # --------------------------------
 BASE_DIR="/opt/udplex"
 COMPOSE_FILE="${BASE_DIR}/docker-compose.yml"
-CONFIG_FILE="${BASE_DIR}/config.json"
+CONFIG_FILE="${BASE_DIR}/config.yaml"
 ROLE_FILE="${BASE_DIR}/role"
 SECRET_FILE="${BASE_DIR}/secret"
 LANG_FILE="${BASE_DIR}/lang"
@@ -112,8 +112,8 @@ T() {
     "prompt_line2|en") msg="Forward line #2 target (exit server IP:port, default 9001, e.g. 1.2.3.4:9001): ";;
     "need_two_lines|zh") msg="必须提供两条线路的目标地址。";;
     "need_two_lines|en") msg="Both forward line targets are required.";;
-    "client_cfg_written|zh") msg="已生成客户端进阶配置 config.json";;
-    "client_cfg_written|en") msg="Advanced client config.json generated.";;
+    "client_cfg_written|zh") msg="已生成客户端进阶配置 config.yaml";;
+    "client_cfg_written|en") msg="Advanced client config.yaml generated.";;
 
     "prompt_server_p1|zh") msg="服务端线路1监听端口（默认 9000）: ";;
     "prompt_server_p1|en") msg="Server listen port for line #1 (default 9000): ";;
@@ -121,8 +121,8 @@ T() {
     "prompt_server_p2|en") msg="Server listen port for line #2 (default 9001): ";;
     "prompt_server_wg|zh") msg="WireGuard 服务端端口（默认 51820）: ";;
     "prompt_server_wg|en") msg="WireGuard server port (default 51820): ";;
-    "server_cfg_written|zh") msg="已生成服务端进阶配置 config.json";;
-    "server_cfg_written|en") msg="Advanced server config.json generated.";;
+    "server_cfg_written|zh") msg="已生成服务端进阶配置 config.yaml";;
+    "server_cfg_written|en") msg="Advanced server config.yaml generated.";;
 
     "prompt_client_addr|zh") msg="WireGuard 本机地址（默认 10.0.0.1/24）: ";;
     "prompt_client_addr|en") msg="WireGuard local address (default 10.0.0.1/24): ";;
@@ -364,8 +364,9 @@ services:
     image: ghcr.io/tao08141/udplex:latest
     container_name: udplex
     restart: always
+    command: ["/app/UDPlex", "-c", "/app/config.yaml"]
     volumes:
-      - ./config.json:/app/config.json
+      - ./config.yaml:/app/config.yaml
     network_mode: host
     logging:
       options:
@@ -382,69 +383,57 @@ write_client_config() {
   local SECRET="${4}"
   local THRESH="${5}"
 
-  cat > "${CONFIG_FILE}" <<JSON
-{
-  "buffer_size": 1500,
-  "queue_size": 10240,
-  "worker_count": 4,
-  "logging": {
-    "level": "info",
-    "format": "console",
-    "output_path": "stdout",
-    "caller": true
-  },
-  "services": [
-    {
-      "type": "listen",
-      "tag": "wg_input",
-      "listen_addr": "127.0.0.1:${WG_INPUT_PORT}",
-      "timeout": 120,
-      "replace_old_mapping": true,
-      "detour": ["load_balancer"]
-    },
-    {
-      "type": "forward",
-      "tag": "redundant_forward1",
-      "forwarders": ["${LINE1_ADDR}"],
-      "reconnect_interval": 5,
-      "connection_check_time": 30,
-      "send_keepalive": true,
-      "detour": ["wg_input"],
-      "auth": {
-        "secret": "${SECRET}",
-        "enabled": true,
-        "enable_encryption": false,
-        "heartbeat_interval": 30
-      }
-    },
-    {
-      "type": "forward",
-      "tag": "redundant_forward2",
-      "forwarders": ["${LINE2_ADDR}"],
-      "reconnect_interval": 5,
-      "connection_check_time": 30,
-      "send_keepalive": true,
-      "detour": ["wg_input"],
-      "auth": {
-        "secret": "${SECRET}",
-        "enabled": true,
-        "enable_encryption": false,
-        "heartbeat_interval": 30
-      }
-    },
-    {
-      "type": "load_balancer",
-      "tag": "load_balancer",
-      "window_size": 3,
-      "detour": [
-        { "rule": "bps <= ${THRESH}", "targets": ["redundant_forward1", "redundant_forward2"] },
-        { "rule": "(bps > ${THRESH}) && (seq % 2 == 0)", "targets": ["redundant_forward1"] },
-        { "rule": "(bps > ${THRESH}) && (seq % 2 == 1)", "targets": ["redundant_forward2"] }
-      ]
-    }
-  ]
-}
-JSON
+  cat > "${CONFIG_FILE}" <<YAML
+buffer_size: 1500
+queue_size: 10240
+worker_count: 4
+logging:
+  level: info
+  format: console
+  output_path: stdout
+  caller: true
+services:
+  - type: listen
+    tag: wg_input
+    listen_addr: 127.0.0.1:${WG_INPUT_PORT}
+    timeout: 120
+    replace_old_mapping: true
+    detour: [load_balancer]
+  - type: forward
+    tag: redundant_forward1
+    forwarders: [${LINE1_ADDR}]
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: true
+    detour: [wg_input]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+  - type: forward
+    tag: redundant_forward2
+    forwarders: [${LINE2_ADDR}]
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: true
+    detour: [wg_input]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 3
+    detour:
+      - rule: "bps <= ${THRESH}"
+        targets: [redundant_forward1, redundant_forward2]
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 0)"
+        targets: [redundant_forward1]
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 1)"
+        targets: [redundant_forward2]
+YAML
   info client_cfg_written
 }
 
@@ -455,68 +444,56 @@ write_server_config() {
   local SECRET="${4}"
   local THRESH="${5}"
 
-  cat > "${CONFIG_FILE}" <<JSON
-{
-  "buffer_size": 1500,
-  "queue_size": 10240,
-  "worker_count": 4,
-  "logging": {
-    "level": "info",
-    "format": "console",
-    "output_path": "stdout",
-    "caller": true
-  },
-  "services": [
-    {
-      "type": "listen",
-      "tag": "server_listen1",
-      "listen_addr": "0.0.0.0:${LISTEN1_PORT}",
-      "timeout": 120,
-      "replace_old_mapping": false,
-      "detour": ["wg_forward"],
-      "auth": {
-        "secret": "${SECRET}",
-        "enabled": true,
-        "enable_encryption": false,
-        "heartbeat_interval": 30
-      }
-    },
-    {
-      "type": "listen",
-      "tag": "server_listen2",
-      "listen_addr": "0.0.0.0:${LISTEN2_PORT}",
-      "timeout": 120,
-      "replace_old_mapping": false,
-      "detour": ["wg_forward"],
-      "auth": {
-        "secret": "${SECRET}",
-        "enabled": true,
-        "enable_encryption": false,
-        "heartbeat_interval": 30
-      }
-    },
-    {
-      "type": "forward",
-      "tag": "wg_forward",
-      "forwarders": ["127.0.0.1:${WG_PORT}"],
-      "reconnect_interval": 5,
-      "connection_check_time": 30,
-      "send_keepalive": false,
-      "detour": ["load_balancer"]
-    },
-    {
-      "type": "load_balancer",
-      "tag": "load_balancer",
-      "window_size": 3,
-      "detour": [
-        { "rule": "bps <= ${THRESH}", "targets": ["server_listen1", "server_listen2"] },
-        { "rule": "(bps > ${THRESH}) && (seq % 2 == 0)", "targets": ["server_listen1"] },
-        { "rule": "(bps > ${THRESH}) && (seq % 2 == 1)", "targets": ["server_listen2"] }
-      ]
-    }
-  ]
-}
-JSON
+  cat > "${CONFIG_FILE}" <<YAML
+buffer_size: 1500
+queue_size: 10240
+worker_count: 4
+logging:
+  level: info
+  format: console
+  output_path: stdout
+  caller: true
+services:
+  - type: listen
+    tag: server_listen1
+    listen_addr: 0.0.0.0:${LISTEN1_PORT}
+    timeout: 120
+    replace_old_mapping: false
+    detour: [wg_forward]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+  - type: listen
+    tag: server_listen2
+    listen_addr: 0.0.0.0:${LISTEN2_PORT}
+    timeout: 120
+    replace_old_mapping: false
+    detour: [wg_forward]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+  - type: forward
+    tag: wg_forward
+    forwarders: [127.0.0.1:${WG_PORT}]
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: false
+    detour: [load_balancer]
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 3
+    detour:
+      - rule: "bps <= ${THRESH}"
+        targets: [server_listen1, server_listen2]
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 0)"
+        targets: [server_listen1]
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 1)"
+        targets: [server_listen2]
+YAML
   info server_cfg_written
 }
 

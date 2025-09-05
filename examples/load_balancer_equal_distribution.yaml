@@ -1,0 +1,44 @@
+buffer_size: 1500
+queue_size: 10240
+worker_count: 4
+logging:
+  level: debug
+  format: console
+  output_path: stdout
+  caller: true
+services:
+  - type: listen
+    tag: client_listen
+    listen_addr: 0.0.0.0:5202
+    timeout: 120
+    replace_old_mapping: true
+    detour:
+      - load_balancer
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 10
+    detour:
+      - rule: seq % 2 == 0
+        targets:
+          - server_a
+      - rule: seq % 2 == 1
+        targets:
+          - server_b
+  - type: forward
+    tag: server_a
+    forwarders:
+      - 192.168.1.10:5201
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: true
+    detour:
+      - client_listen
+  - type: forward
+    tag: server_b
+    forwarders:
+      - 192.168.1.11:5201
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: true
+    detour:
+      - client_listen

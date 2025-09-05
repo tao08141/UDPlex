@@ -16,7 +16,7 @@ UDPlex is an efficient UDP packet bidirectional forwarding tool that supports fo
 
 ## Usage
 
-1. Edit the config.json file to configure listening addresses and forwarding targets
+1. Edit the config.yaml file to configure listening addresses and forwarding targets
 2. Run the program:
 
 ```bash
@@ -24,7 +24,7 @@ UDPlex is an efficient UDP packet bidirectional forwarding tool that supports fo
 ./UDPlex
 
 # Or specify configuration file path
-./UDPlex -c /path/to/config.json
+./UDPlex -c /path/to/config.yaml
 ```
 
 ## Docker Usage
@@ -37,12 +37,12 @@ docker pull ghcr.io/tao08141/udplex:latest
 
 # Run container (using host network mode)
 docker run -d --name udplex --network host \
-  -v $(pwd)/config.json:/app/config.json \
+  -v $(pwd)/config.yaml:/app/config.yaml \
   ghcr.io/tao08141/udplex:latest
 
 # Using port mapping mode (if not using host network mode)
 docker run -d --name udplex \
-  -v $(pwd)/config.json:/app/config.json \
+  -v $(pwd)/config.yaml:/app/config.yaml \
   -p 9000:9000/udp \
   ghcr.io/tao08141/udplex:latest
 ```
@@ -56,7 +56,7 @@ mkdir udplex && cd udplex
 # Download docker-compose.yml file
 curl -o docker-compose.yml https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/docker-compose.yml
 # Download configuration file
-curl -o config.json https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/examples/basic.json
+curl -o config.yaml https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/examples/basic.yaml
 ```
 
 2. Start the service:
@@ -142,14 +142,14 @@ UDPlex provides RESTful API interfaces to query component status and connection 
 
 The examples directory contains configuration examples for various use cases:
 
-- [**basic.json**](examples/basic.json) - Basic UDP forwarding configuration example
-- [**auth_client.json**](examples/auth_client.json) - Authenticated UDP client configuration
-- [**auth_server.json**](examples/auth_server.json) - Authenticated UDP server configuration
-- [**redundant_client.json**](examples/redundant_client.json) - UDP redundancy client configuration, sends traffic to multiple servers simultaneously
-- [**redundant_server.json**](examples/redundant_server.json) - UDP redundancy server configuration, receives client traffic and forwards
-- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP upstream/downstream separation client configuration
-- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP upstream/downstream separation server configuration
-- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic
-- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
-- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M
-- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - Equal load distribution configuration, distributes data to two servers in 1:1 ratio
+- [**basic.yaml**](examples/basic.yaml) - Basic UDP forwarding configuration example
+- [**auth_client.yaml**](examples/auth_client.yaml) - Authenticated UDP client configuration
+- [**auth_server.yaml**](examples/auth_server.yaml) - Authenticated UDP server configuration
+- [**redundant_client.yaml**](examples/redundant_client.yaml) - UDP redundancy client configuration, sends traffic to multiple servers simultaneously
+- [**redundant_server.yaml**](examples/redundant_server.yaml) - UDP redundancy server configuration, receives client traffic and forwards
+- [**wg_bidirectional_client.yaml**](examples/wg_bidirectional_client.yaml) - WireGuard UDP upstream/downstream separation client configuration
+- [**wg_bidirectional_server.yaml**](examples/wg_bidirectional_server.yaml) - WireGuard UDP upstream/downstream separation server configuration
+- [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic
+- [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
+- [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M
+- [**load_balancer_equal_distribution.yaml**](examples/load_balancer_equal_distribution.yaml) - Equal load distribution configuration, distributes data to two servers in 1:1 ratio

@@ -15,18 +15,15 @@ Filter 组件负责根据协议特征对数据包进行过滤和分类，将不�
 
 ## 配置示例
 
-```json
-{
-    "type": "filter",
-    "tag": "protocol_filter",
-    "use_proto_detectors": ["wireguard", "openvpn", "game_protocol"],
-    "detour": {
-        "wireguard": ["wg_forward"],
-        "openvpn": ["ovpn_forward"],
-        "game_protocol": ["game_forward"]
-    },
-    "detour_miss": ["default_forward"]
-}
+```yaml
+type: filter
+tag: protocol_filter
+use_proto_detectors: [wireguard, openvpn, game_protocol]
+detour:
+  wireguard: [wg_forward]
+  openvpn: [ovpn_forward]
+  game_protocol: [game_forward]
+detour_miss: [default_forward]
 ```
 
 ## 工作原理

@@ -6,7 +6,7 @@ services:
     container_name: udplex
     restart: always
     volumes:
-      - ./config.json:/app/config.json
+      - ./config.yaml:/app/config.yaml
     network_mode: host
     logging:
       options:

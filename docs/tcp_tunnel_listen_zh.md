@@ -17,21 +17,19 @@ TCP Tunnel Listen 组件负责监听 TCP 连接，接收通过 TCP 隧道传输�
 
 ## 配置示例
 
-```json
-{
-    "type": "tcp_tunnel_listen",
-    "tag": "tcp_tunnel_server",
-    "listen_addr": "0.0.0.0:9001",
-    "timeout": 300,
-    "no_delay": true,
-    "detour": ["forward_component"],
-    "auth": {
-        "enabled": true,
-        "secret": "your-strong-password",
-        "enable_encryption": true,
-        "heartbeat_interval": 30
-    }
-}
+```yaml
+type: tcp_tunnel_listen
+tag: tcp_tunnel_server
+listen_addr: 0.0.0.0:9001
+timeout: 300
+no_delay: true
+detour:
+  - forward_component
+auth:
+  enabled: true
+  secret: your-strong-password
+  enable_encryption: true
+  heartbeat_interval: 30
 ```
 
 ## 工作原理

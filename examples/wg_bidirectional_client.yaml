@@ -1,0 +1,63 @@
+buffer_size: 1500
+queue_size: 10240
+worker_count: 4
+services:
+  - type: listen
+    tag: client_listen
+    listen_addr: 0.0.0.0:7000
+    timeout: 120
+    replace_old_mapping: true
+    detour: [client_filter_wg]
+  - type: filter
+    tag: client_filter_wg
+    use_proto_detectors: [wg]
+    detour:
+      wg: [client_forward_down, client_forward_up]
+    detour_miss: [client_forward_up]
+  - type: forward
+    tag: client_forward_up
+    forwarders:
+      - server1.example.com:9000
+      - server2.example.com:9000
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: false
+    detour: [client_listen]
+  - type: forward
+    tag: client_forward_down
+    forwarders:
+      - server1.example.com:9001
+      - server2.example.com:9001
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: false
+    detour: [client_listen]
+protocol_detectors:
+  wg:
+    signatures:
+      - offset: 0
+        bytes: "04000000"
+        mask: FFFFFFFF
+        hex: true
+        length:
+          min: 32
+          max: 32
+        description: WireGuard Keepalive message
+      - offset: 0
+        bytes: "01000000"
+        mask: FFFFFFFF
+        hex: true
+        length:
+          min: 148
+          max: 148
+        description: WireGuard Init
+      - offset: 0
+        bytes: "02000000"
+        mask: FFFFFFFF
+        hex: true
+        length:
+          min: 92
+          max: 92
+        description: WireGuard Response
+    match_logic: OR
+    description: WireGuard Protocol

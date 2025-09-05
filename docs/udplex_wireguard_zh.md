@@ -56,7 +56,7 @@ sudo bash ./udplex-wg-manager.sh install
 
 完成后，关键文件：
 - /opt/udplex/docker-compose.yml
-- /opt/udplex/config.json（已内置智能分流规则）
+- /opt/udplex/config.yaml（已内置智能分流规则）
 - /etc/wireguard/wg0.conf
 
 ## 启动与开机自启
@@ -87,7 +87,7 @@ sudo bash ./udplex-wg-manager.sh lang en    # 切换脚本语言（zh/en）
 
 ## 智能分流与阈值
 
-脚本内置的 `config.json` 已包含基于带宽与序号（seq）的分流：
+脚本内置的 `config.yaml` 已包含基于带宽与序号（seq）的分流：
 - 当 bps ≤ 阈值（默认 50Mbps）时：两条线路冗余发送，降低丢包
 - 当 bps > 阈值时：按照数据包序号奇偶拆分到不同线路，避免带宽浪费
 

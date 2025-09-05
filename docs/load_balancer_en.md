@@ -121,25 +121,19 @@ In LoadBalancerComponent rule expressions, you can use variables in the format `
 
 For example:
 
-```json
-{
-    "type": "load_balancer",
-    "tag": "load_balancer",
-    "detour": [
-        {
-            "rule": "available_client_forward",
-            "targets": ["client_forward"]
-        },
-        {
-            "rule": "available_backup_listen",
-            "targets": ["backup_listen"]
-        },
-        {
-            "rule": "!available_client_forward && !available_backup_listen",
-            "targets": ["fallback_forward"]
-        }
-    ]
-}
+```yaml
+type: load_balancer
+tag: load_balancer
+detour:
+  - rule: available_client_forward
+    targets:
+      - client_forward
+  - rule: available_backup_listen
+    targets:
+      - backup_listen
+  - rule: '!available_client_forward && !available_backup_listen'
+    targets:
+      - fallback_forward
 ```
 
 In this example:
@@ -161,4 +155,4 @@ For components that do not support availability checking, the LoadBalancerCompon
 
 ### Example Configuration
 
-See the `examples/load_balancer_availability_test.json` file to learn how to use the availability checking feature in your configuration.
+See the `examples/load_balancer_test.yaml` file to learn how to use the availability checking feature in your configuration.

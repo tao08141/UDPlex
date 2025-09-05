@@ -1,0 +1,35 @@
+buffer_size: 1500
+queue_size: 10240
+worker_count: 4
+logging:
+  level: debug
+  format: console
+  output_path: stdout
+  caller: true
+services:
+  - type: listen
+    tag: client_listen
+    listen_addr: 0.0.0.0:5202
+    timeout: 120
+    replace_old_mapping: true
+    detour: [load_balancer]
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 10
+    detour:
+      - rule: available_client_forward && seq % 2 == 0
+        targets: [client_forward]
+      - rule: available_client_forward && seq % 2 == 1
+        targets: [client_forward]
+  - type: forward
+    tag: client_forward
+    forwarders: [127.0.0.1:5201]
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: true
+    detour: [client_listen]
+api:
+  enabled: true
+  port: 8080
+  host: 0.0.0.0
+  h5_files_path: ./h5

@@ -17,21 +17,19 @@ Listen 组件负责监听指定的 UDP 端口，接收来自客户端的数据�
 
 ## 配置示例
 
-```json
-{
-    "type": "listen",
-    "tag": "client_listen",
-    "listen_addr": "0.0.0.0:9000",
-    "timeout": 120,
-    "replace_old_mapping": true,
-    "detour": ["forward_component"],
-    "auth": {
-        "enabled": true,
-        "secret": "your-strong-password",
-        "enable_encryption": true,
-        "heartbeat_interval": 30
-    }
-}
+```yaml
+type: listen
+tag: client_listen
+listen_addr: 0.0.0.0:9000
+timeout: 120
+replace_old_mapping: true
+detour:
+  - forward_component
+auth:
+  enabled: true
+  secret: your-strong-password
+  enable_encryption: true
+  heartbeat_interval: 30
 ```
 
 ## 工作原理

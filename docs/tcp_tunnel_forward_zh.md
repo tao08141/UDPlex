@@ -17,21 +17,21 @@ TCP Tunnel Forward 组件负责建立到 TCP 隧道服务器的连接，将 UDP 
 
 ## 配置示例
 
-```json
-{
-    "type": "tcp_tunnel_forward",
-    "tag": "tcp_tunnel_client",
-    "forwarders": ["203.0.113.1:9001:2", "203.0.113.2:9001:2"],
-    "connection_check_time": 30,
-    "no_delay": true,
-    "detour": ["listen_component"],
-    "auth": {
-        "enabled": true,
-        "secret": "your-strong-password",
-        "enable_encryption": true,
-        "heartbeat_interval": 30
-    }
-}
+```yaml
+type: tcp_tunnel_forward
+tag: tcp_tunnel_client
+forwarders:
+  - 203.0.113.1:9001:2
+  - 203.0.113.2:9001:2
+connection_check_time: 30
+no_delay: true
+detour:
+  - listen_component
+auth:
+  enabled: true
+  secret: your-strong-password
+  enable_encryption: true
+  heartbeat_interval: 30
 ```
 
 ## 工作原理

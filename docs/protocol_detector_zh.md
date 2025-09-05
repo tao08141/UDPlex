@@ -5,26 +5,21 @@
 
 ## 配置格式
 
-```json
-{
-  "protocol_detectors": {
-    "名称": {
-      "signatures": [
-        {
-          "offset": 0,
-          "bytes": "匹配字节序列",
-          "mask": "应用的位掩码",
-          "hex": true,
-          "length": { "min": 20, "max": 1500 },
-          "contains": "包含的字节序列",
-          "description": "特征描述"
-        }
-      ],
-      "match_logic": "AND",
-      "description": "协议检测器描述"
-    }
-  }
-}
+```yaml
+protocol_detectors:
+  名称:
+    signatures:
+      - offset: 0
+        bytes: 匹配字节序列
+        mask: 应用的位掩码
+        hex: true
+        length:
+          min: 20
+          max: 1500
+        contains: 包含的字节序列
+        description: 特征描述
+    match_logic: AND
+    description: 协议检测器描述
 ```
 
 **注意**：
@@ -53,40 +48,29 @@
 
 ## 配置示例
 
-```json
-{
-  "protocol_detectors": {
-    "wireguard": {
-      "signatures": [
-        {
-          "offset": 0,
-          "bytes": "0400000000",
-          "hex": true,
-          "length": { "min": 20, "max": 1500 },
-          "description": "WireGuard 握手初始化包"
-        }
-      ],
-      "match_logic": "OR",
-      "description": "WireGuard VPN 协议检测器"
-    },
-    "game_protocol": {
-      "signatures": [
-        {
-          "offset": 0,
-          "bytes": "4741",
-          "hex": true,
-          "description": "游戏协议头部标识"
-        },
-        {
-          "contains": "GAME_SERVER",
-          "description": "游戏服务器标识字符串"
-        }
-      ],
-      "match_logic": "AND",
-      "description": "特定游戏协议检测器"
-    }
-  }
-}
+```yaml
+protocol_detectors:
+  wireguard:
+    signatures:
+      - offset: 0
+        bytes: "0400000000"
+        hex: true
+        length:
+          min: 20
+          max: 1500
+        description: WireGuard 握手初始化包
+    match_logic: OR
+    description: WireGuard VPN 协议检测器
+  game_protocol:
+    signatures:
+      - offset: 0
+        bytes: "4741"
+        hex: true
+        description: 游戏协议头部标识
+      - contains: GAME_SERVER
+        description: 游戏服务器标识字符串
+    match_logic: AND
+    description: 特定游戏协议检测器
 ```
 
 ## 工作原理

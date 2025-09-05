@@ -18,22 +18,22 @@ The Forward component is responsible for forwarding packets to one or more targe
 
 ## Configuration Example
 
-```json
-{
-    "type": "forward",
-    "tag": "game_server_forward",
-    "forwarders": ["192.168.1.100:9001", "192.168.1.101:9001"],
-    "reconnect_interval": 5,
-    "connection_check_time": 30,
-    "send_keepalive": true,
-    "detour": ["client_listen"],
-    "auth": {
-        "enabled": true,
-        "secret": "your-strong-password",
-        "enable_encryption": true,
-        "heartbeat_interval": 30
-    }
-}
+```yaml
+type: forward
+tag: game_server_forward
+forwarders:
+  - 192.168.1.100:9001
+  - 192.168.1.101:9001
+reconnect_interval: 5
+connection_check_time: 30
+send_keepalive: true
+detour:
+  - client_listen
+auth:
+  enabled: true
+  secret: your-strong-password
+  enable_encryption: true
+  heartbeat_interval: 30
 ```
 
 ## How It Works

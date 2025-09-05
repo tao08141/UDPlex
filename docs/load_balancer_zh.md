@@ -122,25 +122,19 @@ UDPlex 支持在 LoadBalancerComponent 中进行组件可用性检查。这允�
 
 例如：
 
-```json
-{
-    "type": "load_balancer",
-    "tag": "load_balancer",
-    "detour": [
-        {
-            "rule": "available_client_forward",
-            "targets": ["client_forward"]
-        },
-        {
-            "rule": "available_backup_listen",
-            "targets": ["backup_listen"]
-        },
-        {
-            "rule": "!available_client_forward && !available_backup_listen",
-            "targets": ["fallback_forward"]
-        }
-    ]
-}
+```yaml
+type: load_balancer
+tag: load_balancer
+detour:
+  - rule: available_client_forward
+    targets:
+      - client_forward
+  - rule: available_backup_listen
+    targets:
+      - backup_listen
+  - rule: '!available_client_forward && !available_backup_listen'
+    targets:
+      - fallback_forward
 ```
 
 在这个例子中：
@@ -162,4 +156,4 @@ UDPlex 支持在 LoadBalancerComponent 中进行组件可用性检查。这允�
 
 ### 示例配置
 
-查看 `examples/load_balancer_availability_test.json` 文件，了解如何在配置中使用可用性检查功能。
+查看 `examples/load_balancer_test.yaml` 文件，了解如何在配置中使用可用性检查功能。

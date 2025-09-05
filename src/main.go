@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"flag"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -94,7 +96,7 @@ func main() {
 	// Start pprof in the dev environment
 	initPprof()
 
-	configPath := flag.String("c", "config.json", "Path to configuration file")
+	configPath := flag.String("c", "config.yaml", "Path to configuration file")
 	flag.Parse()
 
 	// Load configuration
@@ -103,15 +105,21 @@ func main() {
 		logger.Fatalf("Failed to read config: %v", err)
 	}
 
-	// Strip comments from JSON
-	cleanConfigData, err := stripJSONComments(configData)
-	if err != nil {
-		logger.Fatalf("Failed to process config comments: %v", err)
-	}
-
 	var config Config
-	if err := json.Unmarshal(cleanConfigData, &config); err != nil {
-		logger.Fatalf("Failed to parse config: %v", err)
+	// Determine format by extension; support .yaml/.yml, else JSON (with // and /* */ comment stripping)
+	switch ext := strings.ToLower(filepath.Ext(*configPath)); ext {
+	case ".yaml", ".yml":
+		if err := yaml.Unmarshal(configData, &config); err != nil {
+			logger.Fatalf("Failed to parse YAML config: %v", err)
+		}
+	default:
+		cleanConfigData, err := stripJSONComments(configData)
+		if err != nil {
+			logger.Fatalf("Failed to process config comments: %v", err)
+		}
+		if err := json.Unmarshal(cleanConfigData, &config); err != nil {
+			logger.Fatalf("Failed to parse JSON config: %v", err)
+		}
 	}
 
 	// Initialize the real logger with config

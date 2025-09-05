@@ -15,18 +15,15 @@ The Filter component is responsible for filtering and categorizing packets based
 
 ## Configuration Example
 
-```json
-{
-    "type": "filter",
-    "tag": "protocol_filter",
-    "use_proto_detectors": ["wireguard", "openvpn", "game_protocol"],
-    "detour": {
-        "wireguard": ["wg_forward"],
-        "openvpn": ["ovpn_forward"],
-        "game_protocol": ["game_forward"]
-    },
-    "detour_miss": ["default_forward"]
-}
+```yaml
+type: filter
+tag: protocol_filter
+use_proto_detectors: [wireguard, openvpn, game_protocol]
+detour:
+  wireguard: [wg_forward]
+  openvpn: [ovpn_forward]
+  game_protocol: [game_forward]
+detour_miss: [default_forward]
 ```
 
 ## How It Works

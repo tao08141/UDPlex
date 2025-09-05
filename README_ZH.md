@@ -17,7 +17,7 @@ UDPlex 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量
 
 ## 使用方法
 
-1. 编辑 config.json 文件配置监听地址和转发目标
+1. 编辑 config.yaml 文件配置监听地址和转发目标
 2. 运行程序：
 
 ```bash
@@ -25,7 +25,7 @@ UDPlex 是一个高效的 UDP 数据包双向转发工具，支持将 UDP 流量
 ./UDPlex
 
 # 或指定配置文件路径
-./UDPlex -c /path/to/config.json
+./UDPlex -c /path/to/config.yaml
 ```
 
 ## Docker 使用方法
@@ -38,12 +38,12 @@ docker pull ghcr.io/tao08141/udplex:latest
 
 # 运行容器 (使用主机网络模式)
 docker run -d --name udplex --network host \
-  -v $(pwd)/config.json:/app/config.json \
+  -v $(pwd)/config.yaml:/app/config.yaml \
   ghcr.io/tao08141/udplex:latest
 
 # 使用端口映射模式 (如果不使用主机网络模式)
 docker run -d --name udplex \
-  -v $(pwd)/config.json:/app/config.json \
+  -v $(pwd)/config.yaml:/app/config.yaml \
   -p 9000:9000/udp \
   ghcr.io/tao08141/udplex:latest
 ```
@@ -57,7 +57,7 @@ mkdir udplex && cd udplex
 # 下载 docker-compose.yml 文件
 curl -o docker-compose.yml https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/docker-compose.yml
 # 下载配置文件
-curl -o config.json https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/examples/basic.json
+curl -o config.yaml https://raw.githubusercontent.com/tao08141/UDPlex/refs/heads/master/examples/basic.yaml
 ```
 
 2. 启动服务:
@@ -147,14 +147,14 @@ UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
 
 examples目录包含多种使用场景的配置示例：
 
-- [**basic.json**](examples/basic.json) - UDP转发的基本配置示例
-- [**auth_client.json**](examples/auth_client.json) - 带鉴权的UDP客户端配置
-- [**auth_server.json**](examples/auth_server.json) - 带鉴权的UDP服务端配置
-- [**redundant_client.json**](examples/redundant_client.json) - UDP冗余客户端配置，将流量同时发送到多个服务器
-- [**redundant_server.json**](examples/redundant_server.json) - UDP冗余服务端配置，接收客户端流量并转发
-- [**wg_bidirectional_client.json**](examples/wg_bidirectional_client.json) - WireGuard UDP上下行分离通信客户端配置
-- [**wg_bidirectional_server.json**](examples/wg_bidirectional_server.json) - WireGuard UDP上下行分离通信服务端配置
-- [**tcp_tunnel_server.json**](examples/tcp_tunnel_server.json) - TCP隧道服务端配置，监听TCP连接并转发UDP流量
-- [**tcp_tunnel_client.json**](examples/tcp_tunnel_client.json) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
-- [**load_balancer_bandwidth_threshold.json**](examples/load_balancer_bandwidth_threshold.json) - 基于带宽阈值的负载均衡配置，当流量小于等于100M时向两个服务器转发，大于100M时只向一个服务器转发
-- [**load_balancer_equal_distribution.json**](examples/load_balancer_equal_distribution.json) - 均衡负载配置，以1:1的比例向两个服务器分发数据
+- [**basic.yaml**](examples/basic.yaml) - UDP转发的基本配置示例
+- [**auth_client.yaml**](examples/auth_client.yaml) - 带鉴权的UDP客户端配置
+- [**auth_server.yaml**](examples/auth_server.yaml) - 带鉴权的UDP服务端配置
+- [**redundant_client.yaml**](examples/redundant_client.yaml) - UDP冗余客户端配置，将流量同时发送到多个服务器
+- [**redundant_server.yaml**](examples/redundant_server.yaml) - UDP冗余服务端配置，接收客户端流量并转发
+- [**wg_bidirectional_client.yaml**](examples/wg_bidirectional_client.yaml) - WireGuard UDP上下行分离通信客户端配置
+- [**wg_bidirectional_server.yaml**](examples/wg_bidirectional_server.yaml) - WireGuard UDP上下行分离通信服务端配置
+- [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP隧道服务端配置，监听TCP连接并转发UDP流量
+- [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
+- [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - 基于带宽阈值的负载均衡配置，当流量小于等于100M时向两个服务器转发，大于100M时只向一个服务器转发
+- [**load_balancer_equal_distribution.yaml**](examples/load_balancer_equal_distribution.yaml) - 均衡负载配置，以1:1的比例向两个服务器分发数据

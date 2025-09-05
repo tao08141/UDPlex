@@ -17,21 +17,19 @@ The Listen component is responsible for listening on a specified UDP port, recei
 
 ## Configuration Example
 
-```json
-{
-    "type": "listen",
-    "tag": "client_listen",
-    "listen_addr": "0.0.0.0:9000",
-    "timeout": 120,
-    "replace_old_mapping": true,
-    "detour": ["forward_component"],
-    "auth": {
-        "enabled": true,
-        "secret": "your-strong-password",
-        "enable_encryption": true,
-        "heartbeat_interval": 30
-    }
-}
+```yaml
+type: listen
+tag: client_listen
+listen_addr: 0.0.0.0:9000
+timeout: 120
+replace_old_mapping: true
+detour:
+  - forward_component
+auth:
+  enabled: true
+  secret: your-strong-password
+  enable_encryption: true
+  heartbeat_interval: 30
 ```
 
 ## How It Works

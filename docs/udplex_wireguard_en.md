@@ -56,7 +56,7 @@ Install flow highlights:
 
 Generated files:
 - /opt/udplex/docker-compose.yml
-- /opt/udplex/config.json (smart traffic rules included)
+- /opt/udplex/config.yaml (smart traffic rules included)
 - /etc/wireguard/wg0.conf
 
 ## Start and enable on boot
@@ -85,7 +85,7 @@ sudo bash ./udplex-wg-manager.sh lang en    # Switch script language (zh/en)
 
 ## Smart split and threshold
 
-The generated `config.json` includes a bandwidth-based + sequence-based split:
+The generated `config.yaml` includes a bandwidth-based + sequence-based split:
 - When bps ≤ threshold (default 50 Mbps): send on both lines (redundant), reducing loss
 - When bps > threshold: split by packet sequence parity to avoid waste
 

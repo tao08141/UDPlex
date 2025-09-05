@@ -17,21 +17,21 @@ The TCP Tunnel Forward component is responsible for establishing connections to 
 
 ## Configuration Example
 
-```json
-{
-    "type": "tcp_tunnel_forward",
-    "tag": "tcp_tunnel_client",
-    "forwarders": ["203.0.113.1:9001:2", "203.0.113.2:9001:2"],
-    "connection_check_time": 30,
-    "no_delay": true,
-    "detour": ["listen_component"],
-    "auth": {
-        "enabled": true,
-        "secret": "your-strong-password",
-        "enable_encryption": true,
-        "heartbeat_interval": 30
-    }
-}
+```yaml
+type: tcp_tunnel_forward
+tag: tcp_tunnel_client
+forwarders:
+  - 203.0.113.1:9001:2
+  - 203.0.113.2:9001:2
+connection_check_time: 30
+no_delay: true
+detour:
+  - listen_component
+auth:
+  enabled: true
+  secret: your-strong-password
+  enable_encryption: true
+  heartbeat_interval: 30
 ```
 
 ## How It Works

@@ -6,4 +6,4 @@ WORKDIR /app
 COPY UDPlex /app/
 COPY h5 /app/h5/
 
-ENTRYPOINT ["/app/UDPlex", "-c", "/app/config.json"]
+ENTRYPOINT ["/app/UDPlex", "-c", "/app/config.yaml"]

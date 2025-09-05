@@ -13,11 +13,11 @@ import (
 
 // APIConfig represents the configuration for the API server
 type APIConfig struct {
-	Enabled     bool   `json:"enabled"`
-	Port        int    `json:"port"`
-	Host        string `json:"host"`
-	ServeUI     bool   `json:"serve_ui"`      // Whether to serve UI at root URL
-	H5FilesPath string `json:"h5_files_path"` // Path to H5 files directory
+	Enabled     bool   `json:"enabled" yaml:"enabled"`
+	Port        int    `json:"port" yaml:"port"`
+	Host        string `json:"host" yaml:"host"`
+	ServeUI     bool   `json:"serve_ui" yaml:"serve_ui"`           // Whether to serve UI at root URL
+	H5FilesPath string `json:"h5_files_path" yaml:"h5_files_path"` // Path to H5 files directory
 }
 
 // APIServer represents the RESTful API server
