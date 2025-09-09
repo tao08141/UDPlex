@@ -63,20 +63,10 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	pools := make(map[PoolID]*TcpTunnelConnPool)
 
 	for _, fwd := range cfg.Forwarders {
-
-		addrParts := strings.Split(fwd, ":")
-		if len(addrParts) < 2 {
-			logger.Warnf("Invalid forwarder address: %s", fwd)
+		addr, count, perr := parseForwarderAddress(fwd)
+		if perr != nil {
+			logger.Warnf("Invalid forwarder address '%s': %v", fwd, perr)
 			continue
-		}
-		addr := strings.Join(addrParts[:2], ":")
-		count := 4
-		if len(addrParts) == 3 {
-			var err error
-			count, err = strconv.Atoi(addrParts[2])
-			if err != nil || count < 1 {
-				logger.Warnf("Invalid connection count for %s, using default %d", addr, count)
-			}
 		}
 
 		poolID := PoolID{}
@@ -100,6 +90,40 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		recvBufferSize:      recvBufferSize,
 		sendBufferSize:      sendBufferSize,
 	}
+}
+
+// parseForwarderAddress parses a forwarder string in one of the following formats:
+// - host:port
+// - host:port:count
+// - [ipv6]:port
+// - [ipv6]:port:count
+// It returns a dialable address (with IPv6 properly bracketed) and the connection count (default 4).
+func parseForwarderAddress(s string) (string, int, error) {
+	// Default connection count
+	count := 4
+	addrPart := s
+
+	// Try to peel off an optional trailing ":count"
+	if idx := strings.LastIndex(addrPart, ":"); idx != -1 {
+		tail := addrPart[idx+1:]
+		if n, err := strconv.Atoi(tail); err == nil {
+			if n >= 1 {
+				count = n
+			}
+			addrPart = addrPart[:idx]
+		}
+	}
+
+	// Validate and normalize address using net.SplitHostPort / JoinHostPort
+	host, port, err := net.SplitHostPort(addrPart)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid host:port '%s': %w", addrPart, err)
+	}
+	if port == "" {
+		return "", 0, fmt.Errorf("missing port in '%s'", s)
+	}
+	addr := net.JoinHostPort(host, port)
+	return addr, count, nil
 }
 
 func (f *TcpTunnelForwardComponent) Start() error {
