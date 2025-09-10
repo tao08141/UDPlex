@@ -1,0 +1,50 @@
+buffer_size: 2000
+queue_size: 8192
+worker_count: 4
+
+services:
+  - type: listen
+    tag: in
+    listen_addr: 0.0.0.0:9000
+    detour: [ ipr ]
+
+  - type: ip_router
+    tag: ipr
+    geoip_url: https://github.com/Hackl0us/GeoIP2-CN/raw/release/Country.mmdb
+    geoip_update_interval: 24h
+    detour_miss: [ default_forward ]
+    rules:
+      - rule: "192.168.1.100"
+        targets: [ special_forward ]
+      - rule: "192.168.1.0/21"
+        targets: [ lan_forward ]
+      - rule: "geo:CN"
+        targets: [ china_forward ]
+
+  - type: forward
+    tag: special_forward
+    forwarders:
+      - 203.0.113.10:9100
+
+  - type: forward
+    tag: lan_forward
+    forwarders:
+      - 10.0.0.10:9100
+    detour: [ in ]
+
+  - type: forward
+    tag: china_forward
+    forwarders:
+      - 198.51.100.20:9100
+    detour: [ in ]
+
+  - type: forward
+    tag: default_forward
+    forwarders:
+      - 192.0.2.30:9100
+    detour: [ in ]
+api:
+  enabled: true
+  port: 8080
+  host: 0.0.0.0
+  h5_files_path: ./h5

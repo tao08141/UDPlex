@@ -389,3 +389,47 @@ The API server uses standard HTTP status codes:
 - `404 Not Found`: Component not found
 - `405 Method Not Allowed`: Unsupported HTTP method
 - `500 Internal Server Error`:
+
+### 6. Get IP Router Info
+
+Endpoint: GET /api/ip_router/{tag}
+
+Description: Retrieve runtime information for an ip_router component, including its rules, detour_miss, and GeoIP loader status.
+
+Parameters:
+- tag (path parameter): Component tag
+
+Response Example:
+```json
+{
+  "tag": "ipr",
+  "type": "ip_router",
+  "rules": [
+    { "match": "192.168.1.100", "targets": ["special_forward"] },
+    { "match": "192.168.1.0/21", "targets": ["lan_forward"] },
+    { "match": "geo:CN", "targets": ["china_forward"] }
+  ],
+  "detour_miss": ["default_forward"],
+  "geoip": {
+    "db_loaded": true,
+    "geoip_url": "https://example.com/GeoLite2-Country.mmdb",
+    "geoip_path": "C:/Users/.../udplex_geoip_ipr.mmdb",
+    "update_interval_sec": 86400
+  }
+}
+```
+
+### 7. Trigger IP Router Action
+
+Endpoint: POST /api/ip_router_action/{tag}?action=geoip_update
+
+Description: Manually trigger GeoIP database download and hot-reload for the specified ip_router when geoip_url is configured.
+
+Parameters:
+- tag (path parameter): Component tag
+- action (query): Currently supports "geoip_update"
+
+Response:
+- 200 OK with body "ok" on success
+- 400/500 with error text on failure
+

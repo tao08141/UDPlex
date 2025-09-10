@@ -58,6 +58,8 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/tcp_tunnel_forward/", a.handleGetTcpTunnelForwardConnections)
 	mux.HandleFunc("/api/load_balancer/", a.handleGetLoadBalancerTraffic)
 	mux.HandleFunc("/api/filter/", a.handleGetFilterInfo)
+	mux.HandleFunc("/api/ip_router/", a.handleGetIPRouterInfo)
+	mux.HandleFunc("/api/ip_router_action/", a.handleIPRouterAction)
 
 	// Register H5 files handler if path is configured
 	if a.config.H5FilesPath != "" {
@@ -198,11 +200,27 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 							result["window_size"] = windowSize
 						}
 					case "filter":
-						if useProtoDetectors, ok := serviceConfig["use_proto_detectors"]; ok {
+						if useProtoDetectors, ok := serviceConfig["use_proto_detectors"].(interface{}); ok {
 							result["use_proto_detectors"] = useProtoDetectors
 						}
 						if detourMiss, ok := serviceConfig["detour_miss"]; ok {
 							result["detour_miss"] = detourMiss
+						}
+					case "ip_router":
+						if detourMiss, ok := serviceConfig["detour_miss"]; ok {
+							result["detour_miss"] = detourMiss
+						}
+						if rules, ok := serviceConfig["rules"]; ok {
+							result["rules"] = rules
+						}
+						if geoipMMDB, ok := serviceConfig["geoip_mmdb"]; ok {
+							result["geoip_mmdb"] = geoipMMDB
+						}
+						if geoipURL, ok := serviceConfig["geoip_url"]; ok {
+							result["geoip_url"] = geoipURL
+						}
+						if upd, ok := serviceConfig["geoip_update_interval"]; ok {
+							result["geoip_update_interval"] = upd
 						}
 					}
 				}
@@ -710,6 +728,76 @@ func (a *APIServer) handleH5Files(w http.ResponseWriter, r *http.Request) {
 }
 
 // getContentType returns the appropriate Content-Type based on file extension
+func (a *APIServer) handleGetIPRouterInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tag := r.URL.Path[len("/api/ip_router/"):]
+	if tag == "" {
+		http.Error(w, "Component tag is required", http.StatusBadRequest)
+		return
+	}
+	component := a.router.GetComponentByTag(tag)
+	if component == nil {
+		http.Error(w, "Component not found", http.StatusNotFound)
+		return
+	}
+	ipr, ok := component.(*IPRouterComponent)
+	if !ok {
+		http.Error(w, "Component is not an IPRouterComponent", http.StatusBadRequest)
+		return
+	}
+	// Gather info safely
+	info := map[string]interface{}{
+		"tag":   ipr.GetTag(),
+		"type":  "ip_router",
+		"rules": func() []map[string]any {
+			arr := make([]map[string]any, 0, len(ipr.rules))
+			for _, r := range ipr.rules {
+				arr = append(arr, map[string]any{"match": r.Match, "targets": r.Targets})
+			}
+			return arr
+		}(),
+		"detour_miss": ipr.defaultDetour,
+	}
+	// Geo info
+	geo := map[string]any{}
+	ipr.geoDBMu.RLock()
+	geo["db_loaded"] = (ipr.geoDB != nil)
+	ipr.geoDBMu.RUnlock()
+	geo["geoip_url"] = ipr.geoURL
+	geo["geoip_path"] = ipr.geoIPPath
+	if ipr.updateInterval > 0 { geo["update_interval_sec"] = int(ipr.updateInterval.Seconds()) }
+	info["geoip"] = geo
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(info); err != nil { logger.Errorf("Error encoding JSON: %v", err) }
+}
+
+func (a *APIServer) handleIPRouterAction(w http.ResponseWriter, r *http.Request) {
+	// POST /api/ip_router_action/{tag}?action=geoip_update
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tag := r.URL.Path[len("/api/ip_router_action/"):]
+	if tag == "" { http.Error(w, "Component tag is required", http.StatusBadRequest); return }
+	component := a.router.GetComponentByTag(tag)
+	if component == nil { http.Error(w, "Component not found", http.StatusNotFound); return }
+	ipr, ok := component.(*IPRouterComponent)
+	if !ok { http.Error(w, "Component is not an IPRouterComponent", http.StatusBadRequest); return }
+	action := r.URL.Query().Get("action")
+	if action == "geoip_update" {
+		if ipr.geoURL == "" { http.Error(w, "GeoIP URL not configured", http.StatusBadRequest); return }
+		if err := ipr.downloadAndSwap(); err != nil { http.Error(w, fmt.Sprintf("update failed: %v", err), http.StatusInternalServerError); return }
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
+	http.Error(w, "Unknown action", http.StatusBadRequest)
+}
+
 func (a *APIServer) getContentType(ext string) string {
 	switch ext {
 	case ".html", ".htm":

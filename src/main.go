@@ -202,6 +202,18 @@ func main() {
 				continue
 			}
 			component = NewTcpTunnelForwardComponent(cfg, router)
+		case "ip_router":
+			var cfg IPRouteComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal ip_router config: %v", err)
+				continue
+			}
+			var err error
+			component, err = NewIPRouterComponent(cfg, router)
+			if err != nil {
+				logger.Warnf("Failed to create ip_router component: %v", err)
+				continue
+			}
 		default:
 			logger.Warnf("Unknown component type: %s", typeVal)
 			continue

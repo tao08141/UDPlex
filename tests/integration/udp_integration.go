@@ -159,6 +159,13 @@ func main() {
 			TargetPort:  SEND_PORT,
 			Duration:    TEST_DURATION,
 		},
+		{
+			Name:        "IP Router",
+			ConfigFiles: []string{"ip_router_test.yaml"},
+			TestPort:    LISTEN_PORT,
+			TargetPort:  SEND_PORT,
+			Duration:    TEST_DURATION,
+		},
 	}
 
 	var results []TestResult

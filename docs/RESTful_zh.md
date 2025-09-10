@@ -389,3 +389,47 @@ API服务器使用标准HTTP状态码：
 - `404 Not Found`: 组件未找到
 - `405 Method Not Allowed`: 不支持的HTTP方法
 - `500 Internal Server Error`: 服务器内部错误
+
+### 6. 获取 IP Router 信息
+
+端点：GET /api/ip_router/{tag}
+
+描述：获取指定 ip_router 组件的运行时信息，包括规则、detour_miss 以及 GeoIP 加载状态。
+
+参数：
+- tag（路径参数）：组件标签
+
+响应示例：
+```json
+{
+  "tag": "ipr",
+  "type": "ip_router",
+  "rules": [
+    { "match": "192.168.1.100", "targets": ["special_forward"] },
+    { "match": "192.168.1.0/21", "targets": ["lan_forward"] },
+    { "match": "geo:CN", "targets": ["china_forward"] }
+  ],
+  "detour_miss": ["default_forward"],
+  "geoip": {
+    "db_loaded": true,
+    "geoip_url": "https://example.com/GeoLite2-Country.mmdb",
+    "geoip_path": "C:/Users/.../udplex_geoip_ipr.mmdb",
+    "update_interval_sec": 86400
+  }
+}
+```
+
+### 7. 触发 IP Router 动作
+
+端点：POST /api/ip_router_action/{tag}?action=geoip_update
+
+描述：当配置了 geoip_url 时，手动触发 GeoIP 数据库下载并热更新指定的 ip_router 组件。
+
+参数：
+- tag（路径参数）：组件标签
+- action（查询参数）：当前支持 "geoip_update"
+
+响应：
+- 200 OK，并返回 "ok" 表示成功
+- 400/500：返回错误信息
+

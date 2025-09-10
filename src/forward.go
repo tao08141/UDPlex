@@ -486,6 +486,9 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 
 				}
 
+				// Set source address for downstream components
+				packet.SetSrcAddr(conn.UDPAddr())
+
 				// Forward to detour components
 				if err := f.router.Route(&packet, f.detour); err != nil {
 					logger.Infof("%s: Error routing: %v", f.tag, err)

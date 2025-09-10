@@ -1,0 +1,30 @@
+buffer_size: 2000
+queue_size: 8192
+worker_count: 4
+
+services:
+  - type: listen
+    tag: in
+    listen_addr: 0.0.0.0:5202
+    detour: [ ipr ]
+
+  - type: ip_router
+    tag: ipr
+    geoip_url: https://github.com/Hackl0us/GeoIP2-CN/raw/release/Country.mmdb
+    geoip_update_interval: 24h
+    detour_miss: [ forward2 ]
+    rules:
+      - rule: "127.0.0.1"
+        targets: [ forward1 ]
+
+  - type: forward
+    tag: forward1
+    forwarders:
+      - 127.0.0.1:5201
+    detour: [ in ]
+
+  - type: forward
+    tag: forward2
+    forwarders:
+      - 127.0.0.1:5201
+    detour: [ in ]

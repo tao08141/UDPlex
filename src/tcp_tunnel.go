@@ -361,6 +361,8 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 
 						_, err := (*c.t).GetAuthManager().UnwrapData(&packet)
 						if err == nil {
+							// Set source address for downstream components (TCP remote)
+							packet.SetSrcAddr(c.conn.RemoteAddr())
 							err := (*c.t).GetRouter().Route(&packet, (*c.t).GetDetour())
 							if err != nil {
 								logger.Infof("%s: %s Failed to route packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
