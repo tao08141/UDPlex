@@ -55,7 +55,7 @@ jobs:
             git checkout --orphan metrics
           fi
           # Clean non-metrics files only; preserve existing metrics history
-          find . -mindepth 1 -maxdepth 1 ! -name .git ! -name metrics -exec rm -rf {} +
+          # find . -mindepth 1 -maxdepth 1 ! -name .git ! -name metrics -exec rm -rf {} +
           mkdir -p metrics
           cp -r "$GITHUB_WORKSPACE/metrics/." metrics/ || true
 
