@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UDPlex 性能指标趋势</title>
+  <style>
+    :root{--bg:#0f172a;--panel:#111827;--text:#e5e7eb;--muted:#9ca3af;--accent:#22d3ee}
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,Apple Color Emoji,Segoe UI Emoji}
+    header{padding:16px 20px;background:#0b1220;border-bottom:1px solid #1f2937;position:sticky;top:0;z-index:10}
+    header h1{margin:0;font-size:18px}
+    main{padding:16px;display:grid;gap:16px}
+    .toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .card{background:var(--panel);border:1px solid #1f2937;border-radius:10px;padding:14px}
+    select,button,input{background:#0b1220;color:var(--text);border:1px solid #1f2937;border-radius:8px;padding:8px 10px}
+    .meta{color:var(--muted);font-size:12px}
+    .grid{display:grid;grid-template-columns:1fr;gap:16px}
+    canvas{max-width:100%;height:360px}
+    a{color:var(--accent)}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>UDPlex 性能指标趋势（metrics/）</h1>
+  </header>
+  <main>
+    <section class="card">
+      <div class="toolbar">
+        <label>用例：</label>
+        <select id="caseName"></select>
+        <button id="reloadBtn">重新加载</button>
+        <button id="pickDirBtn">选择本地 metrics 目录</button>
+        <label style="display:none">
+          <input type="file" id="dirInput" webkitdirectory directory multiple style="display:none" />
+        </label>
+        <span class="meta" id="summary"></span>
+      </div>
+    </section>
+    <section class="grid" id="chartsGrid">
+    </section>
+    <section class="card">
+      <h3 style="margin:0 0 8px 0">帮助</h3>
+      <div class="meta">
+        - 直接用浏览器打开本文件，某些环境可能不允许 file:// 读取本地 JSON；若无法加载，请点击“选择本地 metrics 目录”，或使用静态服务（如 python -m http.server 8000 / Live Server）。<br/>
+        - 本页会自动扫描 metrics 目录下的 *.json 文件并按 timestamp 排序（支持三种方式：1）目录开启索引/自动索引页面；2）提供 metrics/index.json 列表；3）本地文件夹选择，无需 CORS）。<br/>
+        - 选择测试用例后，将以多个图表展示所有数值型指标的趋势（每个指标一张图）。
+      </div>
+    </section>
+  </main>
+
+<script>
+(async function(){
+  const caseNameEl = document.getElementById('caseName');
+  const summaryEl = document.getElementById('summary');
+  const reloadBtn = document.getElementById('reloadBtn');
+  const pickDirBtn = document.getElementById('pickDirBtn');
+  const dirInput = document.getElementById('dirInput');
+  const chartsGrid = document.getElementById('chartsGrid');
+
+  const niceNumber = n => (typeof n === 'number') ? (Math.abs(n) >= 1000 ? n.toLocaleString() : n) : n;
+  const fmtTs = s => new Date(s).toLocaleString();
+
+  // Try to discover metric files. Since we have no index, we attempt a few patterns and also brute list based on known names.
+  async function fetchJson(path){
+    const res = await fetch(path);
+    if(!res.ok) throw new Error('HTTP '+res.status+' for '+path);
+    return res.json();
+  }
+
+  let localFilesCache = null; // [{file, json}]
+
+  async function discoverFiles(){
+    // If user selected local directory or provided files, use them first (no CORS)
+    if(Array.isArray(localFilesCache) && localFilesCache.length){
+      return dedupAndSort(localFilesCache);
+    }
+
+    const base = 'metrics/';
+
+    // Strategy 1: metrics/index.json (a simple array of filenames or objects with {file})
+    try{
+      const idx = await fetchJson(base + 'index.json');
+      const files = Array.isArray(idx) ? idx : (idx.files || []);
+      const names = files.map(it => typeof it === 'string' ? it : it.file).filter(Boolean);
+      const out = [];
+      for(const f of names){
+        try{ out.push({file:f, json: await fetchJson(base + f)}); }catch(e){}
+      }
+      if(out.length){
+        const arr = dedupAndSort(out);
+        return arr;
+      }
+    }catch(e){ /* ignore, not present */ }
+
+    // Strategy 2: Fetch directory listing HTML (python -m http.server, nginx autoindex, Apache index)
+    try{
+      const res = await fetch(base, { headers: { 'Accept': 'text/html,*/*' }});
+      if(res.ok){
+        const html = await res.text();
+        const names = extractJsonLinksFromHtml(html);
+        const out = [];
+        for(const f of names){
+          try{ out.push({file:f, json: await fetchJson(base + f)}); }catch(e){}
+        }
+        if(out.length){
+          const arr = dedupAndSort(out);
+          return arr;
+        }
+      }
+    }catch(e){ /* ignore */ }
+
+    // Strategy 3: fallback to latest.json only
+    try{
+      const j = await fetchJson(base + 'latest.json');
+      return dedupAndSort([{file:'latest.json', json:j}]);
+    }catch(e){
+      return [];
+    }
+  }
+
+  function extractJsonLinksFromHtml(html){
+    // very permissive: find href="...json" or links containing .json
+    const set = new Set();
+    const re = /href\s*=\s*"([^"]+\.json)"/gi;
+    let m;
+    while((m = re.exec(html))){
+      const href = m[1];
+      const name = href.split('/').pop();
+      if(name.endsWith('.json')) set.add(name);
+    }
+    // also parse plain listings like: <a>20250909T091022Z.json</a>
+    const re2 = />\s*([0-9A-Za-z_.:-]+\.json)\s*</g;
+    while((m = re2.exec(html))){
+      const name = m[1];
+      if(name.endsWith('.json')) set.add(name);
+    }
+    return Array.from(set).sort();
+  }
+
+  function dedupAndSort(out){
+    const map = new Map();
+    for(const it of out){
+      const key = (it.json.timestamp||'') + '|' + (it.json.sha||it.file);
+      map.set(key, it);
+    }
+    return [...map.values()].sort((a,b)=> new Date(a.json.timestamp) - new Date(b.json.timestamp));
+  }
+
+  function collectCaseNames(files){
+    const set = new Set();
+    for(const {json} of files){
+      (json.results||[]).forEach(r=> set.add(r.name));
+    }
+    return Array.from(set).sort();
+  }
+
+  function collectMetricKeys(files){
+    // union keys from results objects excluding string/bool/name fields
+    const set = new Set();
+    for(const {json} of files){
+      (json.results||[]).forEach(r=>{
+        for(const k of Object.keys(r)){
+          if(k==='name' || typeof r[k]==='boolean') continue;
+          if(typeof r[k] === 'number') set.add(k);
+        }
+      });
+    }
+    return Array.from(set).sort();
+  }
+
+  function buildTrendSeries(files, caseName, key){
+    const xs = [];
+    const ys = [];
+    for(const {json} of files){
+      const ts = json.timestamp || json.time || json.date || null;
+      const rec = (json.results||[]).find(r=> r.name===caseName);
+      if(ts && rec && typeof rec[key] === 'number'){
+        xs.push(ts);
+        ys.push(rec[key]);
+      }
+    }
+    return {xs, ys};
+  }
+
+  let charts = [];
+  function mkLine(ctx, label, xs, ys, color){
+    const data = {
+      labels: xs,
+      datasets: [{
+        label,
+        data: ys,
+        borderColor: color,
+        backgroundColor: color+'33',
+        fill: true,
+        tension: 0.2,
+        pointRadius: 2
+      }]
+    };
+    const options = {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' } },
+        y: { ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' } }
+      },
+      plugins: {
+        legend: { labels: { color: '#e5e7eb' } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${niceNumber(ctx.parsed.y)}` } }
+      }
+    };
+    return new Chart(ctx, {type:'line', data, options});
+  }
+
+  function updateSummary(files, caseName){
+    if(files.length===0){ summaryEl.textContent = '未找到 metrics 数据'; return; }
+    const filtered = caseName ? files.filter(f => Array.isArray(f.json.results) && f.json.results.some(r => r.name === caseName)) : files;
+    if(filtered.length===0){
+      summaryEl.textContent = `共 0 次运行，时间范围：-`;
+      return;
+    }
+    const first = filtered[0].json.timestamp, last = filtered[filtered.length-1].json.timestamp;
+    summaryEl.textContent = `共 ${filtered.length} 次运行，时间范围：${fmtTs(first)} - ${fmtTs(last)}`;
+  }
+
+  async function loadAndRender(){
+    try{
+      summaryEl.textContent = '加载中…';
+      const files = await discoverFiles();
+
+      if(files.length===0 && location.protocol === 'file:'){
+        summaryEl.textContent = '未能通过 fetch 读取本地 metrics（file:// CORS 限制）。请点击上方“选择本地 metrics 目录”导入 JSON。';
+        return;
+      }
+
+      // Fill selectors if empty
+      const names = collectCaseNames(files);
+      const keys = collectMetricKeys(files);
+
+      if(caseNameEl.options.length===0){
+        for(const n of names){
+          const opt = document.createElement('option');
+          opt.value = n; opt.textContent = n; caseNameEl.appendChild(opt);
+        }
+      }
+
+      const caseName = caseNameEl.value || names[0] || '';
+      updateSummary(files, caseName);
+
+      // Clear previous charts
+      charts.forEach(ch => ch.destroy());
+      charts = [];
+      chartsGrid.innerHTML = '';
+
+      // Create a chart per metric key
+      for(const key of keys){
+        const {xs, ys} = buildTrendSeries(files, caseName, key);
+        const card = document.createElement('div');
+        card.className = 'card';
+        const title = document.createElement('h3');
+        title.style.margin = '0 0 8px 0';
+        title.textContent = `${caseName} · ${key}`;
+        const canvas = document.createElement('canvas');
+        card.appendChild(title);
+        card.appendChild(canvas);
+        chartsGrid.appendChild(card);
+        const ctx = canvas.getContext('2d');
+        const color = '#22d3ee';
+        charts.push(mkLine(ctx, `${caseName} · ${key}`, xs.map(fmtTs), ys, color));
+        if(xs.length===0){
+          // If no data, indicate in title
+          title.textContent += '（无数据）';
+        }
+      }
+    }catch(e){
+      console.error(e);
+      summaryEl.textContent = '加载失败：' + e.message + '。若为本地 file:// 访问，请用本地静态服务器打开本页。';
+    }
+  }
+
+  reloadBtn.addEventListener('click', loadAndRender);
+  caseNameEl.addEventListener('change', loadAndRender);
+
+  // Directory picking handlers to bypass CORS when opened via file://
+  pickDirBtn.addEventListener('click', async () => {
+    if('showDirectoryPicker' in window){
+      try{
+        const dirHandle = await window.showDirectoryPicker({ id: 'metrics-dir' });
+        const out = [];
+        for await (const entry of dirHandle.values()){
+          if(entry.kind === 'file' && entry.name.endsWith('.json')){
+            try{
+              const fileHandle = await dirHandle.getFileHandle(entry.name);
+              const file = await fileHandle.getFile();
+              const text = await file.text();
+              const json = JSON.parse(text);
+              out.push({file: entry.name, json});
+            }catch(e){ /* skip bad json */ }
+          }
+        }
+        localFilesCache = out;
+        await loadAndRender();
+      }catch(e){
+        // If user cancels or API blocked, fallback to input element
+        dirInput.click();
+      }
+    }else{
+      dirInput.click();
+    }
+  });
+
+  dirInput.addEventListener('change', async (ev) => {
+    const files = Array.from(ev.target.files || []);
+    const out = [];
+    for(const f of files){
+      if(f.name.endsWith('.json')){
+        try{
+          const text = await f.text();
+          const json = JSON.parse(text);
+          out.push({file: f.name, json});
+        }catch(e){ /* skip */ }
+      }
+    }
+    localFilesCache = out;
+    await loadAndRender();
+  });
+
+  await loadAndRender();
+})();
+</script>
+</body>
+</html>
