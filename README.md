@@ -77,7 +77,7 @@ docker-compose logs -f
 docker-compose down
 ```
 
-> Note: For UDP forwarding applications, it is recommended to use host network mode (network_mode: host) for optimal performance. If precise port mapping control is needed, you can use port mapping mode.
+> Note: For UDP forwarding applications, it is recommended to use host network mode (network_mode: host) for optimal performance.
 
 ## WireGuard One-click Deployment Tutorial
 
@@ -119,13 +119,6 @@ UDPlex supports configuring protocol detectors to identify and classify specific
 
 - [Protocol Detectors](docs/protocol_detector_en.md) - Protocol detector configuration and usage instructions
 
-## Development Roadmap
-- [X] Support packet filtering and selective forwarding
-- [X] Support authentication, encryption, deduplication, and other features
-- [X] Support UDP over TCP forwarding
-- [X] Support more complex load balancing algorithms
-- [X] RESTful API interface
-
 ## RESTful API Interface
 UDPlex provides RESTful API interfaces to query component status and connection information.
 
@@ -142,7 +135,6 @@ UDPlex provides RESTful API interfaces to query component status and connection 
 ## Configuration Examples
 
 The examples directory contains configuration examples for various use cases:
-- [**ip_router.yaml**](examples/ip_router.yaml) - Route by IP/CIDR and GeoIP (supports geoip_url and periodic updates)
 - [**basic.yaml**](examples/basic.yaml) - Basic UDP forwarding configuration example
 - [**auth_client.yaml**](examples/auth_client.yaml) - Authenticated UDP client configuration
 - [**auth_server.yaml**](examples/auth_server.yaml) - Authenticated UDP server configuration
@@ -154,3 +146,4 @@ The examples directory contains configuration examples for various use cases:
 - [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
 - [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M
 - [**load_balancer_equal_distribution.yaml**](examples/load_balancer_equal_distribution.yaml) - Equal load distribution configuration, distributes data to two servers in 1:1 ratio
+- [**ip_router.yaml**](examples/ip_router.yaml) - Route by IP/CIDR and GeoIP

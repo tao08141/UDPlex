@@ -78,7 +78,7 @@ docker-compose logs -f
 docker-compose down
 ```
 
-> 注意：对于 UDP 转发应用，建议使用主机网络模式 (network_mode: host) 以获得最佳性能。如果需要精确控制端口映射，可以使用端口映射模式。
+> 注意：对于 UDP 转发应用，建议使用主机网络模式 (network_mode: host) 以获得最佳性能。
 
 ## WireGuard 一键部署教程
 
@@ -122,13 +122,6 @@ UDPlex 支持通过配置协议检测器来识别和分类 UDP 数据包中的�
 - [协议检测器](docs/protocol_detector_zh.md) - 协议检测器配置和使用说明
 
 
-## 开发计划
-- [X] 支持包过滤和选择性转发
-- [X] 支持鉴权、加密、去重等功能
-- [X] 支持UDP Over TCP的转发
-- [X] 支持更复杂的负载均衡算法
-- [X] RESTful API 接口
-
 ## RESTful API 接口
 UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
 
@@ -146,7 +139,6 @@ UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
 ## 配置示例
 
 examples 目录包含多种使用场景的配置示例：
-- [**ip_router.yaml**](examples/ip_router.yaml) - 按 IP/CIDR 与 GeoIP 路由（支持 geoip_url 与周期性更新）
 - [**basic.yaml**](examples/basic.yaml) - UDP转发的基本配置示例
 - [**auth_client.yaml**](examples/auth_client.yaml) - 带鉴权的UDP客户端配置
 - [**auth_server.yaml**](examples/auth_server.yaml) - 带鉴权的UDP服务端配置
@@ -158,3 +150,4 @@ examples 目录包含多种使用场景的配置示例：
 - [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
 - [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - 基于带宽阈值的负载均衡配置，当流量小于等于100M时向两个服务器转发，大于100M时只向一个服务器转发
 - [**load_balancer_equal_distribution.yaml**](examples/load_balancer_equal_distribution.yaml) - 均衡负载配置，以1:1的比例向两个服务器分发数据
+- [**ip_router.yaml**](examples/ip_router.yaml) - 按 IP/CIDR 与 GeoIP 路由
