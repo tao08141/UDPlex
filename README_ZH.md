@@ -106,7 +106,7 @@ UDPlex 支持多种组件类型，每种组件都有特定的功能和配置参�
 - [TCP Tunnel Listen 组件](docs/tcp_tunnel_listen_zh.md) - TCP 隧道监听端
 - [TCP Tunnel Forward 组件](docs/tcp_tunnel_forward_zh.md) - TCP 隧道转发端
 - [Load Balancer 组件](docs/load_balancer_zh.md) - 负载均衡组件
-
+- [IP Router 组件](docs/ip_router_zh.md) - 基于来源 IP/CIDR 与 GeoIP2 的路由
 
 ### 鉴权配置
 
@@ -145,8 +145,8 @@ UDPlex 提供了 RESTful API 接口，可以查询组件状态和连接信息。
 
 ## 配置示例
 
-examples目录包含多种使用场景的配置示例：
-
+examples 目录包含多种使用场景的配置示例：
+- [**ip_router.yaml**](examples/ip_router.yaml) - 按 IP/CIDR 与 GeoIP 路由（支持 geoip_url 与周期性更新）
 - [**basic.yaml**](examples/basic.yaml) - UDP转发的基本配置示例
 - [**auth_client.yaml**](examples/auth_client.yaml) - 带鉴权的UDP客户端配置
 - [**auth_server.yaml**](examples/auth_server.yaml) - 带鉴权的UDP服务端配置

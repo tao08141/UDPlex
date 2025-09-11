@@ -105,6 +105,7 @@ UDPlex supports multiple component types, each with specific functions and confi
 - [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening endpoint
 - [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding endpoint
 - [Load Balancer Component](docs/load_balancer_en.md) - Load balancing component
+- [IP Router Component](docs/ip_router_en.md) - Route by source IP/CIDR and GeoIP2
 
 ### Authentication Configuration
 
@@ -141,7 +142,7 @@ UDPlex provides RESTful API interfaces to query component status and connection 
 ## Configuration Examples
 
 The examples directory contains configuration examples for various use cases:
-
+- [**ip_router.yaml**](examples/ip_router.yaml) - Route by IP/CIDR and GeoIP (supports geoip_url and periodic updates)
 - [**basic.yaml**](examples/basic.yaml) - Basic UDP forwarding configuration example
 - [**auth_client.yaml**](examples/auth_client.yaml) - Authenticated UDP client configuration
 - [**auth_server.yaml**](examples/auth_server.yaml) - Authenticated UDP server configuration
