@@ -427,11 +427,11 @@ services:
     tag: load_balancer
     window_size: 3
     detour:
-      - rule: "bps <= ${THRESH}"
+      - rule: "bps <= ${THRESH} || !available_redundant_forward1 || !available_redundant_forward2"
         targets: [redundant_forward1, redundant_forward2]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 0)"
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 0) && available_redundant_forward1 && available_redundant_forward2"
         targets: [redundant_forward1]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 1)"
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 1) && available_redundant_forward2 && available_redundant_forward1"
         targets: [redundant_forward2]
 YAML
   info client_cfg_written
@@ -487,11 +487,11 @@ services:
     tag: load_balancer
     window_size: 3
     detour:
-      - rule: "bps <= ${THRESH}"
+      - rule: "bps <= ${THRESH} || !available_server_listen1 || !available_server_listen2"
         targets: [server_listen1, server_listen2]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 0)"
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 0) && available_server_listen1 && available_server_listen2"
         targets: [server_listen1]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 1)"
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 1) && available_server_listen2 && available_server_listen1"
         targets: [server_listen2]
 YAML
   info server_cfg_written
