@@ -184,6 +184,23 @@
     return {xs, ys};
   }
 
+  // Build multi-series for a set of keys (e.g., *_latency_ms)
+  function buildTrendMultiSeries(files, caseName, keys){
+    const xs = [];
+    const series = Object.fromEntries(keys.map(k=>[k, []]));
+    for(const {json} of files){
+      const ts = json.timestamp || json.time || json.date || null;
+      const rec = (json.results||[]).find(r=> r.name===caseName);
+      if(!ts || !rec) continue;
+      xs.push(ts);
+      for(const k of keys){
+        const v = rec[k];
+        series[k].push(typeof v === 'number' ? v : null);
+      }
+    }
+    return {xs, series};
+  }
+
   let charts = [];
   function mkLine(ctx, label, xs, ys, color){
     const data = {
@@ -207,6 +224,40 @@
       plugins: {
         legend: { labels: { color: '#e5e7eb' } },
         tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${niceNumber(ctx.parsed.y)}` } }
+      }
+    };
+    return new Chart(ctx, {type:'line', data, options});
+  }
+
+  function mkLineMulti(ctx, title, xs, seriesMap, colorMap, unit){
+    const datasets = Object.keys(seriesMap).map((k, idx) => {
+      const color = colorMap[k] || colorMap[idx] || '#22d3ee';
+      return {
+        label: k,
+        data: seriesMap[k],
+        borderColor: color,
+        backgroundColor: color + '33',
+        fill: false,
+        tension: 0.2,
+        pointRadius: 2,
+        spanGaps: true
+      };
+    });
+    const data = { labels: xs, datasets };
+    const options = {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' } },
+        y: { ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' }, title: { display: !!unit, text: unit || '', color: '#cbd5e1' } }
+      },
+      plugins: {
+        legend: { labels: { color: '#e5e7eb' } },
+        tooltip: { callbacks: { label: (ctx) => {
+          const v = ctx.parsed.y;
+          if(v == null) return `${ctx.dataset.label}: -`;
+          const num = Math.abs(v) < 1 ? v.toFixed(3) : (Math.abs(v) < 100 ? v.toFixed(2) : v.toFixed(0));
+          return `${ctx.dataset.label}: ${num}${unit ? ' '+unit : ''}`;
+        } } }
       }
     };
     return new Chart(ctx, {type:'line', data, options});
@@ -244,7 +295,7 @@
         }
       }
 
-      const caseName = caseNameEl.value || names[0] || '';
+  const caseName = caseNameEl.value || names[0] || '';
       updateSummary(files, caseName);
 
       // Clear previous charts
@@ -252,8 +303,44 @@
       charts = [];
       chartsGrid.innerHTML = '';
 
-      // Create a chart per metric key
-      for(const key of keys){
+      // Split latency metrics and others
+      const latencyKeysAll = keys.filter(k => k.endsWith('_latency_ms'));
+      const otherKeys = keys.filter(k => !k.endsWith('_latency_ms'));
+
+      // If there are latency keys, render them in a single multi-series chart
+      if(latencyKeysAll.length){
+        // Order common latency keys sensibly
+        const ORDER = ['min_latency_ms','p50_latency_ms','avg_latency_ms','p95_latency_ms','p99_latency_ms','max_latency_ms'];
+        const latencyKeys = [...latencyKeysAll].sort((a,b)=>{
+          const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b);
+          if(ia!==-1 && ib!==-1) return ia-ib;
+          if(ia!==-1) return -1;
+          if(ib!==-1) return 1;
+          return a.localeCompare(b);
+        });
+
+        const {xs, series} = buildTrendMultiSeries(files, caseName, latencyKeys);
+        const card = document.createElement('div');
+        card.className = 'card';
+        const title = document.createElement('h3');
+        title.style.margin = '0 0 8px 0';
+        title.textContent = `${caseName} · Latency (ms)`;
+        const canvas = document.createElement('canvas');
+        card.appendChild(title);
+        card.appendChild(canvas);
+        chartsGrid.appendChild(card);
+        const ctx = canvas.getContext('2d');
+        const palette = ['#22d3ee','#34d399','#fbbf24','#f59e0b','#f472b6','#a78bfa','#60a5fa','#ef4444'];
+        const colorMap = {};
+        latencyKeys.forEach((k,i)=> colorMap[k] = palette[i % palette.length]);
+        charts.push(mkLineMulti(ctx, `${caseName} · Latency (ms)`, xs.map(fmtTs), series, colorMap, 'ms'));
+        if(xs.length===0){
+          title.textContent += '（无数据）';
+        }
+      }
+
+      // Render other numeric metrics one per chart
+      for(const key of otherKeys){
         const {xs, ys} = buildTrendSeries(files, caseName, key);
         const card = document.createElement('div');
         card.className = 'card';
@@ -268,7 +355,6 @@
         const color = '#22d3ee';
         charts.push(mkLine(ctx, `${caseName} · ${key}`, xs.map(fmtTs), ys, color));
         if(xs.length===0){
-          // If no data, indicate in title
           title.textContent += '（无数据）';
         }
       }
