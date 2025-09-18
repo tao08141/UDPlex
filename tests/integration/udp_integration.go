@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,8 +36,15 @@ type TestResult struct {
 	DataIntegrity bool
 	TotalDuration time.Duration
 	Throughput    float64 // packets per second
-	Success       bool
-	Error         string
+	// latency metrics (milliseconds)
+	AvgLatencyMs float64
+	P50LatencyMs float64
+	P95LatencyMs float64
+	P99LatencyMs float64
+	MinLatencyMs float64
+	MaxLatencyMs float64
+	Success      bool
+	Error        string
 }
 
 type PacketData struct {
@@ -65,6 +73,12 @@ type MetricEntry struct {
 	ErrorPackets int64   `json:"error_packets"`
 	LossRate     float64 `json:"loss_rate"`
 	Throughput   float64 `json:"throughput_pps"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	P50LatencyMs float64 `json:"p50_latency_ms"`
+	P95LatencyMs float64 `json:"p95_latency_ms"`
+	P99LatencyMs float64 `json:"p99_latency_ms"`
+	MinLatencyMs float64 `json:"min_latency_ms"`
+	MaxLatencyMs float64 `json:"max_latency_ms"`
 	Success      bool    `json:"success"`
 	Error        string  `json:"error,omitempty"`
 }
@@ -196,13 +210,14 @@ func main() {
 	fmt.Println("\n=== Test Summary ===")
 	passed := 0
 	for _, result := range results {
-		fmt.Printf("%-20s | Sent: %6d | Received: %6d | Err: %4d | Loss: %5.2f%% | Throughput: %8.0f pps | Status: %s\n",
+		fmt.Printf("%-20s | Sent: %6d | Received: %6d | Err: %4d | Loss: %5.2f%% | Thr: %8.0f pps | Lat(ms) avg/p50/p95/p99 min-max: %.2f/%.2f/%.2f/%.2f %.2f-%.2f | Status: %s\n",
 			result.ConfigName,
 			result.Sent,
 			result.Received,
 			result.ErrorPackets,
 			result.LossRate*100,
 			result.Throughput,
+			result.AvgLatencyMs, result.P50LatencyMs, result.P95LatencyMs, result.P99LatencyMs, result.MinLatencyMs, result.MaxLatencyMs,
 			func() string {
 				if result.Success {
 					passed++
@@ -309,7 +324,7 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 	}()
 
 	// Run UDP test
-	sent, received, errorPackets := runUDPTest(config.TestPort, config.TargetPort, config.Duration, withSleep)
+	sent, received, errorPackets, lat := runUDPTest(config.TestPort, config.TargetPort, config.Duration, withSleep)
 
 	result.Sent = sent
 	result.Received = received
@@ -320,6 +335,14 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 		result.LossRate = float64(sent-received) / float64(sent)
 		result.Throughput = float64(received) / config.Duration.Seconds()
 	}
+
+	// Fill latency metrics (convert ns -> ms)
+	result.AvgLatencyMs = lat.AvgNs / 1e6
+	result.P50LatencyMs = lat.P50Ns / 1e6
+	result.P95LatencyMs = lat.P95Ns / 1e6
+	result.P99LatencyMs = lat.P99Ns / 1e6
+	result.MinLatencyMs = float64(lat.MinNs) / 1e6
+	result.MaxLatencyMs = float64(lat.MaxNs) / 1e6
 
 	// Determine if test passed
 	if sent == 0 {
@@ -442,13 +465,31 @@ func startUDPlexProcess(projectRoot, configPath string) *exec.Cmd {
 	}
 }
 
-func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool) (sent, received, errorPackets int64) {
+// LatencySummary conveys aggregate latency stats in nanoseconds.
+type LatencySummary struct {
+	AvgNs float64
+	P50Ns float64
+	P95Ns float64
+	P99Ns float64
+	MinNs int64
+	MaxNs int64
+}
+
+func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool) (sent, received, errorPackets int64, lat LatencySummary) {
 	var sentCount, receivedCount int64
 	var errorCount int64
 	var wg sync.WaitGroup
 
 	// Bitmap to deduplicate received packet IDs (optional but keeps counts accurate)
 	var seenIDs Bitset
+
+	// latency aggregation (receiver goroutine only mutates these)
+	var latCount int64
+	var latSumNs int64
+	var latMinNs int64 = 0
+	var latMaxNs int64 = 0
+	const sampleCap = 20000
+	latSample := make([]int64, 0, sampleCap)
 
 	// Start receiver
 	wg.Add(1)
@@ -492,11 +533,58 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 				if packet.ID > 0 { // IDs start from 1 in our sender
 					idx := packet.ID - 1
 					if !seenIDs.Test(idx) {
+						// compute latency once for the first time we see this packet
+						nowNs := time.Now().UnixNano()
+						if packet.Timestamp > 0 {
+							d := nowNs - packet.Timestamp
+							if d < 0 {
+								d = 0
+							}
+							// aggregate
+							if latCount == 0 {
+								latMinNs, latMaxNs = d, d
+							} else {
+								if d < latMinNs {
+									latMinNs = d
+								}
+								if d > latMaxNs {
+									latMaxNs = d
+								}
+							}
+							latSumNs += d
+							latCount++
+							if len(latSample) < sampleCap {
+								latSample = append(latSample, d)
+							}
+						}
 						seenIDs.Set(idx)
 						atomic.AddInt64(&receivedCount, 1)
 					}
 				} else {
 					// Fallback: count ID==0 packets without dedup to avoid underflow
+					// still compute latency if possible
+					nowNs := time.Now().UnixNano()
+					if packet.Timestamp > 0 {
+						d := nowNs - packet.Timestamp
+						if d < 0 {
+							d = 0
+						}
+						if latCount == 0 {
+							latMinNs, latMaxNs = d, d
+						} else {
+							if d < latMinNs {
+								latMinNs = d
+							}
+							if d > latMaxNs {
+								latMaxNs = d
+							}
+						}
+						latSumNs += d
+						latCount++
+						if len(latSample) < sampleCap {
+							latSample = append(latSample, d)
+						}
+					}
 					atomic.AddInt64(&receivedCount, 1)
 				}
 			}
@@ -556,7 +644,35 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 	received = atomic.LoadInt64(&receivedCount)
 	errorPackets = atomic.LoadInt64(&errorCount)
 
-	return sent, received, errorPackets
+	// finalize latency summary
+	if latCount > 0 {
+		lat.AvgNs = float64(latSumNs) / float64(latCount)
+		lat.MinNs = latMinNs
+		lat.MaxNs = latMaxNs
+		if len(latSample) > 0 {
+			sort.Slice(latSample, func(i, j int) bool { return latSample[i] < latSample[j] })
+			// helper to percentile from sample
+			pct := func(p float64) float64 {
+				if len(latSample) == 0 {
+					return 0
+				}
+				// nearest-rank method
+				rank := int(p*float64(len(latSample)-1) + 0.5)
+				if rank < 0 {
+					rank = 0
+				}
+				if rank >= len(latSample) {
+					rank = len(latSample) - 1
+				}
+				return float64(latSample[rank])
+			}
+			lat.P50Ns = pct(0.50)
+			lat.P95Ns = pct(0.95)
+			lat.P99Ns = pct(0.99)
+		}
+	}
+
+	return sent, received, errorPackets, lat
 }
 
 func calculateChecksum(id uint32, timestamp int64, payload []byte) [32]byte {
@@ -604,6 +720,12 @@ func writeJSONMetrics(projectRoot string, results []TestResult, testDuration tim
 			ErrorPackets: r.ErrorPackets,
 			LossRate:     r.LossRate,
 			Throughput:   r.Throughput,
+			AvgLatencyMs: r.AvgLatencyMs,
+			P50LatencyMs: r.P50LatencyMs,
+			P95LatencyMs: r.P95LatencyMs,
+			P99LatencyMs: r.P99LatencyMs,
+			MinLatencyMs: r.MinLatencyMs,
+			MaxLatencyMs: r.MaxLatencyMs,
 			Success:      r.Success,
 			Error:        r.Error,
 		})
