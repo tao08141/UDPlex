@@ -28,14 +28,19 @@ type TestConfig struct {
 }
 
 type TestResult struct {
-	ConfigName    string
-	Sent          int64
-	Received      int64
-	ErrorPackets  int64
-	LossRate      float64
-	DataIntegrity bool
-	TotalDuration time.Duration
-	Throughput    float64 // packets per second
+	ConfigName      string
+	Sent            int64
+	Received        int64
+	ErrorPackets    int64
+	LossRate        float64
+	DataIntegrity   bool
+	TotalDuration   time.Duration
+	Throughput      float64 // packets per second
+	BytesSent       int64   // total bytes sent (application payload size)
+	BytesReceived   int64   // total bytes received (unique packets counted)
+	Mbps            float64 // average megabits per second over the test duration
+	TotalMBytes     float64 // total megabytes received
+	PacketSizeBytes int     // size in bytes of each sent packet
 	// latency metrics (milliseconds)
 	AvgLatencyMs float64
 	P50LatencyMs float64
@@ -67,20 +72,23 @@ type MetricsFile struct {
 }
 
 type MetricEntry struct {
-	Name         string  `json:"name"`
-	Sent         int64   `json:"sent"`
-	Received     int64   `json:"received"`
-	ErrorPackets int64   `json:"error_packets"`
-	LossRate     float64 `json:"loss_rate"`
-	Throughput   float64 `json:"throughput_pps"`
-	AvgLatencyMs float64 `json:"avg_latency_ms"`
-	P50LatencyMs float64 `json:"p50_latency_ms"`
-	P95LatencyMs float64 `json:"p95_latency_ms"`
-	P99LatencyMs float64 `json:"p99_latency_ms"`
-	MinLatencyMs float64 `json:"min_latency_ms"`
-	MaxLatencyMs float64 `json:"max_latency_ms"`
-	Success      bool    `json:"success"`
-	Error        string  `json:"error,omitempty"`
+	Name            string  `json:"name"`
+	Sent            int64   `json:"sent"`
+	Received        int64   `json:"received"`
+	ErrorPackets    int64   `json:"error_packets"`
+	LossRate        float64 `json:"loss_rate"`
+	Throughput      float64 `json:"throughput_pps"`
+	Mbps            float64 `json:"mbps"`
+	TotalMBytes     float64 `json:"total_mbytes"`
+	PacketSizeBytes int     `json:"packet_size_bytes"`
+	AvgLatencyMs    float64 `json:"avg_latency_ms"`
+	P50LatencyMs    float64 `json:"p50_latency_ms"`
+	P95LatencyMs    float64 `json:"p95_latency_ms"`
+	P99LatencyMs    float64 `json:"p99_latency_ms"`
+	MinLatencyMs    float64 `json:"min_latency_ms"`
+	MaxLatencyMs    float64 `json:"max_latency_ms"`
+	Success         bool    `json:"success"`
+	Error           string  `json:"error,omitempty"`
 }
 
 // Bitset is a compact bitmap used to track seen packet IDs with minimal memory.
@@ -210,13 +218,15 @@ func main() {
 	fmt.Println("\n=== Test Summary ===")
 	passed := 0
 	for _, result := range results {
-		fmt.Printf("%-20s | Sent: %6d | Received: %6d | Err: %4d | Loss: %5.2f%% | Thr: %8.0f pps | Lat(ms) avg/p50/p95/p99 min-max: %.2f/%.2f/%.2f/%.2f %.2f-%.2f | Status: %s\n",
+		fmt.Printf("%-20s | Sent: %6d | Received: %6d | Err: %4d | Loss: %5.2f%% | Thr: %8.0f pps | Rate: %6.2f Mbits/s | Total: %6.2f MB | Lat(ms) avg/p50/p95/p99 min-max: %.2f/%.2f/%.2f/%.2f %.2f-%.2f | Status: %s\n",
 			result.ConfigName,
 			result.Sent,
 			result.Received,
 			result.ErrorPackets,
 			result.LossRate*100,
 			result.Throughput,
+			result.Mbps,
+			result.TotalMBytes,
 			result.AvgLatencyMs, result.P50LatencyMs, result.P95LatencyMs, result.P99LatencyMs, result.MinLatencyMs, result.MaxLatencyMs,
 			func() string {
 				if result.Success {
@@ -324,17 +334,29 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 	}()
 
 	// Run UDP test
-	sent, received, errorPackets, lat := runUDPTest(config.TestPort, config.TargetPort, config.Duration, withSleep)
+	sent, received, errorPackets, bytesSent, bytesReceived, lat := runUDPTest(config.TestPort, config.TargetPort, config.Duration, withSleep)
 
 	result.Sent = sent
 	result.Received = received
 	result.ErrorPackets = errorPackets
 	result.TotalDuration = config.Duration
+	result.BytesSent = bytesSent
+	result.BytesReceived = bytesReceived
 
 	if sent > 0 {
 		result.LossRate = float64(sent-received) / float64(sent)
 		result.Throughput = float64(received) / config.Duration.Seconds()
 	}
+	if bytesReceived > 0 {
+		seconds := config.Duration.Seconds()
+		if seconds > 0 {
+			result.Mbps = (float64(bytesReceived) * 8.0) / seconds / 1e6
+		}
+		result.TotalMBytes = float64(bytesReceived) / 1e6
+	}
+
+	// Record per-packet size used by sender
+	result.PacketSizeBytes = int(unsafe.Sizeof(PacketData{}))
 
 	// Fill latency metrics (convert ns -> ms)
 	result.AvgLatencyMs = lat.AvgNs / 1e6
@@ -475,8 +497,9 @@ type LatencySummary struct {
 	MaxNs int64
 }
 
-func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool) (sent, received, errorPackets int64, lat LatencySummary) {
+func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool) (sent, received, errorPackets int64, bytesSent, bytesReceived int64, lat LatencySummary) {
 	var sentCount, receivedCount int64
+	var bytesSentCount, bytesReceivedCount int64
 	var errorCount int64
 	var wg sync.WaitGroup
 
@@ -524,7 +547,7 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 			if n == int(unsafe.Sizeof(PacketData{})) {
 				var packet PacketData
 				copy((*[unsafe.Sizeof(PacketData{})]byte)(unsafe.Pointer(&packet))[:], buffer[:n])
-
+				
 				// Verify data integrity by recomputing checksum from received content
 				if calculateChecksum(packet.ID, packet.Timestamp, packet.Payload[:]) != packet.Checksum {
 					atomic.AddInt64(&errorCount, 1)
@@ -559,6 +582,7 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 						}
 						seenIDs.Set(idx)
 						atomic.AddInt64(&receivedCount, 1)
+						atomic.AddInt64(&bytesReceivedCount, int64(n))
 					}
 				} else {
 					// Fallback: count ID==0 packets without dedup to avoid underflow
@@ -586,6 +610,7 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 						}
 					}
 					atomic.AddInt64(&receivedCount, 1)
+					atomic.AddInt64(&bytesReceivedCount, int64(n))
 				}
 			}
 		}
@@ -627,9 +652,10 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 
 			// Send packet
 			data := (*[unsafe.Sizeof(PacketData{})]byte)(unsafe.Pointer(&packet))[:]
-			_, err := conn.Write(data)
+			n, err := conn.Write(data)
 			if err == nil {
 				atomic.AddInt64(&sentCount, 1)
+				atomic.AddInt64(&bytesSentCount, int64(n))
 			}
 
 			if withSleep {
@@ -672,7 +698,14 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 		}
 	}
 
-	return sent, received, errorPackets, lat
+	// load counters for return
+	sent = atomic.LoadInt64(&sentCount)
+	received = atomic.LoadInt64(&receivedCount)
+	errorPackets = atomic.LoadInt64(&errorCount)
+	bytesSent = atomic.LoadInt64(&bytesSentCount)
+	bytesReceived = atomic.LoadInt64(&bytesReceivedCount)
+
+	return sent, received, errorPackets, bytesSent, bytesReceived, lat
 }
 
 func calculateChecksum(id uint32, timestamp int64, payload []byte) [32]byte {
@@ -714,20 +747,23 @@ func writeJSONMetrics(projectRoot string, results []TestResult, testDuration tim
 
 	for _, r := range results {
 		mf.Results = append(mf.Results, MetricEntry{
-			Name:         r.ConfigName,
-			Sent:         r.Sent,
-			Received:     r.Received,
-			ErrorPackets: r.ErrorPackets,
-			LossRate:     r.LossRate,
-			Throughput:   r.Throughput,
-			AvgLatencyMs: r.AvgLatencyMs,
-			P50LatencyMs: r.P50LatencyMs,
-			P95LatencyMs: r.P95LatencyMs,
-			P99LatencyMs: r.P99LatencyMs,
-			MinLatencyMs: r.MinLatencyMs,
-			MaxLatencyMs: r.MaxLatencyMs,
-			Success:      r.Success,
-			Error:        r.Error,
+			Name:            r.ConfigName,
+			Sent:            r.Sent,
+			Received:        r.Received,
+			ErrorPackets:    r.ErrorPackets,
+			LossRate:        r.LossRate,
+			Throughput:      r.Throughput,
+			Mbps:            r.Mbps,
+			TotalMBytes:     r.TotalMBytes,
+			PacketSizeBytes: r.PacketSizeBytes,
+			AvgLatencyMs:    r.AvgLatencyMs,
+			P50LatencyMs:    r.P50LatencyMs,
+			P95LatencyMs:    r.P95LatencyMs,
+			P99LatencyMs:    r.P99LatencyMs,
+			MinLatencyMs:    r.MinLatencyMs,
+			MaxLatencyMs:    r.MaxLatencyMs,
+			Success:         r.Success,
+			Error:           r.Error,
 		})
 	}
 
