@@ -1,6 +1,6 @@
 module github.com/tao08141/UDPlex
 
-go 1.24.1
+go 1.25.1
 
 require (
 	github.com/expr-lang/expr v1.17.5
