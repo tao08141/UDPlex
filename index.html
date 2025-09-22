@@ -229,6 +229,39 @@
     return new Chart(ctx, {type:'line', data, options});
   }
 
+  // Single-axis line with unit-aware tooltip and y-axis title
+  function mkLineWithUnit(ctx, label, xs, ys, color, unit){
+    const data = {
+      labels: xs,
+      datasets: [{
+        label,
+        data: ys,
+        borderColor: color,
+        backgroundColor: color+'33',
+        fill: true,
+        tension: 0.2,
+        pointRadius: 2
+      }]
+    };
+    const options = {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' } },
+        y: { ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' }, title: { display: !!unit, text: unit || '', color: '#cbd5e1' } }
+      },
+      plugins: {
+        legend: { labels: { color: '#e5e7eb' } },
+        tooltip: { callbacks: { label: (ctx) => {
+          const v = ctx.parsed.y;
+          if(v == null) return `${ctx.dataset.label}: -`;
+          const num = Math.abs(v) < 1 ? v.toFixed(3) : (Math.abs(v) < 100 ? v.toFixed(2) : v.toFixed(0));
+          return `${ctx.dataset.label}: ${num}${unit ? ' '+unit : ''}`;
+        } } }
+      }
+    };
+    return new Chart(ctx, {type:'line', data, options});
+  }
+
   function mkLineMulti(ctx, title, xs, seriesMap, colorMap, unit){
     const datasets = Object.keys(seriesMap).map((k, idx) => {
       const color = colorMap[k] || colorMap[idx] || '#22d3ee';
@@ -257,6 +290,56 @@
           if(v == null) return `${ctx.dataset.label}: -`;
           const num = Math.abs(v) < 1 ? v.toFixed(3) : (Math.abs(v) < 100 ? v.toFixed(2) : v.toFixed(0));
           return `${ctx.dataset.label}: ${num}${unit ? ' '+unit : ''}`;
+        } } }
+      }
+    };
+    return new Chart(ctx, {type:'line', data, options});
+  }
+
+  // Dual-axis chart for throughput_pps (left) and mbps (right)
+  function mkThroughputDual(ctx, title, xs, pps, mbps){
+    const datasets = [];
+    if(pps){
+      datasets.push({
+        label: 'throughput_pps',
+        data: pps,
+        borderColor: '#60a5fa',
+        backgroundColor: '#60a5fa33',
+        tension: 0.2,
+        pointRadius: 2,
+        fill: false,
+        yAxisID: 'y'
+      });
+    }
+    if(mbps){
+      datasets.push({
+        label: 'mbps',
+        data: mbps,
+        borderColor: '#f59e0b',
+        backgroundColor: '#f59e0b33',
+        tension: 0.2,
+        pointRadius: 2,
+        fill: false,
+        yAxisID: 'y1'
+      });
+    }
+    const data = { labels: xs, datasets };
+    const options = {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' } },
+        y: { position: 'left', ticks: { color: '#cbd5e1' }, grid: { color: '#1f2937' }, title: { display: true, text: 'pps', color: '#cbd5e1' } },
+        y1: { position: 'right', ticks: { color: '#cbd5e1' }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Mb/s', color: '#cbd5e1' } }
+      },
+      plugins: {
+        legend: { labels: { color: '#e5e7eb' } },
+        tooltip: { callbacks: { label: (ctx) => {
+          const v = ctx.parsed.y;
+          const key = ctx.dataset.label;
+          if(v == null) return `${key}: -`;
+          const num = Math.abs(v) < 1 ? v.toFixed(3) : (Math.abs(v) < 100 ? v.toFixed(2) : v.toFixed(0));
+          const unit = key === 'mbps' ? 'Mb/s' : 'pps';
+          return `${key}: ${num} ${unit}`;
         } } }
       }
     };
@@ -303,9 +386,10 @@
       charts = [];
       chartsGrid.innerHTML = '';
 
-      // Split latency metrics and others
-      const latencyKeysAll = keys.filter(k => k.endsWith('_latency_ms'));
-      const otherKeys = keys.filter(k => !k.endsWith('_latency_ms'));
+	  // Split latency metrics and others; also reserve special metrics for custom charts
+	  const latencyKeysAll = keys.filter(k => k.endsWith('_latency_ms'));
+	  const specialSet = new Set(['throughput_pps','mbps','total_mbytes','packet_size_bytes']);
+	  const otherKeys = keys.filter(k => !k.endsWith('_latency_ms') && !specialSet.has(k));
 
       // If there are latency keys, render them in a single multi-series chart
       if(latencyKeysAll.length){
@@ -337,6 +421,45 @@
         if(xs.length===0){
           title.textContent += '（无数据）';
         }
+      }
+
+      // Throughput & Bandwidth dual-axis chart
+      const needThroughput = keys.includes('throughput_pps') || keys.includes('mbps');
+      if(needThroughput){
+        const tkeys = ['throughput_pps','mbps'].filter(k => keys.includes(k));
+        const {xs, series} = buildTrendMultiSeries(files, caseName, tkeys);
+        const card = document.createElement('div');
+        card.className = 'card';
+        const title = document.createElement('h3');
+        title.style.margin = '0 0 8px 0';
+        title.textContent = `${caseName} · Throughput (pps) & Bandwidth (Mb/s)`;
+        const canvas = document.createElement('canvas');
+        card.appendChild(title);
+        card.appendChild(canvas);
+        chartsGrid.appendChild(card);
+        const ctx = canvas.getContext('2d');
+        const labels = xs.map(fmtTs);
+        const pps = series['throughput_pps'];
+        const mbps = series['mbps'];
+        charts.push(mkThroughputDual(ctx, title.textContent, labels, pps, mbps));
+        if(labels.length===0){ title.textContent += '（无数据）'; }
+      }
+
+      // Total data volume chart (MB)
+      if(keys.includes('total_mbytes')){
+        const {xs, ys} = buildTrendSeries(files, caseName, 'total_mbytes');
+        const card = document.createElement('div');
+        card.className = 'card';
+        const title = document.createElement('h3');
+        title.style.margin = '0 0 8px 0';
+        title.textContent = `${caseName} · total_mbytes`;
+        const canvas = document.createElement('canvas');
+        card.appendChild(title);
+        card.appendChild(canvas);
+        chartsGrid.appendChild(card);
+        const ctx = canvas.getContext('2d');
+        charts.push(mkLineWithUnit(ctx, `${caseName} · total_mbytes`, xs.map(fmtTs), ys, '#34d399', 'MB'));
+        if(xs.length===0){ title.textContent += '（无数据）'; }
       }
 
       // Render other numeric metrics one per chart
