@@ -1,0 +1,223 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Arial', sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    overflow-x: auto;
+}
+
+.header {
+    background: #16213e;
+    padding: 20px;
+    text-align: center;
+    border-bottom: 2px solid #0f3460;
+}
+
+.header h1 {
+    color: #00d4aa;
+    margin-bottom: 10px;
+}
+
+.controls {
+    margin: 10px 0;
+}
+
+.btn {
+    background: #0f3460;
+    color: #eee;
+    border: none;
+    padding: 8px 16px;
+    margin: 0 5px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.btn:hover {
+    background: #16213e;
+}
+
+.btn.active {
+    background: #00d4aa;
+    color: #1a1a2e;
+}
+
+.status {
+    padding: 10px 20px;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+}
+
+.container {
+    padding: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.components-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.component-card {
+    background: #16213e;
+    border-radius: 8px;
+    padding: 20px;
+    border: 2px solid #0f3460;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.component-card:hover {
+    border-color: #00d4aa;
+    transform: translateY(-2px);
+}
+
+.component-card.highlight {
+    border-color: #ff6b6b !important;
+    box-shadow: 0 0 20px rgba(255, 107, 107, 0.5);
+    animation: pulse 1s ease-in-out;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.component-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.component-tag {
+    font-size: 18px;
+    font-weight: bold;
+    color: #00d4aa;
+}
+
+.component-type {
+    background: #0f3460;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    text-transform: uppercase;
+}
+
+.component-type.listen { background: #4caf50; }
+.component-type.forward { background: #2196f3; }
+.component-type.filter { background: #ff9800; }
+.component-type.load_balancer { background: #9c27b0; }
+.component-type.tcp_tunnel_listen { background: #e91e63; }
+.component-type.tcp_tunnel_forward { background: #795548; }
+.component-type.ip_router { background: #00bcd4; }
+
+.component-details {
+    margin: 10px 0;
+}
+
+.detail-item {
+    display: flex;
+    justify-content: space-between;
+    margin: 5px 0;
+    font-size: 14px;
+}
+
+.detail-label {
+    color: #999;
+    min-width: 120px;
+}
+
+.detail-value {
+    color: #eee;
+    text-align: right;
+    flex: 1;
+}
+
+.detour-section {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #0f3460;
+}
+
+.detour-title {
+    color: #00d4aa;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.detour-tag {
+    display: inline-block;
+    background: #0f3460;
+    color: #eee;
+    padding: 4px 8px;
+    margin: 2px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-size: 12px;
+}
+
+.detour-tag:hover {
+    background: #00d4aa;
+    color: #1a1a2e;
+    transform: scale(1.05);
+}
+
+.detour-protocol {
+    margin: 5px 0;
+}
+
+.protocol-label {
+    color: #ff9800;
+    font-weight: bold;
+    margin-right: 10px;
+}
+
+.connections-info {
+    background: #0f3460;
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 10px;
+}
+
+.connection-item {
+    margin: 5px 0;
+    padding: 5px;
+    background: #1a1a2e;
+    border-radius: 4px;
+}
+
+.status-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 5px;
+}
+
+.status-online { background: #4caf50; }
+.status-offline { background: #f44336; }
+.status-warning { background: #ff9800; }
+
+.error-message {
+    background: #f44336;
+    color: white;
+    padding: 10px;
+    border-radius: 4px;
+    margin: 10px 0;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: #999;
+}
