@@ -331,7 +331,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 func (l *ListenComponent) handlePackets() {
 	cleanupInterval := l.timeout / 2
 	lastCleanupTime := time.Now()
-	shortDeadline := min(time.Second*5, cleanupInterval)
+	shortDeadline := min(time.Second*1, cleanupInterval)
 
 	for {
 		select {

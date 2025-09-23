@@ -15,9 +15,9 @@ services:
     detour: [client_filter_test]
   - type: filter
     tag: client_filter_test
-    use_proto_detectors: [wg]
+    use_proto_detectors: [test]
     detour:
-      wg: [client_forward]
+      test: [client_forward]
     detour_miss: [client_forward]
   - type: forward
     tag: client_forward

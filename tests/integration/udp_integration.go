@@ -203,14 +203,14 @@ func main() {
 			fmt.Printf("✗ %s - Packet Loss Test: FAILED - %s\n", config.Name, resultSleep.Error)
 		}
 
-		// Performance-focused test (no Sleep)
+		// Performance-focused test (with adaptive sleep)
 		fmt.Printf("\n=== %s - Performance Test ===\n", config.Name)
-		resultNoSleep := runTest(projectRoot, examplesDir, config, "Performance Test", false)
-		results = append(results, resultNoSleep)
-		if resultNoSleep.Success {
+		resultAdaptive := runTest(projectRoot, examplesDir, config, "Performance Test", false)
+		results = append(results, resultAdaptive)
+		if resultAdaptive.Success {
 			fmt.Printf("✓ %s - Performance Test: PASSED\n", config.Name)
 		} else {
-			fmt.Printf("✗ %s - Performance Test: FAILED - %s\n", config.Name, resultNoSleep.Error)
+			fmt.Printf("✗ %s - Performance Test: FAILED - %s\n", config.Name, resultAdaptive.Error)
 		}
 	}
 
@@ -514,6 +514,9 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 	const sampleCap = 20000
 	latSample := make([]int64, 0, sampleCap)
 
+	// Adaptive rate limiting
+	var consecutiveErrors int64
+
 	// Start receiver
 	wg.Add(1)
 	go func() {
@@ -532,6 +535,14 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 		}
 		defer conn.Close()
 
+		// Set socket buffer sizes for better performance
+		if err := conn.SetReadBuffer(2 * 1024 * 1024); err != nil {
+			fmt.Printf("Warning: Failed to set read buffer: %v\n", err)
+		}
+		if err := conn.SetWriteBuffer(2 * 1024 * 1024); err != nil {
+			fmt.Printf("Warning: Failed to set write buffer: %v\n", err)
+		}
+
 		conn.SetReadDeadline(time.Now().Add(duration + 5*time.Second))
 
 		buffer := make([]byte, 2048)
@@ -547,7 +558,7 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 			if n == int(unsafe.Sizeof(PacketData{})) {
 				var packet PacketData
 				copy((*[unsafe.Sizeof(PacketData{})]byte)(unsafe.Pointer(&packet))[:], buffer[:n])
-				
+
 				// Verify data integrity by recomputing checksum from received content
 				if calculateChecksum(packet.ID, packet.Timestamp, packet.Payload[:]) != packet.Checksum {
 					atomic.AddInt64(&errorCount, 1)
@@ -634,6 +645,14 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 		}
 		defer conn.Close()
 
+		// Set socket buffer sizes for better performance
+		if err := conn.SetWriteBuffer(2 * 1024 * 1024); err != nil {
+			fmt.Printf("Warning: Failed to set write buffer: %v\n", err)
+		}
+		if err := conn.SetReadBuffer(2 * 1024 * 1024); err != nil {
+			fmt.Printf("Warning: Failed to set read buffer: %v\n", err)
+		}
+
 		startTime := time.Now()
 		var packetID uint32
 
@@ -656,6 +675,15 @@ func runUDPTest(listenPort, sendPort int, duration time.Duration, withSleep bool
 			if err == nil {
 				atomic.AddInt64(&sentCount, 1)
 				atomic.AddInt64(&bytesSentCount, int64(n))
+				// Reset error tracking on success
+				atomic.StoreInt64(&consecutiveErrors, 0)
+			} else {
+				// Track consecutive errors for adaptive backoff
+				errors := atomic.AddInt64(&consecutiveErrors, 1)
+				if errors > 10 {
+					// Adaptive backoff when seeing too many errors
+					time.Sleep(time.Duration(errors) * 10 * time.Microsecond)
+				}
 			}
 
 			if withSleep {
