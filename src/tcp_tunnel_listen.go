@@ -155,7 +155,12 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 				packet.AddRef(1)
 				if err := c.Write(packet); err != nil {
 					packet.Release(1)
-					logger.Infof("%s: Failed to send packet to %s: %v", l.tag, c.conn.RemoteAddr(), err)
+					remote := "<closed>"
+					if c.conn != nil {
+						remote = c.conn.RemoteAddr().String()
+					}
+					logger.Infof("%s: Failed to send packet to %s: %v", l.tag, remote, err)
+					l.Disconnect(c)
 					continue
 				}
 			}
@@ -221,7 +226,14 @@ func (l *TcpTunnelListenComponent) IsAvailable() bool {
 }
 
 func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
-	logger.Infof("%s: Disconnecting %s", l.tag, c.conn.RemoteAddr())
+	if c == nil {
+		return
+	}
+	if c.conn != nil {
+		logger.Infof("%s: Disconnecting %s", l.tag, c.conn.RemoteAddr())
+	} else {
+		logger.Infof("%s: Disconnecting connection (already closed)", l.tag)
+	}
 
 	currentConnections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
 	needsUpdate := false
@@ -264,8 +276,13 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 	packet.length = responseLen
 
 	if err := c.Write(&packet); err != nil {
-		logger.Infof("%s: %s Failed to send auth response: %v", l.GetTag(), c.conn.RemoteAddr(), err)
+		remote := "<closed>"
+		if c.conn != nil {
+			remote = c.conn.RemoteAddr().String()
+		}
+		logger.Infof("%s: %s Failed to send auth response: %v", l.GetTag(), remote, err)
 		packet.Release(1)
+		l.Disconnect(c)
 		return fmt.Errorf("%s: Failed to send auth response: %v", l.GetTag(), err)
 	}
 

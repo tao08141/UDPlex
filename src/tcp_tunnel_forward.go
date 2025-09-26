@@ -184,8 +184,12 @@ func (f *TcpTunnelForwardComponent) Stop() error {
 				continue
 			}
 
-			logger.Infof("%s: Closing connection to %s", f.tag, conn.conn.RemoteAddr())
-			conn.Close()
+			if conn.conn != nil {
+				logger.Infof("%s: Closing connection to %s", f.tag, conn.conn.RemoteAddr())
+			} else {
+				logger.Infof("%s: Closing connection (already nil) in pool %x", f.tag, poolID)
+			}
+
 		}
 	}
 
@@ -293,14 +297,15 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 	err := c.Write(&packet)
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
-		c.Close()
+		// Remove immediately to avoid further selection
+		f.Disconnect(c)
 		return
 	}
 
 	c.heartbeatMissCount++
 	if c.heartbeatMissCount >= 5 {
 		logger.Warnf("%s: Heartbeat missed %d times, disconnecting", f.tag, c.heartbeatMissCount)
-		c.Close()
+		f.Disconnect(c)
 		return
 	}
 
@@ -372,7 +377,7 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 
 				for i := range conns {
 					conn := conns[i]
-					if conn == nil || (*conn).conn == nil {
+					if conn == nil || conn.conn == nil {
 						logger.Warnf("%s: Connection in pool %s is nil or closed, skipping", f.tag, pool.remoteAddr)
 						continue
 					}
@@ -430,7 +435,11 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 			packet.AddRef(1)
 			if err := c.Write(packet); err != nil {
 				packet.Release(1)
-				logger.Infof("%s: Failed to send packet to %s: %v", f.tag, c.conn.RemoteAddr(), err)
+				remote := "<closed>"
+				if c.conn != nil {
+					remote = c.conn.RemoteAddr().String()
+				}
+				logger.Infof("%s: Failed to send packet to %s: %v", f.tag, remote, err)
 				continue
 			}
 		}

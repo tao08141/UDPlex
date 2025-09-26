@@ -94,9 +94,16 @@ func (p *TcpTunnelConnPool) GetNextConn() *TcpTunnelConn {
 		index := atomic.AddUint32(&p.index, 1) % uint32(len(conns))
 
 		conn := conns[index]
-		if conn.conn == nil {
+
+		if conn == nil || conn.conn == nil {
 			logger.Warnf("TcpTunnelConnPool: Connection at index %d is nil or closed", index)
 			continue
+		}
+
+		select {
+		case <-conn.closed:
+			continue
+		default:
 		}
 
 		if !conn.authState.IsAuthenticated() {
@@ -152,13 +159,14 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 func (c *TcpTunnelConn) Close() {
 	c.closeOnce.Do(func() {
 		close(c.closed)
-		close(c.writeQueue)
-		c.writeWg.Wait() // Wait for write goroutine to finish
+		// Wait for write goroutine to finish
+		c.writeWg.Wait()
 		if c.conn != nil {
 			err := c.conn.Close()
 			if err != nil {
 				logger.Warnf("Error closing connection to %s: %v", c.conn.RemoteAddr(), err)
 			}
+			c.conn = nil
 		}
 	})
 }
@@ -176,20 +184,25 @@ type TcpTunnelComponent interface {
 
 func (c *TcpTunnelConn) writeLoop() {
 	defer c.writeWg.Done()
-	defer c.Close()
 
 	for {
 		select {
 		case <-c.closed:
-			logger.Infof("Write loop for %s closed", c.conn.RemoteAddr())
+			if c.conn != nil {
+				logger.Infof("Write loop for %s closed", c.conn.RemoteAddr())
+			}
 			return
 		case <-(*c.t).GetStopChannel():
-			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
+			if c.conn != nil {
+				logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
+			}
 			return
 		case packet, ok := <-c.writeQueue:
 			if !ok {
 				// Channel is closed
-				logger.Infof("Write queue for %s closed", c.conn.RemoteAddr())
+				if c.conn != nil {
+					logger.Infof("Write queue for %s closed", c.conn.RemoteAddr())
+				}
 				return
 			}
 			if c.conn == nil {
@@ -212,6 +225,7 @@ func (c *TcpTunnelConn) writeLoop() {
 				if err != nil {
 					logger.Infof("Write error: %v", err)
 					packet.Release(1)
+					(*c.t).Disconnect(c)
 					return
 				}
 				totalWritten += n
