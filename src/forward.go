@@ -23,6 +23,9 @@ type ForwardConn struct {
 	heartbeatMissCount int
 	lastHeartbeatSent  time.Time
 	poolID             PoolID
+	sendQueue          chan *Packet
+	closeCh            chan struct{}
+	closed             atomic.Bool
 }
 
 // Address returns the remote address string for this forward connection
@@ -67,6 +70,15 @@ func (c *ForwardConn) SetConnected(newConn *net.UDPConn) {
 // TouchReconnectAttempt updates the last reconnect attempt timestamp to now
 func (c *ForwardConn) TouchReconnectAttempt() { c.lastReconnectAttempt = time.Now() }
 
+func (c *ForwardConn) signalClose() {
+	if c == nil || c.closeCh == nil {
+		return
+	}
+	if c.closed.CompareAndSwap(false, true) {
+		close(c.closeCh)
+	}
+}
+
 // ForwardComponent implements a UDP forwarder with authentication
 type ForwardComponent struct {
 	BaseComponent
@@ -88,6 +100,93 @@ type ForwardComponent struct {
 	// Socket optimizations
 	sendBufferSize int // UDP socket send buffer size
 	recvBufferSize int // UDP socket receive buffer size
+	connQueueSize  int
+}
+
+func (f *ForwardComponent) initSendQueue(conn *ForwardConn) {
+	if conn == nil || conn.sendQueue != nil {
+		return
+	}
+	queueSize := f.connQueueSize
+	if queueSize <= 0 {
+		queueSize = 10240
+	}
+	conn.sendQueue = make(chan *Packet, queueSize)
+	conn.closeCh = make(chan struct{})
+	go f.forwardConnSendLoop(conn)
+}
+
+func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
+	if conn == nil || conn.sendQueue == nil {
+		return
+	}
+	for {
+		select {
+		case <-f.GetStopChannel():
+			f.drainForwardQueue(conn)
+			return
+		case <-conn.closeCh:
+			f.drainForwardQueue(conn)
+			return
+		case pkt, ok := <-conn.sendQueue:
+			if !ok {
+				f.drainForwardQueue(conn)
+				return
+			}
+			if pkt == nil {
+				continue
+			}
+			if !conn.IsConnected() || conn.conn == nil {
+				pkt.Release(1)
+				continue
+			}
+			if f.sendTimeout > 0 {
+				if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+					logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+				}
+			}
+			if _, err := conn.conn.Write(pkt.GetData()); err != nil {
+				logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
+				conn.SetDisconnected()
+			}
+			pkt.Release(1)
+		}
+	}
+}
+
+func (f *ForwardComponent) drainForwardQueue(conn *ForwardConn) {
+	if conn == nil || conn.sendQueue == nil {
+		return
+	}
+	for {
+		select {
+		case pkt := <-conn.sendQueue:
+			if pkt != nil {
+				pkt.Release(1)
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (f *ForwardComponent) enqueuePacket(conn *ForwardConn, packet *Packet) {
+	if conn == nil || packet == nil {
+		return
+	}
+	packet.AddRef(1)
+
+	if conn.sendQueue == nil || conn.closed.Load() {
+		packet.Release(1)
+		return
+	}
+	select {
+	case conn.sendQueue <- packet:
+		return
+	default:
+		logger.Infof("%s: Send queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+		packet.Release(1)
+	}
 }
 
 // NewForwardComponent creates a new forward component
@@ -119,6 +218,11 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		sendTimeout = 500 * time.Millisecond
 	}
 
+	queueSize := router.config.QueueSize
+	if queueSize <= 0 {
+		queueSize = 10240
+	}
+
 	forwardID := ForwardID{}
 
 	_, err = rand.Read(forwardID[:])
@@ -140,6 +244,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		sendTimeout:         sendTimeout,
 		recvBufferSize:      cfg.RecvBufferSize,
 		sendBufferSize:      cfg.SendBufferSize,
+		connQueueSize:       queueSize,
 	}
 }
 
@@ -215,6 +320,7 @@ func (f *ForwardComponent) Stop() error {
 		if conn.conn != nil {
 			conn.Close()
 		}
+		conn.signalClose()
 	}
 
 	return nil
@@ -365,6 +471,8 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 		lastReconnectAttempt: time.Now(),
 		authState:            &AuthState{},
 	}
+
+	f.initSendQueue(forwardConn)
 
 	// Start a goroutine to handle receiving packets
 	go f.readFromForwarder(forwardConn)
@@ -579,9 +687,7 @@ func (f *ForwardComponent) HandlePacket(packet *Packet) error {
 				continue
 			}
 
-			if err := f.router.SendPacket(f, packet, conn); err != nil {
-				logger.Infof("%s: Failed to queue packet for sending: %v", f.tag, err)
-			}
+			f.enqueuePacket(conn, packet)
 		}
 	}
 

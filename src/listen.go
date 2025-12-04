@@ -17,6 +17,9 @@ type ListenConn struct {
 	authState         *AuthState // Authentication state for this connection
 	connID            ConnID     // Unique connection identifier
 	lastHeartbeatSent time.Time  // Last heartbeat sent time
+	sendQueue         chan *Packet
+	closeCh           chan struct{}
+	closed            atomic.Bool
 }
 
 // Address returns the remote address associated with this logical connection.
@@ -32,6 +35,15 @@ func (c *ListenConn) IsAuthenticated() bool {
 
 // Touch updates the last active timestamp to now.
 func (c *ListenConn) Touch() { c.lastActive = time.Now() }
+
+func (c *ListenConn) signalClose() {
+	if c == nil || c.closeCh == nil {
+		return
+	}
+	if c.closed.CompareAndSwap(false, true) {
+		close(c.closeCh)
+	}
+}
 
 // ListenComponent implements a UDP listener with authentication
 type ListenComponent struct {
@@ -49,6 +61,7 @@ type ListenComponent struct {
 	sendTimeout       time.Duration
 	recvBufferSize    int // UDP socket receive buffer size
 	sendBufferSize    int // UDP socket send buffer size
+	connQueueSize     int
 }
 
 // NewListenComponent creates a new listen component
@@ -74,6 +87,10 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	if sendTimeout == 0 {
 		sendTimeout = 500 * time.Millisecond
 	}
+	queueSize := router.config.QueueSize
+	if queueSize <= 0 {
+		queueSize = 10240
+	}
 	component := &ListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
@@ -87,6 +104,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		sendTimeout:       sendTimeout,
 		recvBufferSize:    cfg.RecvBufferSize,
 		sendBufferSize:    cfg.SendBufferSize,
+		connQueueSize:     queueSize,
 	}
 
 	// Initialize an atomic value with an empty map
@@ -162,10 +180,10 @@ func (l *ListenComponent) performCleanup() {
 	// Remove inactive mappings
 	for addrString, mapping := range l.mappings {
 		if now.Sub(mapping.lastActive) > l.timeout {
-			delete(l.mappings, addrString)
-			l.RemoveConnData(mapping.connID)
-			isSync = true
-			logger.Warnf("%s: Removed inactive mapping: %s", l.tag, addrString)
+			if l.removeMapping(addrString) {
+				isSync = true
+				logger.Warnf("%s: Removed inactive mapping: %s", l.tag, addrString)
+			}
 		}
 	}
 
@@ -178,6 +196,91 @@ func (l *ListenComponent) syncMapping() {
 	mappingsTemp := make(map[string]*ListenConn)
 	maps.Copy(mappingsTemp, l.mappings)
 	l.mappingsAtomic.Store(mappingsTemp)
+}
+
+func (l *ListenComponent) initSendQueue(mapping *ListenConn) {
+	if mapping == nil || mapping.sendQueue != nil {
+		return
+	}
+	mapping.sendQueue = make(chan *Packet, l.connQueueSize)
+	mapping.closeCh = make(chan struct{})
+	go l.listenConnSendLoop(mapping)
+}
+
+func (l *ListenComponent) listenConnSendLoop(mapping *ListenConn) {
+	if mapping == nil || mapping.sendQueue == nil {
+		return
+	}
+	for {
+		select {
+		case <-l.GetStopChannel():
+			l.releasePendingPackets(mapping)
+			return
+		case <-mapping.closeCh:
+			l.releasePendingPackets(mapping)
+			return
+		case pkt := <-mapping.sendQueue:
+			if pkt == nil {
+				continue
+			}
+			if l.sendTimeout > 0 {
+				if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
+					logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+				}
+			}
+			if _, err := l.conn.WriteTo(pkt.GetData(), mapping.addr); err != nil {
+				logger.Infof("%s: Failed to send packet: %v", l.tag, err)
+			}
+			pkt.Release(1)
+		}
+	}
+}
+
+func (l *ListenComponent) releasePendingPackets(mapping *ListenConn) {
+	if mapping == nil || mapping.sendQueue == nil {
+		return
+	}
+	for {
+		select {
+		case pkt := <-mapping.sendQueue:
+			if pkt != nil {
+				pkt.Release(1)
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (l *ListenComponent) enqueuePacket(mapping *ListenConn, packet *Packet) {
+	if packet == nil {
+		return
+	}
+
+	packet.AddRef(1)
+
+	if mapping == nil || mapping.sendQueue == nil || mapping.closed.Load() {
+		packet.Release(1)
+		return
+	}
+	select {
+	case mapping.sendQueue <- packet:
+		return
+	default:
+		logger.Infof("%s: Send queue full for %s, dropping packet", l.tag, mapping.addr.String())
+		packet.Release(1)
+	}
+}
+
+func (l *ListenComponent) removeMapping(addrKey string) bool {
+	mapping, exists := l.mappings[addrKey]
+	if !exists {
+		return false
+	}
+	mapping.signalClose()
+	delete(l.mappings, addrKey)
+	l.RemoveConnData(mapping.connID)
+	return true
 }
 
 func (l *ListenComponent) SendPacket(packet *Packet, metadata any) error {
@@ -221,6 +324,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 				authState:  &AuthState{},
 				connID:     l.generateConnID(),
 			}
+			l.initSendQueue(mapping)
 			l.mappings[addrKey] = mapping
 			l.syncMapping()
 		}
@@ -240,9 +344,9 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 			for key, mapping := range l.mappings {
 				if mapping.addr.(*net.UDPAddr).IP.String() == addrIP && key != addrKey {
 					logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
-					delete(l.mappings, key)
-					l.RemoveConnData(mapping.connID)
-					isSync = true
+					if l.removeMapping(key) {
+						isSync = true
+					}
 				}
 			}
 
@@ -318,11 +422,10 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		}
 
 	case MsgTypeDisconnect:
-		// Remove mapping
-		delete(l.mappings, addrKey)
-		l.RemoveConnData(l.mappings[addrKey].connID)
-		l.syncMapping()
-		logger.Infof("%s: Client %s disconnected", l.tag, addr.String())
+		if l.removeMapping(addrKey) {
+			l.syncMapping()
+			logger.Infof("%s: Client %s disconnected", l.tag, addr.String())
+		}
 	}
 
 }
@@ -401,30 +504,34 @@ func (l *ListenComponent) handlePackets() {
 				if l.authManager == nil {
 					addrKey := addr.String()
 					// Check if this is a new mapping
-					if _, exists := l.mappings[addrKey]; !exists {
-						// If we should replace old connections with the same IP
+					mapping, exists := l.mappings[addrKey]
+					if !exists {
 						if l.replaceOldMapping {
 							addrIP := addr.(*net.UDPAddr).IP.String()
-
-							for key, mapping := range l.mappings {
-								if mapping.addr.(*net.UDPAddr).IP.String() == addrIP {
-									logger.Warnf("%s: Replacing old mapping: %s", l.tag, mapping.addr.String())
-									delete(l.mappings, key)
-									l.RemoveConnData(mapping.connID)
+							removed := false
+							for key, existing := range l.mappings {
+								if existing.addr.(*net.UDPAddr).IP.String() == addrIP {
+									logger.Warnf("%s: Replacing old mapping: %s", l.tag, existing.addr.String())
+									if l.removeMapping(key) {
+										removed = true
+									}
 								}
+							}
+							if removed {
+								l.syncMapping()
 							}
 						}
 
-						// Add the new mapping
 						logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
 						connID := l.generateConnID()
-						l.mappings[addrKey] = &ListenConn{addr: addr, lastActive: time.Now(), connID: connID}
+						mapping = &ListenConn{addr: addr, lastActive: time.Now(), connID: connID}
+						l.initSendQueue(mapping)
+						l.mappings[addrKey] = mapping
 						l.syncMapping()
 						packet.SetConnID(connID)
 					} else {
-						// Update the last active time for existing mapping
-						l.mappings[addrKey].lastActive = time.Now()
-						packet.SetConnID(l.mappings[addr.String()].connID)
+						mapping.lastActive = time.Now()
+						packet.SetConnID(mapping.connID)
 					}
 				}
 
@@ -459,10 +566,9 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 				continue
 			}
 
-			if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
-				logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
-			}
+			l.enqueuePacket(mapping, packet)
 		}
+
 	} else {
 		if packet.ConnID() == (ConnID{}) {
 			logger.Infof("%s: Packet has no connection ID, dropping", l.tag)
@@ -476,9 +582,7 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 					return nil
 				}
 
-				if err := l.router.SendPacket(l, packet, mapping.addr); err != nil {
-					logger.Infof("%s: Failed to queue packet for sending: %v", l.tag, err)
-				}
+				l.enqueuePacket(mapping, packet)
 				return nil
 			}
 		}
