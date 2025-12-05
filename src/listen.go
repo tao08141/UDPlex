@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+type listenSendJob struct {
+	packet *Packet
+	addr   net.Addr
+}
+
 // ListenConn represents a logical UDP "connection" from a remote address
 // It encapsulates per-peer state like authentication and activity timestamps.
 type ListenConn struct {
@@ -17,52 +22,10 @@ type ListenConn struct {
 	authState         *AuthState // Authentication state for this connection
 	connID            ConnID     // Unique connection identifier
 	lastHeartbeatSent time.Time  // Last heartbeat sent time
-	sendQueue         chan *Packet
-	closeCh           chan struct{}
-	closed            atomic.Bool
 }
 
 // Address returns the remote address associated with this logical connection.
 func (c *ListenConn) Address() net.Addr { return c.addr }
-
-// ConnID returns the unique identifier for this logical connection.
-func (c *ListenConn) ConnID() ConnID { return c.connID }
-
-// IsAuthenticated reports whether this connection has passed authentication.
-func (c *ListenConn) IsAuthenticated() bool {
-	return c.authState != nil && c.authState.IsAuthenticated()
-}
-
-// Touch updates the last active timestamp to now.
-func (c *ListenConn) Touch() { c.lastActive = time.Now() }
-
-func (c *ListenConn) signalClose() {
-	if c == nil || c.closeCh == nil {
-		return
-	}
-	if c.closed.CompareAndSwap(false, true) {
-		close(c.closeCh)
-	}
-}
-
-// ListenComponent implements a UDP listener with authentication
-type ListenComponent struct {
-	BaseComponent
-
-	listenAddr        string
-	timeout           time.Duration
-	replaceOldMapping bool
-	detour            []string
-	broadcastMode     bool
-	conn              net.PacketConn
-	mappings          map[string]*ListenConn
-	mappingsAtomic    atomic.Value
-	authManager       *AuthManager
-	sendTimeout       time.Duration
-	recvBufferSize    int // UDP socket receive buffer size
-	sendBufferSize    int // UDP socket send buffer size
-	connQueueSize     int
-}
 
 // NewListenComponent creates a new listen component
 func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
@@ -87,13 +50,14 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	if sendTimeout == 0 {
 		sendTimeout = 500 * time.Millisecond
 	}
+
 	queueSize := router.config.QueueSize
 	if queueSize <= 0 {
 		queueSize = 10240
 	}
-	component := &ListenComponent{
-		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
+	component := &ListenComponent{
+		BaseComponent:     NewBaseComponent(cfg.Tag, router, sendTimeout),
 		listenAddr:        cfg.ListenAddr,
 		timeout:           timeout,
 		replaceOldMapping: cfg.ReplaceOldMapping,
@@ -104,7 +68,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		sendTimeout:       sendTimeout,
 		recvBufferSize:    cfg.RecvBufferSize,
 		sendBufferSize:    cfg.SendBufferSize,
-		connQueueSize:     queueSize,
+		sendQueue:         make(chan listenSendJob, queueSize),
 	}
 
 	// Initialize an atomic value with an empty map
@@ -112,6 +76,96 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	component.mappingsAtomic.Store(initialMap)
 
 	return component
+}
+
+// ListenComponent implements a UDP listener with authentication
+type ListenComponent struct {
+	BaseComponent
+
+	listenAddr        string
+	timeout           time.Duration
+	replaceOldMapping bool
+	detour            []string
+	broadcastMode     bool
+	conn              net.PacketConn
+	mappings          map[string]*ListenConn
+	mappingsAtomic    atomic.Value
+	authManager       *AuthManager
+	sendTimeout       time.Duration
+	recvBufferSize    int
+	sendBufferSize    int
+	sendQueue         chan listenSendJob
+}
+
+func (l *ListenComponent) runSendLoop() {
+	for {
+		select {
+		case <-l.GetStopChannel():
+			l.drainSendQueue()
+			return
+		case job := <-l.sendQueue:
+			l.processSendJob(job)
+		}
+	}
+}
+
+func (l *ListenComponent) drainSendQueue() {
+	for {
+		select {
+		case job := <-l.sendQueue:
+			if job.packet != nil {
+				job.packet.Release(1)
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (l *ListenComponent) processSendJob(job listenSendJob) {
+	if job.packet == nil {
+		return
+	}
+	if job.addr == nil {
+		job.packet.Release(1)
+		return
+	}
+	if l.sendTimeout > 0 {
+		if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
+			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+		}
+	}
+	if _, err := l.conn.WriteTo(job.packet.GetData(), job.addr); err != nil {
+		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
+	}
+	job.packet.Release(1)
+}
+
+func (l *ListenComponent) queueSend(addr net.Addr, packet *Packet) {
+	if packet == nil {
+		return
+	}
+
+	packet.AddRef(1)
+
+	if addr == nil {
+		packet.Release(1)
+		return
+	}
+	select {
+	case <-l.GetStopChannel():
+		packet.Release(1)
+		return
+	default:
+	}
+	job := listenSendJob{packet: packet, addr: addr}
+	select {
+	case l.sendQueue <- job:
+		return
+	default:
+		logger.Infof("%s: Send queue full, dropping packet for %s", l.tag, addr.String())
+		packet.Release(1)
+	}
 }
 
 // Start initializes and starts the listener
@@ -150,6 +204,7 @@ func (l *ListenComponent) Start() error {
 
 	// Start packet handling routine
 	go l.handlePackets()
+	go l.runSendLoop()
 
 	return nil
 }
@@ -198,86 +253,11 @@ func (l *ListenComponent) syncMapping() {
 	l.mappingsAtomic.Store(mappingsTemp)
 }
 
-func (l *ListenComponent) initSendQueue(mapping *ListenConn) {
-	if mapping == nil || mapping.sendQueue != nil {
-		return
-	}
-	mapping.sendQueue = make(chan *Packet, l.connQueueSize)
-	mapping.closeCh = make(chan struct{})
-	go l.listenConnSendLoop(mapping)
-}
-
-func (l *ListenComponent) listenConnSendLoop(mapping *ListenConn) {
-	if mapping == nil || mapping.sendQueue == nil {
-		return
-	}
-	for {
-		select {
-		case <-l.GetStopChannel():
-			l.releasePendingPackets(mapping)
-			return
-		case <-mapping.closeCh:
-			l.releasePendingPackets(mapping)
-			return
-		case pkt := <-mapping.sendQueue:
-			if pkt == nil {
-				continue
-			}
-			if l.sendTimeout > 0 {
-				if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
-					logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
-				}
-			}
-			if _, err := l.conn.WriteTo(pkt.GetData(), mapping.addr); err != nil {
-				logger.Infof("%s: Failed to send packet: %v", l.tag, err)
-			}
-			pkt.Release(1)
-		}
-	}
-}
-
-func (l *ListenComponent) releasePendingPackets(mapping *ListenConn) {
-	if mapping == nil || mapping.sendQueue == nil {
-		return
-	}
-	for {
-		select {
-		case pkt := <-mapping.sendQueue:
-			if pkt != nil {
-				pkt.Release(1)
-			}
-		default:
-			return
-		}
-	}
-}
-
-func (l *ListenComponent) enqueuePacket(mapping *ListenConn, packet *Packet) {
-	if packet == nil {
-		return
-	}
-
-	packet.AddRef(1)
-
-	if mapping == nil || mapping.sendQueue == nil || mapping.closed.Load() {
-		packet.Release(1)
-		return
-	}
-	select {
-	case mapping.sendQueue <- packet:
-		return
-	default:
-		logger.Infof("%s: Send queue full for %s, dropping packet", l.tag, mapping.addr.String())
-		packet.Release(1)
-	}
-}
-
 func (l *ListenComponent) removeMapping(addrKey string) bool {
 	mapping, exists := l.mappings[addrKey]
 	if !exists {
 		return false
 	}
-	mapping.signalClose()
 	delete(l.mappings, addrKey)
 	l.RemoveConnData(mapping.connID)
 	return true
@@ -324,7 +304,6 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 				authState:  &AuthState{},
 				connID:     l.generateConnID(),
 			}
-			l.initSendQueue(mapping)
 			l.mappings[addrKey] = mapping
 			l.syncMapping()
 		}
@@ -525,7 +504,6 @@ func (l *ListenComponent) handlePackets() {
 						logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
 						connID := l.generateConnID()
 						mapping = &ListenConn{addr: addr, lastActive: time.Now(), connID: connID}
-						l.initSendQueue(mapping)
 						l.mappings[addrKey] = mapping
 						l.syncMapping()
 						packet.SetConnID(connID)
@@ -561,12 +539,13 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 	mappingsSnapshot := l.mappingsAtomic.Load().(map[string]*ListenConn)
 
 	if l.broadcastMode {
+
 		for _, mapping := range mappingsSnapshot {
 			if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
 				continue
 			}
 
-			l.enqueuePacket(mapping, packet)
+			l.queueSend(mapping.addr, packet)
 		}
 
 	} else {
@@ -582,7 +561,7 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 					return nil
 				}
 
-				l.enqueuePacket(mapping, packet)
+				l.queueSend(mapping.addr, packet)
 				return nil
 			}
 		}
