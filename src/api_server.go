@@ -195,6 +195,23 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 						if sendKeepalive, ok := serviceConfig["send_keepalive"]; ok {
 							result["send_keepalive"] = sendKeepalive
 						}
+					case "tcp_tunnel_listen":
+						if listenAddr, ok := serviceConfig["listen_addr"].(string); ok {
+							result["listen_addr"] = listenAddr
+						}
+						if timeout, ok := serviceConfig["timeout"]; ok {
+							result["timeout"] = timeout
+						}
+					case "tcp_tunnel_forward":
+						if forwarders, ok := serviceConfig["forwarders"]; ok {
+							result["forwarders"] = forwarders
+						}
+						if reconnectInterval, ok := serviceConfig["reconnect_interval"]; ok {
+							result["reconnect_interval"] = reconnectInterval
+						}
+						if sendKeepalive, ok := serviceConfig["send_keepalive"]; ok {
+							result["send_keepalive"] = sendKeepalive
+						}
 					case "load_balancer":
 						if windowSize, ok := serviceConfig["window_size"]; ok {
 							result["window_size"] = windowSize
@@ -750,8 +767,8 @@ func (a *APIServer) handleGetIPRouterInfo(w http.ResponseWriter, r *http.Request
 	}
 	// Gather info safely
 	info := map[string]interface{}{
-		"tag":   ipr.GetTag(),
-		"type":  "ip_router",
+		"tag":  ipr.GetTag(),
+		"type": "ip_router",
 		"rules": func() []map[string]any {
 			arr := make([]map[string]any, 0, len(ipr.rules))
 			for _, r := range ipr.rules {
@@ -768,11 +785,15 @@ func (a *APIServer) handleGetIPRouterInfo(w http.ResponseWriter, r *http.Request
 	ipr.geoDBMu.RUnlock()
 	geo["geoip_url"] = ipr.geoURL
 	geo["geoip_path"] = ipr.geoIPPath
-	if ipr.updateInterval > 0 { geo["update_interval_sec"] = int(ipr.updateInterval.Seconds()) }
+	if ipr.updateInterval > 0 {
+		geo["update_interval_sec"] = int(ipr.updateInterval.Seconds())
+	}
 	info["geoip"] = geo
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(info); err != nil { logger.Errorf("Error encoding JSON: %v", err) }
+	if err := json.NewEncoder(w).Encode(info); err != nil {
+		logger.Errorf("Error encoding JSON: %v", err)
+	}
 }
 
 func (a *APIServer) handleIPRouterAction(w http.ResponseWriter, r *http.Request) {
@@ -782,15 +803,30 @@ func (a *APIServer) handleIPRouterAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	tag := r.URL.Path[len("/api/ip_router_action/"):]
-	if tag == "" { http.Error(w, "Component tag is required", http.StatusBadRequest); return }
+	if tag == "" {
+		http.Error(w, "Component tag is required", http.StatusBadRequest)
+		return
+	}
 	component := a.router.GetComponentByTag(tag)
-	if component == nil { http.Error(w, "Component not found", http.StatusNotFound); return }
+	if component == nil {
+		http.Error(w, "Component not found", http.StatusNotFound)
+		return
+	}
 	ipr, ok := component.(*IPRouterComponent)
-	if !ok { http.Error(w, "Component is not an IPRouterComponent", http.StatusBadRequest); return }
+	if !ok {
+		http.Error(w, "Component is not an IPRouterComponent", http.StatusBadRequest)
+		return
+	}
 	action := r.URL.Query().Get("action")
 	if action == "geoip_update" {
-		if ipr.geoURL == "" { http.Error(w, "GeoIP URL not configured", http.StatusBadRequest); return }
-		if err := ipr.downloadAndSwap(); err != nil { http.Error(w, fmt.Sprintf("update failed: %v", err), http.StatusInternalServerError); return }
+		if ipr.geoURL == "" {
+			http.Error(w, "GeoIP URL not configured", http.StatusBadRequest)
+			return
+		}
+		if err := ipr.downloadAndSwap(); err != nil {
+			http.Error(w, fmt.Sprintf("update failed: %v", err), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 		return
