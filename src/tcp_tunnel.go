@@ -163,8 +163,20 @@ func (c *TcpTunnelConn) Close() {
 		if c.conn != nil {
 			_ = c.conn.Close()
 		}
+		// Close the queue and drain any pending packets to avoid refcount leaks.
+		// Writers may still attempt to enqueue; Write() guards against panics.
 		close(c.writeQueue)
+		for pkt := range c.writeQueue {
+			if pkt != nil {
+				pkt.Release(1)
+			}
+		}
 	})
+}
+
+// Wait blocks until the connection's read/write goroutines exit.
+func (c *TcpTunnelConn) Wait() {
+	c.writeWg.Wait()
 }
 
 type TcpTunnelComponent interface {
@@ -203,7 +215,7 @@ func (c *TcpTunnelConn) writeLoop() {
 			}
 			if c.conn == nil {
 				packet.Release(1)
-				return
+				continue
 			}
 
 			// Ensure all data is written
@@ -237,15 +249,20 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 	if c.conn == nil {
 		return net.ErrClosed
 	}
+	packet.AddRef(1)
 
 	select {
 	case <-c.closed:
-		// Connection is closed
+		packet.Release(1)
 		return net.ErrClosed
 	default:
 	}
-	
-	packet.AddRef(1)
+
+	defer func() {
+		if recover() != nil {
+			packet.Release(1)
+		}
+	}()
 
 	select {
 	case c.writeQueue <- packet:
