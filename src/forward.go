@@ -647,26 +647,6 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 	}
 }
 
-func (f *ForwardComponent) SendPacket(packet *Packet, metadata any) error {
-	conn, ok := metadata.(*ForwardConn)
-	if !ok || conn == nil {
-		return fmt.Errorf("invalid connection type")
-	}
-
-	if !conn.IsConnected() {
-		return nil // Connection isn't available, skip
-	}
-
-	_, err := conn.Write(packet.GetData())
-	if err != nil {
-		logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
-		conn.SetDisconnected()
-		return err
-	}
-
-	return nil
-}
-
 // HandlePacket processes packets from other components
 func (f *ForwardComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)

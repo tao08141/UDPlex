@@ -263,31 +263,6 @@ func (l *ListenComponent) removeMapping(addrKey string) bool {
 	return true
 }
 
-func (l *ListenComponent) SendPacket(packet *Packet, metadata any) error {
-	addr, ok := metadata.(net.Addr)
-	if !ok {
-		return fmt.Errorf("%s: Invalid address type", l.tag)
-	}
-
-	if addr == nil {
-		return fmt.Errorf("%s: Address is nil", l.tag)
-	}
-
-	if l.sendTimeout > 0 {
-		if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
-		}
-	}
-
-	_, err := l.conn.WriteTo(packet.GetData(), addr)
-	if err != nil {
-		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
-		return err
-	}
-
-	return nil
-}
-
 // handleAuthMessage processes authentication messages
 func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byte, addr net.Addr) {
 

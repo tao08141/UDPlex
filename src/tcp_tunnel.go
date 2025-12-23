@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -159,15 +160,10 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 func (c *TcpTunnelConn) Close() {
 	c.closeOnce.Do(func() {
 		close(c.closed)
-		// Wait for write goroutine to finish
-		c.writeWg.Wait()
 		if c.conn != nil {
-			err := c.conn.Close()
-			if err != nil {
-				logger.Warnf("Error closing connection to %s: %v", c.conn.RemoteAddr(), err)
-			}
-			c.conn = nil
+			_ = c.conn.Close()
 		}
+		close(c.writeQueue)
 	})
 }
 
@@ -185,24 +181,24 @@ type TcpTunnelComponent interface {
 func (c *TcpTunnelConn) writeLoop() {
 	defer c.writeWg.Done()
 
+	remote := "<closed>"
+	if c.conn != nil {
+		remote = c.conn.RemoteAddr().String()
+	}
+	defer logger.Infof("Write loop for %s exiting", remote)
+
 	for {
 		select {
 		case <-c.closed:
-			if c.conn != nil {
-				logger.Infof("Write loop for %s closed", c.conn.RemoteAddr())
-			}
+			logger.Infof("Write loop for %s closed", remote)
 			return
 		case <-(*c.t).GetStopChannel():
-			if c.conn != nil {
-				logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
-			}
+			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), remote)
 			return
 		case packet, ok := <-c.writeQueue:
 			if !ok {
 				// Channel is closed
-				if c.conn != nil {
-					logger.Infof("Write queue for %s closed", c.conn.RemoteAddr())
-				}
+				logger.Infof("Write queue for %s closed", remote)
 				return
 			}
 			if c.conn == nil {
@@ -248,18 +244,25 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 		return net.ErrClosed
 	default:
 	}
+	
+	packet.AddRef(1)
 
 	select {
 	case c.writeQueue <- packet:
 		return nil
 	default:
-		// Queue is full, drop the packet or handle the error
-		return net.ErrClosed
+		packet.Release(1)
+		return fmt.Errorf("write queue full, dropping packet")
 	}
 }
 
 func (c *TcpTunnelConn) readLoop(mode int) {
 	defer c.writeWg.Done()
+
+	remote := "<closed>"
+	if c.conn != nil {
+		remote = c.conn.RemoteAddr().String()
+	}
 
 	// Buffer to accumulate incoming data
 	buffer := (*c.t).GetRouter().GetBuffer()
@@ -269,6 +272,8 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 			(*c.t).GetRouter().PutBuffer(buffer)
 		}
 	}()
+
+	defer logger.Infof("%s: Read loop for %s exiting", (*c.t).GetTag(), remote)
 
 	defer c.Close()
 	defer (*c.t).Disconnect(c)
@@ -280,10 +285,10 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 	for {
 		select {
 		case <-c.closed:
-			logger.Infof("Read loop for %s closed", c.conn.RemoteAddr())
+			logger.Infof("Read loop for %s closed", remote)
 			return
 		case <-(*c.t).GetStopChannel():
-			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), c.conn.RemoteAddr())
+			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), remote)
 			return
 		default:
 			var err error
@@ -398,9 +403,9 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							err := c.Write(&packet)
 							if err != nil {
 								logger.Infof("%s: %s Failed to write heartbeat packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
-								packet.Release(1)
 							}
 							c.lastHeartbeatSent = time.Now()
+							packet.Release(1)
 
 						case TcpTunnelForwardMode:
 							c.heartbeatMissCount = 0
@@ -419,8 +424,8 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							err := c.Write(&packet)
 							if err != nil {
 								logger.Infof("%s: %s Failed to write heartbeat packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
-								packet.Release(1)
 							}
+							packet.Release(1)
 						}
 					case MsgTypeHeartbeatAck:
 						if !c.lastHeartbeatSent.IsZero() {

@@ -43,10 +43,6 @@ func (f *FilterComponent) Stop() error {
 	return nil
 }
 
-func (f *FilterComponent) SendPacket(_ *Packet, _ any) error {
-	return nil
-}
-
 // HandlePacket processes and routes packets based on detected protocol
 func (f *FilterComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)

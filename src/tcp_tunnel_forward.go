@@ -225,12 +225,12 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 	ttc := NewTcpTunnelConn(conn, f.forwardID, poolID, f, f.router.config.QueueSize, TcpTunnelForwardMode)
 
 	packet := f.router.GetPacket(f.GetTag())
+	defer packet.Release(1)
 
 	length, err := f.authManager.CreateAuthChallenge(packet.BufAtOffset(), MsgTypeAuthChallenge, f.forwardID, poolID)
 	if err != nil {
 		logger.Warnf("%s: Failed to create auth challenge: %v", f.tag, err)
 		ttc.Close()
-		packet.Release(1)
 		return nil, err
 	}
 
@@ -240,7 +240,6 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 	if err != nil {
 		logger.Warnf("%s: Failed to send auth challenge to %s: %v", f.tag, addr, err)
 		ttc.Close()
-		packet.Release(1)
 		return nil, err
 	}
 
@@ -289,6 +288,7 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 	}
 
 	packet := f.router.GetPacket(f.GetTag())
+	defer packet.Release(1)
 
 	length := CreateHeartbeat(packet.BufAtOffset())
 	c.lastHeartbeatSent = time.Now()
@@ -297,8 +297,6 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 	err := c.Write(&packet)
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
-		// Remove immediately to avoid further selection
-		f.Disconnect(c)
 		return
 	}
 
@@ -410,12 +408,6 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 	f.pools[c.poolID].RemoveConnection(c)
 }
 
-func (f *TcpTunnelForwardComponent) SendPacket(_ *Packet, _ any) error {
-
-	// Due to the nature of TCP streams, adding send tasks to queue processing would cause packet reordering or queue blocking
-	return nil
-}
-
 func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
@@ -432,14 +424,12 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 				continue
 			}
 
-			packet.AddRef(1)
 			if err := c.Write(packet); err != nil {
-				packet.Release(1)
-				remote := "<closed>"
-				if c.conn != nil {
-					remote = c.conn.RemoteAddr().String()
-				}
-				logger.Infof("%s: Failed to send packet to %s: %v", f.tag, remote, err)
+				//remote := "<closed>"
+				//if c.conn != nil {
+				//	remote = c.conn.RemoteAddr().String()
+				//}
+				//logger.Infof("%s: Failed to send packet to %s: %v", f.tag, remote, err)
 				continue
 			}
 		}

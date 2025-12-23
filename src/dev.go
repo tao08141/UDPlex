@@ -18,7 +18,7 @@ func (r *Router) decrementBufferRef() {
 }
 
 func (r *Router) logBufferRef() {
-	if atomic.LoadInt32(&r.bufferRefCount)%100 == 0 {
+	if atomic.LoadInt32(&r.bufferRefCount)%1000 == 0 {
 		logger.Debugf("Buffer reference count: %d", atomic.LoadInt32(&r.bufferRefCount))
 	}
 }

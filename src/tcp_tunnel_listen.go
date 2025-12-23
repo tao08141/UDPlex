@@ -152,27 +152,18 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 					continue
 				}
 
-				packet.AddRef(1)
 				if err := c.Write(packet); err != nil {
-					packet.Release(1)
 					remote := "<closed>"
 					if c.conn != nil {
 						remote = c.conn.RemoteAddr().String()
 					}
 					logger.Infof("%s: Failed to send packet to %s: %v", l.tag, remote, err)
-					l.Disconnect(c)
 					continue
 				}
 			}
 		}
 	}
 
-	return nil
-}
-
-func (l *TcpTunnelListenComponent) SendPacket(_ *Packet, _ any) error {
-
-	// Due to the nature of TCP streams, adding send tasks to queue processing would cause packet reordering or queue blocking
 	return nil
 }
 
@@ -266,11 +257,11 @@ func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
 
 func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {
 	packet := l.GetRouter().GetPacket(l.GetTag())
+	defer packet.Release(1)
 
 	responseLen, err := l.GetAuthManager().CreateAuthChallenge(packet.buffer[packet.offset:], MsgTypeAuthResponse, c.forwardID, c.poolID)
 	if err != nil {
 		logger.Warnf("%s: Failed to create auth challenge response: %v", l.GetTag(), err)
-		packet.Release(1)
 		return err
 	}
 	packet.length = responseLen
@@ -281,7 +272,6 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 			remote = c.conn.RemoteAddr().String()
 		}
 		logger.Infof("%s: %s Failed to send auth response: %v", l.GetTag(), remote, err)
-		packet.Release(1)
 		l.Disconnect(c)
 		return fmt.Errorf("%s: Failed to send auth response: %v", l.GetTag(), err)
 	}

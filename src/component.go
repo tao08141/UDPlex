@@ -55,7 +55,6 @@ type Component interface {
 	// HandlePacket processes packets coming from other components
 	// srcTag is the tag of the component that sent the packet
 	HandlePacket(packet *Packet) error
-	SendPacket(packet *Packet, metadata any) error
 	GetRouter() *Router
 	GetStopChannel() chan struct{}
 	SetSendQueueDelay(delay time.Duration)

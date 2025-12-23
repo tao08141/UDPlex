@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"sync"
-	"time"
 )
 
 // NewRouter creates a new router
@@ -88,18 +87,6 @@ func (r *Router) RemoveConnData(connID ConnID, tag string) {
 	}
 }
 
-func (r *Router) processSendTask(task sendTask) {
-	tag := task.component.GetTag()
-	sendStartTime := time.Now()
-	if err := task.component.SendPacket(task.packet, task.metadata); err != nil {
-		logger.Warnf("Error sending packet via %s: %v", tag, err)
-	}
-
-	sendDuration := time.Since(sendStartTime)
-	task.component.SetSendQueueDelay(sendDuration)
-	task.packet.Release(1) // Release packet reference
-}
-
 // startWorkers initializes the worker goroutines for packet routing
 func (r *Router) startWorkers() {
 	r.concurrencyChs = make(map[string]chan struct{})
@@ -116,42 +103,10 @@ func (r *Router) startWorkers() {
 			defer r.wg.Done()
 			logger.Infof("Starting router worker %d", workerID)
 
-			for {
-				select {
-				case task, ok := <-r.routeTasks:
-					if !ok {
-						logger.Warnf("Router worker %d: route tasks channel closed", workerID)
-						return
-					}
-					r.processRouteTaskConcurrent(task)
-
-				case task, ok := <-r.sendTasks:
-					if !ok {
-						logger.Warnf("Router worker %d: send tasks channel closed", workerID)
-						return
-					}
-					tag := task.component.GetTag()
-					if ch, found := r.concurrencyChs[tag]; found {
-						select {
-						case ch <- struct{}{}:
-							r.processSendTask(task) // Process the send task
-							<-ch
-						default:
-							// If the token is not obtained, the average delay of the last 10 sending queues is determined. If it is higher than sendTimeout, the task is directly discarded.
-							avgDelay := task.component.GetAverageSendQueueDelay()
-							if avgDelay > task.component.GetSendTimeout()/2 {
-								logger.Infof("Send queue for %s is full, dropping packet due to high average delay: %v", tag, avgDelay)
-								task.packet.Release(1) // Release packet reference
-							} else {
-								r.processSendTask(task)
-							}
-						}
-					} else {
-						logger.Warnf("Error sending packet via %s: concurrency channel not found", tag)
-						task.packet.Release(1)
-					}
-				}
+			for task := range r.routeTasks {
+				r.processRouteTaskConcurrent(task)
 			}
+			logger.Warnf("Router worker %d: route tasks channel closed", workerID)
 		}(i)
 	}
 }
@@ -185,20 +140,6 @@ func (r *Router) processRouteTaskConcurrent(task routeTask) {
 			}
 		}
 	}
-}
-
-// SendPacket adds a packet to the send queue
-func (r *Router) SendPacket(component Component, packet *Packet, metadata any) error {
-	packet.AddRef(1) // Add reference for the worker
-
-	select {
-	case r.sendTasks <- sendTask{component: component, packet: packet, metadata: metadata}:
-		// Task successfully queued
-	default:
-		packet.Release(1) // Release reference if queue is full
-		return fmt.Errorf("send queue is full, packet dropped")
-	}
-	return nil
 }
 
 // GetBuffer retrieves a buffer from the pool
