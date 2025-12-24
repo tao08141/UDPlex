@@ -100,48 +100,65 @@ type ListenComponent struct {
 }
 
 func (l *ListenComponent) runSendLoop() {
+	process := func(job listenSendJob) {
+		if job.packet == nil {
+			return
+		}
+		l.processSendJob(job)
+	}
+
+	drainPrio := func() bool {
+		for {
+			select {
+			case job, ok := <-l.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				process(job)
+			default:
+				return true
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-l.GetStopChannel():
 			l.drainSendQueue()
 			return
-		default:
-			job, ok := l.dequeueSendJob()
+		case job, ok := <-l.sendQueuePrio:
 			if !ok {
 				l.drainSendQueue()
 				return
 			}
-			if job.packet == nil {
-				time.Sleep(1 * time.Millisecond)
-				continue
+			process(job)
+			if !drainPrio() {
+				l.drainSendQueue()
+				return
 			}
-			l.processSendJob(job)
+		case job, ok := <-l.sendQueue:
+			if !ok {
+				l.drainSendQueue()
+				return
+			}
+			// If any priority jobs are waiting, run them first.
+			select {
+			case pri, ok := <-l.sendQueuePrio:
+				if !ok {
+					l.drainSendQueue()
+					return
+				}
+				process(pri)
+				if !drainPrio() {
+					l.drainSendQueue()
+					return
+				}
+				process(job)
+			default:
+				process(job)
+			}
 		}
 	}
-}
-
-// dequeueSendJob always prefers priority jobs (heartbeat/control) over normal data.
-// Returns (zeroJob, true) when no job is currently available.
-func (l *ListenComponent) dequeueSendJob() (listenSendJob, bool) {
-	select {
-	case job, ok := <-l.sendQueuePrio:
-		if !ok {
-			return listenSendJob{}, false
-		}
-		return job, true
-	default:
-	}
-
-	select {
-	case job, ok := <-l.sendQueue:
-		if !ok {
-			return listenSendJob{}, false
-		}
-		return job, true
-	default:
-	}
-
-	return listenSendJob{}, true
 }
 
 func (l *ListenComponent) drainSendQueue() {

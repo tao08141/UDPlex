@@ -122,6 +122,46 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 	if conn == nil || conn.sendQueue == nil {
 		return
 	}
+
+	sendPkt := func(pkt *Packet) bool {
+		if pkt == nil {
+			return true
+		}
+		if !conn.IsConnected() || conn.conn == nil {
+			pkt.Release(1)
+			return true
+		}
+		if f.sendTimeout > 0 {
+			if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+				logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+			}
+		}
+		if _, err := conn.conn.Write(pkt.GetData()); err != nil {
+			logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
+			conn.SetDisconnected()
+			pkt.Release(1)
+			return false
+		}
+		pkt.Release(1)
+		return true
+	}
+
+	drainPrio := func() bool {
+		for {
+			select {
+			case pkt, ok := <-conn.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				if !sendPkt(pkt) {
+					return false
+				}
+			default:
+				return true
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-f.GetStopChannel():
@@ -130,55 +170,46 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		case <-conn.closeCh:
 			f.drainForwardQueue(conn)
 			return
-		default:
-			pkt, ok := f.dequeueForwardPacket(conn)
+		case pkt, ok := <-conn.sendQueuePrio:
 			if !ok {
 				f.drainForwardQueue(conn)
 				return
 			}
-			if pkt == nil {
-				time.Sleep(1 * time.Millisecond)
-				continue
+			if !sendPkt(pkt) {
+				return
 			}
-			if !conn.IsConnected() || conn.conn == nil {
+			if !drainPrio() {
+				f.drainForwardQueue(conn)
+				return
+			}
+		case pkt, ok := <-conn.sendQueue:
+			if !ok {
+				f.drainForwardQueue(conn)
+				return
+			}
+			// If any priority packets are waiting, send them first.
+			select {
+			case pri, ok := <-conn.sendQueuePrio:
+				if !ok {
+					f.drainForwardQueue(conn)
+					pkt.Release(1)
+					return
+				}
 				pkt.Release(1)
-				continue
-			}
-			if f.sendTimeout > 0 {
-				if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
-					logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+				if !sendPkt(pri) {
+					return
+				}
+				if !drainPrio() {
+					f.drainForwardQueue(conn)
+					return
+				}
+			default:
+				if !sendPkt(pkt) {
+					return
 				}
 			}
-			if _, err := conn.conn.Write(pkt.GetData()); err != nil {
-				logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
-				conn.SetDisconnected()
-			}
-			pkt.Release(1)
 		}
 	}
-}
-
-func (f *ForwardComponent) dequeueForwardPacket(conn *ForwardConn) (*Packet, bool) {
-	if conn == nil {
-		return nil, false
-	}
-	select {
-	case pkt, ok := <-conn.sendQueuePrio:
-		if !ok {
-			return nil, false
-		}
-		return pkt, true
-	default:
-	}
-	select {
-	case pkt, ok := <-conn.sendQueue:
-		if !ok {
-			return nil, false
-		}
-		return pkt, true
-	default:
-	}
-	return nil, true
 }
 
 func (f *ForwardComponent) drainForwardQueue(conn *ForwardConn) {

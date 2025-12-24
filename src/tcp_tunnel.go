@@ -216,6 +216,54 @@ func (c *TcpTunnelConn) writeLoop() {
 	}
 	defer logger.Infof("Write loop for %s exiting", remote)
 
+	sendPacket := func(packet *Packet) bool {
+		if packet == nil {
+			return true
+		}
+		if c.conn == nil {
+			packet.Release(1)
+			return true
+		}
+
+		totalWritten := 0
+		for totalWritten < packet.length {
+			if (*c.t).GetSendTimeout() > 0 {
+				if err := c.conn.SetWriteDeadline(time.Now().Add((*c.t).GetSendTimeout())); err != nil {
+					logger.Infof("Failed to set write deadline: %v", err)
+					packet.Release(1)
+					return false
+				}
+			}
+
+			n, err := c.conn.Write(packet.GetData()[totalWritten:])
+			if err != nil {
+				logger.Infof("Write error: %v", err)
+				packet.Release(1)
+				(*c.t).Disconnect(c)
+				return false
+			}
+			totalWritten += n
+		}
+		packet.Release(1)
+		return true
+	}
+
+	drainPrio := func() bool {
+		for {
+			select {
+			case packet, ok := <-c.writePrio:
+				if !ok {
+					return false
+				}
+				if !sendPacket(packet) {
+					return false
+				}
+			default:
+				return true
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-c.closed:
@@ -224,73 +272,46 @@ func (c *TcpTunnelConn) writeLoop() {
 		case <-(*c.t).GetStopChannel():
 			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), remote)
 			return
-		default:
-			packet, ok := c.dequeuePacket()
+		case packet, ok := <-c.writePrio:
 			if !ok {
 				logger.Infof("Write queue for %s closed", remote)
 				return
 			}
-			if packet == nil {
-				// Nothing to write yet.
-				time.Sleep(1 * time.Millisecond)
-				continue
+			if !sendPacket(packet) {
+				return
 			}
-			if c.conn == nil {
-				packet.Release(1)
-				continue
+			if !drainPrio() {
+				logger.Infof("Write queue for %s closed", remote)
+				return
 			}
-
-			// Ensure all data is written
-			totalWritten := 0
-			for totalWritten < packet.length {
-				if (*c.t).GetSendTimeout() > 0 {
-					if err := c.conn.SetWriteDeadline(time.Now().Add((*c.t).GetSendTimeout())); err != nil {
-						logger.Infof("Failed to set write deadline: %v", err)
-						packet.Release(1)
-						return
-					}
-				}
-
-				n, err := c.conn.Write(packet.GetData()[totalWritten:])
-				if err != nil {
-					logger.Infof("Write error: %v", err)
+		case packet, ok := <-c.writeQueue:
+			if !ok {
+				logger.Infof("Write queue for %s closed", remote)
+				return
+			}
+			// If any priority packets are waiting, send them first.
+			select {
+			case pri, ok := <-c.writePrio:
+				if !ok {
+					logger.Infof("Write queue for %s closed", remote)
 					packet.Release(1)
-					(*c.t).Disconnect(c)
 					return
 				}
-				totalWritten += n
+				packet.Release(1)
+				if !sendPacket(pri) {
+					return
+				}
+				if !drainPrio() {
+					logger.Infof("Write queue for %s closed", remote)
+					return
+				}
+			default:
+				if !sendPacket(packet) {
+					return
+				}
 			}
-
-			packet.Release(1)
 		}
 	}
-}
-
-// dequeuePacket always prefers priority packets (heartbeats/control) over normal data.
-// Returns (nil, true) when no packet is currently available.
-func (c *TcpTunnelConn) dequeuePacket() (*Packet, bool) {
-	// Fast path: try priority first.
-	select {
-	case pkt, ok := <-c.writePrio:
-		if !ok {
-			return nil, false
-		}
-		return pkt, true
-	default:
-	}
-
-	// Then try normal queue.
-	select {
-	case pkt, ok := <-c.writeQueue:
-		if !ok {
-			return nil, false
-		}
-		return pkt, true
-	default:
-	}
-
-	// Nothing available.
-	return nil, true
 }
 
 func (c *TcpTunnelConn) Write(packet *Packet) error {
