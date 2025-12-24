@@ -69,6 +69,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		recvBufferSize:    cfg.RecvBufferSize,
 		sendBufferSize:    cfg.SendBufferSize,
 		sendQueue:         make(chan listenSendJob, queueSize),
+		sendQueuePrio:     make(chan listenSendJob, max(4, queueSize/16)),
 	}
 
 	// Initialize an atomic value with an empty map
@@ -95,6 +96,7 @@ type ListenComponent struct {
 	recvBufferSize    int
 	sendBufferSize    int
 	sendQueue         chan listenSendJob
+	sendQueuePrio     chan listenSendJob
 }
 
 func (l *ListenComponent) runSendLoop() {
@@ -103,15 +105,52 @@ func (l *ListenComponent) runSendLoop() {
 		case <-l.GetStopChannel():
 			l.drainSendQueue()
 			return
-		case job := <-l.sendQueue:
+		default:
+			job, ok := l.dequeueSendJob()
+			if !ok {
+				l.drainSendQueue()
+				return
+			}
+			if job.packet == nil {
+				time.Sleep(1 * time.Millisecond)
+				continue
+			}
 			l.processSendJob(job)
 		}
 	}
 }
 
+// dequeueSendJob always prefers priority jobs (heartbeat/control) over normal data.
+// Returns (zeroJob, true) when no job is currently available.
+func (l *ListenComponent) dequeueSendJob() (listenSendJob, bool) {
+	select {
+	case job, ok := <-l.sendQueuePrio:
+		if !ok {
+			return listenSendJob{}, false
+		}
+		return job, true
+	default:
+	}
+
+	select {
+	case job, ok := <-l.sendQueue:
+		if !ok {
+			return listenSendJob{}, false
+		}
+		return job, true
+	default:
+	}
+
+	return listenSendJob{}, true
+}
+
 func (l *ListenComponent) drainSendQueue() {
 	for {
 		select {
+		case job := <-l.sendQueuePrio:
+			if job.packet != nil {
+				job.packet.Release(1)
+			}
 		case job := <-l.sendQueue:
 			if job.packet != nil {
 				job.packet.Release(1)
@@ -142,6 +181,14 @@ func (l *ListenComponent) processSendJob(job listenSendJob) {
 }
 
 func (l *ListenComponent) queueSend(addr net.Addr, packet *Packet) {
+	l.queueSendWithPriority(addr, packet, false)
+}
+
+func (l *ListenComponent) queueSendHigh(addr net.Addr, packet *Packet) {
+	l.queueSendWithPriority(addr, packet, true)
+}
+
+func (l *ListenComponent) queueSendWithPriority(addr net.Addr, packet *Packet, high bool) {
 	if packet == nil {
 		return
 	}
@@ -159,12 +206,30 @@ func (l *ListenComponent) queueSend(addr net.Addr, packet *Packet) {
 	default:
 	}
 	job := listenSendJob{packet: packet, addr: addr}
+	if high {
+		select {
+		case l.sendQueuePrio <- job:
+			return
+		default:
+			// Fallback to normal queue.
+			select {
+			case l.sendQueue <- job:
+				return
+			default:
+				logger.Infof("%s: Send priority queue full, dropping packet for %s", l.tag, addr.String())
+				packet.Release(1)
+				return
+			}
+		}
+	}
+
 	select {
 	case l.sendQueue <- job:
 		return
 	default:
 		logger.Infof("%s: Send queue full, dropping packet for %s", l.tag, addr.String())
 		packet.Release(1)
+		return
 	}
 }
 
@@ -341,20 +406,16 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 			mapping.lastActive = time.Now()
 			if mapping.authState != nil {
 				// Echo's heartbeat back
-				responseBuffer := l.router.GetBuffer()
-				responseLen := CreateHeartbeat(responseBuffer)
-
+				pkt := l.router.GetPacket(l.tag)
+				responseLen := CreateHeartbeat(pkt.BufAtOffset())
+				pkt.SetLength(responseLen)
 				if l.sendTimeout > 0 {
 					if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
 						logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
 					}
 				}
-
-				_, err := l.conn.WriteTo(responseBuffer[:responseLen], addr)
-				if err != nil {
-					logger.Infof("%s: Failed to send heartbeat response: %v", l.tag, err)
-				}
-				l.router.PutBuffer(responseBuffer)
+				l.queueSendHigh(addr, &pkt)
+				pkt.Release(1)
 				mapping.lastHeartbeatSent = time.Now()
 			}
 		}

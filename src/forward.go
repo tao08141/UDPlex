@@ -24,6 +24,7 @@ type ForwardConn struct {
 	lastHeartbeatSent  time.Time
 	poolID             PoolID
 	sendQueue          chan *Packet
+	sendQueuePrio      chan *Packet
 	closeCh            chan struct{}
 	closed             atomic.Bool
 }
@@ -111,6 +112,7 @@ func (f *ForwardComponent) initSendQueue(conn *ForwardConn) {
 	if queueSize <= 0 {
 		queueSize = 10240
 	}
+	conn.sendQueuePrio = make(chan *Packet, max(4, queueSize/16))
 	conn.sendQueue = make(chan *Packet, queueSize)
 	conn.closeCh = make(chan struct{})
 	go f.forwardConnSendLoop(conn)
@@ -128,12 +130,14 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		case <-conn.closeCh:
 			f.drainForwardQueue(conn)
 			return
-		case pkt, ok := <-conn.sendQueue:
+		default:
+			pkt, ok := f.dequeueForwardPacket(conn)
 			if !ok {
 				f.drainForwardQueue(conn)
 				return
 			}
 			if pkt == nil {
+				time.Sleep(1 * time.Millisecond)
 				continue
 			}
 			if !conn.IsConnected() || conn.conn == nil {
@@ -154,12 +158,39 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 	}
 }
 
+func (f *ForwardComponent) dequeueForwardPacket(conn *ForwardConn) (*Packet, bool) {
+	if conn == nil {
+		return nil, false
+	}
+	select {
+	case pkt, ok := <-conn.sendQueuePrio:
+		if !ok {
+			return nil, false
+		}
+		return pkt, true
+	default:
+	}
+	select {
+	case pkt, ok := <-conn.sendQueue:
+		if !ok {
+			return nil, false
+		}
+		return pkt, true
+	default:
+	}
+	return nil, true
+}
+
 func (f *ForwardComponent) drainForwardQueue(conn *ForwardConn) {
 	if conn == nil || conn.sendQueue == nil {
 		return
 	}
 	for {
 		select {
+		case pkt := <-conn.sendQueuePrio:
+			if pkt != nil {
+				pkt.Release(1)
+			}
 		case pkt := <-conn.sendQueue:
 			if pkt != nil {
 				pkt.Release(1)
@@ -171,6 +202,14 @@ func (f *ForwardComponent) drainForwardQueue(conn *ForwardConn) {
 }
 
 func (f *ForwardComponent) enqueuePacket(conn *ForwardConn, packet *Packet) {
+	f.enqueuePacketWithPriority(conn, packet, false)
+}
+
+func (f *ForwardComponent) enqueuePacketHigh(conn *ForwardConn, packet *Packet) {
+	f.enqueuePacketWithPriority(conn, packet, true)
+}
+
+func (f *ForwardComponent) enqueuePacketWithPriority(conn *ForwardConn, packet *Packet, high bool) {
 	if conn == nil || packet == nil {
 		return
 	}
@@ -181,11 +220,36 @@ func (f *ForwardComponent) enqueuePacket(conn *ForwardConn, packet *Packet) {
 		return
 	}
 	select {
+	case <-f.GetStopChannel():
+		packet.Release(1)
+		return
+	default:
+	}
+
+	if high {
+		select {
+		case conn.sendQueuePrio <- packet:
+			return
+		default:
+			// Fallback to normal queue.
+			select {
+			case conn.sendQueue <- packet:
+				return
+			default:
+				logger.Infof("%s: Send priority queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+				packet.Release(1)
+				return
+			}
+		}
+	}
+
+	select {
 	case conn.sendQueue <- packet:
 		return
 	default:
 		logger.Infof("%s: Send queue full for %s, dropping packet", f.tag, conn.remoteAddr)
 		packet.Release(1)
+		return
 	}
 }
 
@@ -407,18 +471,13 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 		return
 	}
 
-	buffer := f.router.GetBuffer()
-	defer f.router.PutBuffer(buffer)
-
-	length := CreateHeartbeat(buffer)
 	conn.NoteHeartbeatSent()
+	pkt := f.router.GetPacket(f.tag)
+	defer pkt.Release(1)
 
-	_, err := conn.Write(buffer[:length])
-	if err != nil {
-		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
-		conn.SetDisconnected()
-		return
-	}
+	length := CreateHeartbeat(pkt.BufAtOffset())
+	pkt.SetLength(length)
+	f.enqueuePacketHigh(conn, &pkt)
 
 	if conn.heartbeatMissCount >= 2 {
 		f.sendAuthChallenge(conn)
@@ -638,12 +697,11 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 				logger.Debugf("%s: Recorded delay measurement: %v, average: %v", f.tag, delay, f.authManager.GetAverageDelay())
 			}
 		}
-
-		responseBuffer := f.router.GetBuffer()
-		responseLen := CreateHeartbeatAck(responseBuffer)
-		conn.Write(responseBuffer[:responseLen])
-		f.router.PutBuffer(responseBuffer)
-
+		pkt := f.router.GetPacket(f.tag)
+		responseLen := CreateHeartbeatAck(pkt.BufAtOffset())
+		pkt.SetLength(responseLen)
+		f.enqueuePacketHigh(conn, &pkt)
+		pkt.Release(1)
 	}
 }
 

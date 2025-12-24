@@ -294,7 +294,7 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 	c.lastHeartbeatSent = time.Now()
 	packet.SetLength(length)
 
-	err := c.Write(&packet)
+	err := c.WriteHighPriority(&packet)
 	if err != nil {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
 		return

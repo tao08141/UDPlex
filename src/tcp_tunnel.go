@@ -13,6 +13,13 @@ const (
 	TcpTunnelForwardMode
 )
 
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 type TcpTunnelConnPool struct {
 	conns atomic.Pointer[[]*TcpTunnelConn]
 
@@ -129,6 +136,7 @@ type TcpTunnelConn struct {
 	lastHeartbeatSent  time.Time
 
 	writeQueue chan *Packet
+	writePrio  chan *Packet
 	writeWg    sync.WaitGroup
 	closed     chan struct{}
 	closeOnce  sync.Once
@@ -141,7 +149,10 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 		conn:       conn,
 		authState:  &AuthState{},
 		lastActive: time.Now(),
-		writeQueue: make(chan *Packet, queueSize), // Buffered channel for write queue
+		// Split write queue into priority (heartbeat/control) and normal (data).
+		// Priority queue is small but always preferred by the writer.
+		writePrio:  make(chan *Packet, max(4, queueSize/16)),
+		writeQueue: make(chan *Packet, queueSize), // Buffered channel for normal packets
 		closed:     make(chan struct{}),
 		closeOnce:  sync.Once{},
 		writeWg:    sync.WaitGroup{},
@@ -165,6 +176,12 @@ func (c *TcpTunnelConn) Close() {
 		}
 		// Close the queue and drain any pending packets to avoid refcount leaks.
 		// Writers may still attempt to enqueue; Write() guards against panics.
+		close(c.writePrio)
+		for pkt := range c.writePrio {
+			if pkt != nil {
+				pkt.Release(1)
+			}
+		}
 		close(c.writeQueue)
 		for pkt := range c.writeQueue {
 			if pkt != nil {
@@ -207,11 +224,16 @@ func (c *TcpTunnelConn) writeLoop() {
 		case <-(*c.t).GetStopChannel():
 			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), remote)
 			return
-		case packet, ok := <-c.writeQueue:
+		default:
+			packet, ok := c.dequeuePacket()
 			if !ok {
-				// Channel is closed
 				logger.Infof("Write queue for %s closed", remote)
 				return
+			}
+			if packet == nil {
+				// Nothing to write yet.
+				time.Sleep(1 * time.Millisecond)
+				continue
 			}
 			if c.conn == nil {
 				packet.Release(1)
@@ -244,6 +266,33 @@ func (c *TcpTunnelConn) writeLoop() {
 	}
 }
 
+// dequeuePacket always prefers priority packets (heartbeats/control) over normal data.
+// Returns (nil, true) when no packet is currently available.
+func (c *TcpTunnelConn) dequeuePacket() (*Packet, bool) {
+	// Fast path: try priority first.
+	select {
+	case pkt, ok := <-c.writePrio:
+		if !ok {
+			return nil, false
+		}
+		return pkt, true
+	default:
+	}
+
+	// Then try normal queue.
+	select {
+	case pkt, ok := <-c.writeQueue:
+		if !ok {
+			return nil, false
+		}
+		return pkt, true
+	default:
+	}
+
+	// Nothing available.
+	return nil, true
+}
+
 func (c *TcpTunnelConn) Write(packet *Packet) error {
 
 	if c.conn == nil {
@@ -270,6 +319,40 @@ func (c *TcpTunnelConn) Write(packet *Packet) error {
 	default:
 		packet.Release(1)
 		return fmt.Errorf("write queue full, dropping packet")
+	}
+}
+
+func (c *TcpTunnelConn) WriteHighPriority(packet *Packet) error {
+	if c.conn == nil {
+		return net.ErrClosed
+	}
+	packet.AddRef(1)
+
+	select {
+	case <-c.closed:
+		packet.Release(1)
+		return net.ErrClosed
+	default:
+	}
+
+	defer func() {
+		if recover() != nil {
+			packet.Release(1)
+		}
+	}()
+
+	select {
+	case c.writePrio <- packet:
+		return nil
+	default:
+		// Priority queue is full. As a fallback, try normal queue.
+		select {
+		case c.writeQueue <- packet:
+			return nil
+		default:
+			packet.Release(1)
+			return fmt.Errorf("write priority queue full, dropping packet")
+		}
 	}
 }
 
@@ -417,7 +500,7 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							packet := (*c.t).GetRouter().GetPacket((*c.t).GetTag())
 							length := CreateHeartbeat(packet.BufAtOffset())
 							packet.SetLength(length)
-							err := c.Write(&packet)
+							err := c.WriteHighPriority(&packet)
 							if err != nil {
 								logger.Infof("%s: %s Failed to write heartbeat packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 							}
@@ -438,7 +521,7 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							packet := (*c.t).GetRouter().GetPacket((*c.t).GetTag())
 							length := CreateHeartbeatAck(packet.BufAtOffset())
 							packet.SetLength(length)
-							err := c.Write(&packet)
+							err := c.WriteHighPriority(&packet)
 							if err != nil {
 								logger.Infof("%s: %s Failed to write heartbeat packet: %v", (*c.t).GetTag(), c.conn.RemoteAddr(), err)
 							}
