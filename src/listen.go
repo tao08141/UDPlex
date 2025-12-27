@@ -100,27 +100,6 @@ type ListenComponent struct {
 }
 
 func (l *ListenComponent) runSendLoop() {
-	process := func(job listenSendJob) {
-		if job.packet == nil {
-			return
-		}
-		l.processSendJob(job)
-	}
-
-	drainPrio := func() bool {
-		for {
-			select {
-			case job, ok := <-l.sendQueuePrio:
-				if !ok {
-					return false
-				}
-				process(job)
-			default:
-				return true
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-l.GetStopChannel():
@@ -131,32 +110,13 @@ func (l *ListenComponent) runSendLoop() {
 				l.drainSendQueue()
 				return
 			}
-			process(job)
-			if !drainPrio() {
-				l.drainSendQueue()
-				return
-			}
+			l.processSendJob(job)
 		case job, ok := <-l.sendQueue:
 			if !ok {
 				l.drainSendQueue()
 				return
 			}
-			// If any priority jobs are waiting, run them first.
-			select {
-			case pri, ok := <-l.sendQueuePrio:
-				if !ok {
-					l.drainSendQueue()
-					return
-				}
-				process(pri)
-				if !drainPrio() {
-					l.drainSendQueue()
-					return
-				}
-				process(job)
-			default:
-				process(job)
-			}
+			l.processSendJob(job)
 		}
 	}
 }

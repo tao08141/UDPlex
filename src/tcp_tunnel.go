@@ -248,22 +248,6 @@ func (c *TcpTunnelConn) writeLoop() {
 		return true
 	}
 
-	drainPrio := func() bool {
-		for {
-			select {
-			case packet, ok := <-c.writePrio:
-				if !ok {
-					return false
-				}
-				if !sendPacket(packet) {
-					return false
-				}
-			default:
-				return true
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-c.closed:
@@ -280,35 +264,13 @@ func (c *TcpTunnelConn) writeLoop() {
 			if !sendPacket(packet) {
 				return
 			}
-			if !drainPrio() {
-				logger.Infof("Write queue for %s closed", remote)
-				return
-			}
 		case packet, ok := <-c.writeQueue:
 			if !ok {
 				logger.Infof("Write queue for %s closed", remote)
 				return
 			}
-			// If any priority packets are waiting, send them first.
-			select {
-			case pri, ok := <-c.writePrio:
-				if !ok {
-					logger.Infof("Write queue for %s closed", remote)
-					packet.Release(1)
-					return
-				}
-				packet.Release(1)
-				if !sendPacket(pri) {
-					return
-				}
-				if !drainPrio() {
-					logger.Infof("Write queue for %s closed", remote)
-					return
-				}
-			default:
-				if !sendPacket(packet) {
-					return
-				}
+			if !sendPacket(packet) {
+				return
 			}
 		}
 	}

@@ -146,22 +146,6 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		return true
 	}
 
-	drainPrio := func() bool {
-		for {
-			select {
-			case pkt, ok := <-conn.sendQueuePrio:
-				if !ok {
-					return false
-				}
-				if !sendPkt(pkt) {
-					return false
-				}
-			default:
-				return true
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-f.GetStopChannel():
@@ -178,35 +162,13 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 			if !sendPkt(pkt) {
 				return
 			}
-			if !drainPrio() {
-				f.drainForwardQueue(conn)
-				return
-			}
 		case pkt, ok := <-conn.sendQueue:
 			if !ok {
 				f.drainForwardQueue(conn)
 				return
 			}
-			// If any priority packets are waiting, send them first.
-			select {
-			case pri, ok := <-conn.sendQueuePrio:
-				if !ok {
-					f.drainForwardQueue(conn)
-					pkt.Release(1)
-					return
-				}
-				pkt.Release(1)
-				if !sendPkt(pri) {
-					return
-				}
-				if !drainPrio() {
-					f.drainForwardQueue(conn)
-					return
-				}
-			default:
-				if !sendPkt(pkt) {
-					return
-				}
+			if !sendPkt(pkt) {
+				return
 			}
 		}
 	}
