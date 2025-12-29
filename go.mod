@@ -3,7 +3,7 @@ module github.com/tao08141/UDPlex
 go 1.25.1
 
 require (
-	github.com/expr-lang/expr v1.17.5
+	github.com/expr-lang/expr v1.17.7
 	github.com/oschwald/geoip2-golang v1.13.0
 	go.uber.org/zap v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
