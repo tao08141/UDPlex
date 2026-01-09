@@ -31,6 +31,7 @@
 | `tag` | 组件唯一标识，用于在detour中引用            |
 | `detour` | 转发路径，指定接收数据的组件标识列表             |
 | `window_size` | 流量统计时间窗口，如10，代表10s             |
+| `miss`        | 可选，当所有规则都不匹配时使用的目标组件tag列表 |
 
 
 ### detour配置
@@ -158,3 +159,23 @@ detour:
 ### 示例配置
 
 查看 `examples/load_balancer_test.yaml` 文件，了解如何在配置中使用可用性检查功能。
+
+## Miss 机制
+
+负载均衡器支持 `miss` 配置，用于定义当所有 `detour` 规则都不匹配当前数据包时的回退目标。
+
+### 配置示例
+
+```yaml
+type: load_balancer
+tag: lb
+detour:
+  - rule: seq > 100
+    targets: [target1]
+miss: [target2]
+```
+
+在此示例中：
+- 如果数据包序列号 > 100，则转发到 `target1`。
+- 否则（如果规则不匹配），转发到 `target2`。
+- 如果未配置 `miss` 且没有规则匹配，数据包将被通过（或丢弃，具体取决于现有逻辑，通常在 LB 上下文中意味着不进行特定的 LB 转发）。

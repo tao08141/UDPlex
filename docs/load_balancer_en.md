@@ -31,6 +31,7 @@ The load balancer component uses a sliding window mechanism for traffic statisti
 | `tag` | Unique component identifier, used for reference in detour |
 | `detour` | Forwarding path, specifies the component identifiers that receive data |
 | `window_size` | Traffic statistics time window, e.g., 10, representing 10s |
+| `miss`        | Optional list of target tags to use when no rules match      |
 
 
 ### detour Configuration
@@ -158,3 +159,24 @@ For components that do not support availability checking, the LoadBalancerCompon
 ### Example Configuration
 
 See the `examples/load_balancer_test.yaml` file to learn how to use the availability checking feature in your configuration.
+
+## Miss Mechanism
+
+The Load Balancer supports a `miss` configuration, which defines a fallback set of targets when none of the `detour` rules match the current packet.
+
+### Configuration Example
+
+```yaml
+type: load_balancer
+tag: lb
+detour:
+  - rule: seq > 100
+    targets: [target1]
+miss: [target2]
+```
+
+In this example:
+- If packet sequence > 100, it goes to `target1`.
+- Otherwise (if the rule does not match), it goes to `target2`.
+- If `miss` is not configured and no rules match, the packet is dropped (or processed by next logic if applicable, but typically dropped in LB context).
+

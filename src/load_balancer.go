@@ -40,6 +40,7 @@ type TrafficStats struct {
 type LoadBalancerComponent struct {
 	BaseComponent
 	detour          []LoadBalancerDetourRule
+	miss            []string
 	stats           *TrafficStats
 	packetSeq       uint64                         // Atomic counter for packet sequence
 	compiledRules   []CompiledExpression           // Pre-compiled expressions
@@ -53,6 +54,7 @@ func NewLoadBalancerComponent(cfg LoadBalancerComponentConfig, router *Router) (
 	lb := &LoadBalancerComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, 0),
 		detour:        cfg.Detour,
+		miss:          cfg.Miss,
 		stats: &TrafficStats{
 			samples:    make([]TrafficSample, cfg.WindowSize),
 			windowSize: cfg.WindowSize,
@@ -232,7 +234,12 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 	// Evaluate detour rules to find matching targets
 	targets := lb.evaluateCompiledRules(seq, bps, pps, size)
 	if len(targets) == 0 {
-		return nil
+		if len(lb.miss) > 0 {
+			// No rules matched, use miss targets
+			targets = lb.miss
+		} else {
+			return nil
+		}
 	}
 
 	// Route packet to all determined targets

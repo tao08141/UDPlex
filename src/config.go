@@ -71,6 +71,7 @@ type LoadBalancerComponentConfig struct {
 	Type        string                   `json:"type" yaml:"type"`
 	Tag         string                   `json:"tag" yaml:"tag"`
 	Detour      []LoadBalancerDetourRule `json:"detour" yaml:"detour"`
+	Miss        []string                 `json:"miss" yaml:"miss"`
 	WindowSize  uint32                   `json:"window_size" yaml:"window_size"`
 	EnableCache bool                     `json:"enable_cache" yaml:"enable_cache"`
 }
