@@ -55,6 +55,7 @@ Matching rules for the load balancer use the [expr-lang/expr](https://github.com
 | `pps`         | Packets per second, averaged over window |
 | `size`        | Current packet size                      |
 | `available_<tag>` | Component availability status, where tag is the component identifier |
+| `delay_<tag>` | Average delay (milliseconds) of the current route for the corresponding component, where tag is the component identifier |
 
 - **Supported Operators**
 
@@ -104,7 +105,8 @@ size > 1000
 
 UDPlex supports component availability checking in the LoadBalancerComponent. This allows you to use component availability status in load balancing expressions to make routing decisions.
 
-### Components Supporting Availability Checking
+### Components Supporting Availability and Delay Checking
+
 
 The following components support availability checking:
 

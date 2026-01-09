@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -124,6 +125,9 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 		if len(varKey) > 10 && varKey[:10] == "available_" {
 			env[varKey] = false // Default value for compilation
 		}
+		if len(varKey) > 6 && varKey[:6] == "delay_" {
+			env[varKey] = uint64(0) // default delay value (ms)
+		}
 	}
 
 	program, err := expr.Compile(exprStr, expr.Env(env))
@@ -139,8 +143,8 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 			break
 		}
 
-		// Expressions with seq, size, or availability variables cannot be cached
-		if varKey == "seq" || varKey == "size" || (len(varKey) > 10 && varKey[:10] == "available_") {
+		// Expressions with seq, size, availability, or delay variables cannot be cached
+		if varKey == "seq" || varKey == "size" || (len(varKey) > 10 && varKey[:10] == "available_") || (len(varKey) > 6 && varKey[:6] == "delay_") {
 			canCache = false
 			break
 		}
@@ -180,6 +184,18 @@ func (lb *LoadBalancerComponent) findVariables(exprStr string) []string {
 			availableVar := "available_" + tag
 			if strings.Contains(exprStr, availableVar) {
 				vars = append(vars, availableVar)
+			}
+		}
+	}
+
+	// Check for tag delay variables (delay_tag)
+	if strings.Contains(exprStr, "delay_") {
+		components := lb.router.GetComponents()
+		for _, component := range components {
+			tag := component.GetTag()
+			delayVar := "delay_" + tag
+			if strings.Contains(exprStr, delayVar) {
+				vars = append(vars, delayVar)
 			}
 		}
 	}
@@ -250,6 +266,29 @@ func (lb *LoadBalancerComponent) checkTagAvailability(tag string) bool {
 
 	// Component doesn't support availability checking, return true by default
 	return true
+}
+
+// checkTagDelay returns the average line delay (in milliseconds) for a component with the given tag.
+// The delay comes from AuthManager's heartbeat-based statistics via GetAverageDelay().
+// If the component is not found, or auth is disabled/absent, returns a large value to indicate high delay.
+func (lb *LoadBalancerComponent) checkTagDelay(tag string) float64 {
+	component, found := lb.router.GetComponent(tag)
+	if !found {
+		// Not found: return a very large delay so comparisons like delay_<tag> < X fail safely
+		return math.MaxFloat64
+	}
+
+	// Check whether the component exposes an AuthManager
+	type authHolder interface{ GetAuthManager() *AuthManager }
+	if ah, ok := component.(authHolder); ok {
+		if am := ah.GetAuthManager(); am != nil {
+			d := am.GetAverageDelay() // time.Duration
+			return float64(d.Nanoseconds()) / 1000000.0
+		}
+	}
+
+	// Without auth or without valid delay data, treat as very high delay to fail conservative comparisons
+	return math.MaxFloat64
 }
 
 // getCurrentStats returns average bps (bits per second) and pps values across the window
@@ -377,6 +416,11 @@ func (lb *LoadBalancerComponent) evaluateExpressionDirect(compiled *CompiledExpr
 			if len(varKey) > 10 && varKey[:10] == "available_" {
 				tag := varKey[10:] // Extract the tag part
 				env[varKey] = lb.checkTagAvailability(tag)
+			}
+			// Check if this is a delay variable (delay_tag)
+			if len(varKey) > 6 && varKey[:6] == "delay_" {
+				tag := varKey[6:]
+				env[varKey] = lb.checkTagDelay(tag)
 			}
 		}
 	}

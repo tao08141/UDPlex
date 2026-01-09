@@ -12,7 +12,7 @@ services:
     listen_addr: 0.0.0.0:5202
     timeout: 120
     replace_old_mapping: true
-    detour: [client_forward]
+    detour: [load_balancer]
   - type: tcp_tunnel_forward
     tag: client_forward
     forwarders: [127.0.0.1:5203:2]
@@ -23,6 +23,13 @@ services:
       enabled: true
       enable_encryption: true
       heartbeat_interval: 30
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 10
+    detour:
+      - rule: delay_client_forward < 10
+        targets:
+          - client_forward
 api:
   enabled: true
   port: 8080
