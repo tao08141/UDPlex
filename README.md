@@ -1,7 +1,7 @@
 # UDPlex
 [English](README.md) | [中文](README_ZH.md)
 
-UDPlex is an efficient UDP packet bidirectional forwarding tool that supports forwarding UDP traffic to multiple target servers simultaneously, handling return traffic, and supporting authentication, encryption, and other features. It is suitable for gaming acceleration, network redundancy, and traffic distribution scenarios.
+UDPlex is a high-performance, component-based UDP traffic replication, forwarding, filtering, and smart routing tool that fans out the same UDP stream to multiple targets in parallel while handling return traffic, with support for authentication/encryption, protocol detection, load balancing, and multi-path redundancy or bandwidth-threshold smart splitting (useful for link acceleration and bandwidth aggregation).
 
 ## Features
 
