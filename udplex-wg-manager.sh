@@ -88,6 +88,8 @@ T() {
 
     "select_role|zh") msg="请选择角色：[1] 入口机器(client)  [2] 出口机器(server)";;
     "select_role|en") msg="Select role: [1] Entry (client)  [2] Exit (server)";;
+    "enable_tcp|zh") msg="是否启用 UDP over TCP (使用 TCP 隧道转发 UDP)？(y/N): ";;
+    "enable_tcp|en") msg="Enable UDP over TCP (Tunneling UDP over TCP)? (y/N): ";;
     "invalid_choice|zh") msg="无效选择";;
     "invalid_choice|en") msg="Invalid choice.";;
 
@@ -382,6 +384,17 @@ write_client_config() {
   local WG_INPUT_PORT="${3}"
   local SECRET="${4}"
   local THRESH="${5}"
+  local PROTO="${6:-udp}"
+
+  local TYPE="forward"
+  local NODELAY_CFG=""
+  local SUFFIX=""
+  
+  if [[ "$PROTO" == "tcp" ]]; then
+    TYPE="tcp_tunnel_forward"
+    NODELAY_CFG="    no_delay: true"
+    SUFFIX=":4"
+  fi
 
   cat > "${CONFIG_FILE}" <<YAML
 buffer_size: 1500
@@ -399,24 +412,24 @@ services:
     timeout: 120
     replace_old_mapping: true
     detour: [load_balancer]
-  - type: forward
+  - type: ${TYPE}
     tag: redundant_forward1
-    forwarders: [${LINE1_ADDR}]
+    forwarders: [${LINE1_ADDR}${SUFFIX}]
     reconnect_interval: 5
     connection_check_time: 30
-    send_keepalive: true
+${NODELAY_CFG}
     detour: [wg_input]
     auth:
       secret: ${SECRET}
       enabled: true
       enable_encryption: false
       heartbeat_interval: 30
-  - type: forward
+  - type: ${TYPE}
     tag: redundant_forward2
-    forwarders: [${LINE2_ADDR}]
+    forwarders: [${LINE2_ADDR}${SUFFIX}]
     reconnect_interval: 5
     connection_check_time: 30
-    send_keepalive: true
+${NODELAY_CFG}
     detour: [wg_input]
     auth:
       secret: ${SECRET}
@@ -443,6 +456,15 @@ write_server_config() {
   local WG_PORT="${3}"
   local SECRET="${4}"
   local THRESH="${5}"
+  local PROTO="${6:-udp}"
+
+  local TYPE="listen"
+  local NODELAY_CFG=""
+
+  if [[ "$PROTO" == "tcp" ]]; then
+    TYPE="tcp_tunnel_listen"
+    NODELAY_CFG="    no_delay: true"
+  fi
 
   cat > "${CONFIG_FILE}" <<YAML
 buffer_size: 1500
@@ -454,22 +476,24 @@ logging:
   output_path: stdout
   caller: true
 services:
-  - type: listen
+  - type: ${TYPE}
     tag: server_listen1
     listen_addr: 0.0.0.0:${LISTEN1_PORT}
     timeout: 120
     replace_old_mapping: false
+${NODELAY_CFG}
     detour: [wg_forward]
     auth:
       secret: ${SECRET}
       enabled: true
       enable_encryption: false
       heartbeat_interval: 30
-  - type: listen
+  - type: ${TYPE}
     tag: server_listen2
     listen_addr: 0.0.0.0:${LISTEN2_PORT}
     timeout: 120
     replace_old_mapping: false
+${NODELAY_CFG}
     detour: [wg_forward]
     auth:
       secret: ${SECRET}
@@ -614,6 +638,15 @@ install_flow() {
     fi
   done
 
+  # Protocol selection (UDP over TCP)
+  local PROTO="udp"
+  echo
+  printf "$(T enable_tcp)"
+  read -r enable_tcp_ans
+  if [[ "${enable_tcp_ans:-}" =~ ^[Yy]$ ]]; then
+    PROTO="tcp"
+  fi
+
   # docker-compose
   write_compose_file
 
@@ -627,7 +660,7 @@ install_flow() {
       err need_two_lines
       exit 1
     fi
-    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$WG_INPUT_PORT" "$SECRET" "$THRESH"
+    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$WG_INPUT_PORT" "$SECRET" "$THRESH" "$PROTO"
 
     local LOCAL_ADDR PEER_ADDR
     read -rp "$(T prompt_client_addr)" LOCAL_ADDR || true
@@ -643,7 +676,7 @@ install_flow() {
     LISTEN2_PORT="${LISTEN2_PORT:-9001}"
     read -rp "$(T prompt_server_wg)" WG_PORT || true
     WG_PORT="${WG_PORT:-51820}"
-    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$WG_PORT" "$SECRET" "$THRESH"
+    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$WG_PORT" "$SECRET" "$THRESH" "$PROTO"
 
     local LOCAL_ADDR PEER_ADDR
     read -rp "$(T prompt_server_addr)" LOCAL_ADDR || true
