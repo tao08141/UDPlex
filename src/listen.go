@@ -353,7 +353,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 
 		// Create response
 		responseBuffer := l.router.GetBuffer()
-		l.router.PutBuffer(responseBuffer)
+		defer l.router.PutBuffer(responseBuffer)
 		responseLen, err := l.authManager.CreateAuthChallenge(responseBuffer, MsgTypeAuthResponse, forwardID, poolID)
 		if err != nil {
 			logger.Warnf("%s: Failed to create auth challenge response: %v", l.tag, err)

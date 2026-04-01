@@ -178,6 +178,8 @@ func (l *TcpTunnelListenComponent) Stop() error {
 		l.listener = nil
 	}
 
+	l.authManager.Stop()
+
 	logger.Infof("%s: Stopped listening on %s", l.tag, l.listenAddr)
 	return nil
 }

@@ -189,9 +189,11 @@ func (f *TcpTunnelForwardComponent) Stop() error {
 			} else {
 				logger.Infof("%s: Closing connection (already nil) in pool %x", f.tag, poolID)
 			}
-
+			conn.Close()
 		}
 	}
+
+	f.authManager.Stop()
 
 	return nil
 }

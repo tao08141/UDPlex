@@ -215,6 +215,16 @@ func (dm *DeduplicationManager) cleanupExpiredFrames() {
 	}
 }
 
+// Stop shuts down the AuthManager and its background goroutines.
+func (am *AuthManager) Stop() {
+	if am == nil {
+		return
+	}
+	if am.deduplicationMgr != nil {
+		am.deduplicationMgr.Stop()
+	}
+}
+
 // Stop stops the deduplication manager
 func (dm *DeduplicationManager) Stop() {
 	close(dm.stopCleanup)
@@ -245,6 +255,8 @@ type AuthManager struct {
 	deduplicationMgr  *DeduplicationManager
 	challengeCache    map[[ChallengeSize]byte]time.Time
 	challengeMu       sync.RWMutex
+	// cleanupPending ensures at most one cleanupExpiredChallenges goroutine runs at a time.
+	cleanupPending    atomic.Bool
 	delayWindowSize   int
 	delays            []time.Duration // Fixed-size array for circular buffer
 	delayIndex        atomic.Uint32   // Current index in the circular buffer
@@ -432,7 +444,14 @@ func (am *AuthManager) ProcessAuthChallenge(data []byte) (ForwardID, PoolID, err
 	am.challengeCache[challengeKey] = time.Now()
 	am.challengeMu.Unlock()
 
-	go am.cleanupExpiredChallenges()
+	// At most one cleanup goroutine runs at a time to avoid piling up under
+	// high auth load while still keeping the cache bounded.
+	if am.cleanupPending.CompareAndSwap(false, true) {
+		go func() {
+			defer am.cleanupPending.Store(false)
+			am.cleanupExpiredChallenges()
+		}()
+	}
 
 	return forwardID, poolID, nil
 }

@@ -27,6 +27,10 @@ type ForwardConn struct {
 	sendQueuePrio      chan *Packet
 	closeCh            chan struct{}
 	closed             atomic.Bool
+
+	// Guards against concurrent reconnect attempts and auth goroutine pile-up.
+	reconnecting   atomic.Int32
+	authInProgress atomic.Int32
 }
 
 // Address returns the remote address string for this forward connection
@@ -380,6 +384,8 @@ func (f *ForwardComponent) Stop() error {
 		conn.signalClose()
 	}
 
+	f.authManager.Stop()
+
 	return nil
 }
 
@@ -429,6 +435,12 @@ func (f *ForwardComponent) handleConnectionMaintenance(conn *ForwardConn) {
 
 // sendAuthChallenge sends an authentication challenge to a server
 func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
+	// Prevent concurrent auth goroutines piling up on the same conn.
+	if !conn.authInProgress.CompareAndSwap(0, 1) {
+		return
+	}
+	defer conn.authInProgress.Store(0)
+
 	if !conn.IsConnected() {
 		return
 	}
@@ -541,6 +553,12 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 
 // tryReconnect attempts to reconnect to a forwarder
 func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
+	// Prevent multiple concurrent reconnect attempts on the same conn.
+	if !conn.reconnecting.CompareAndSwap(0, 1) {
+		return
+	}
+	defer conn.reconnecting.Store(0)
+
 	if time.Since(conn.lastReconnectAttempt) < f.reconnectInterval {
 		return
 	}
@@ -575,6 +593,16 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 	conn.SetConnected(newConn)
 	conn.authRetryCount = 0
 	conn.heartbeatMissCount = 0
+	conn.authState.SetAuthenticated(0)
+
+	conn.signalClose()
+	conn.closed.Store(false)
+	conn.closeCh = make(chan struct{})
+
+	// Drain stale packets accumulated while the connection was down.
+	f.drainForwardQueue(conn)
+	go f.forwardConnSendLoop(conn)
+
 	logger.Infof("%s: Successfully reconnected to %s", f.tag, conn.remoteAddr)
 
 	go f.readFromForwarder(conn)
