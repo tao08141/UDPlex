@@ -1,0 +1,27 @@
+buffer_size: 2048
+queue_size: 10240
+worker_count: 4
+services:
+  - type: tcp_tunnel_listen
+    tag: tcp_server
+    listen_addr: 0.0.0.0:9000
+    timeout: 120
+    broadcast_mode: false
+    detour: [wg_server]
+    auth:
+      enabled: true
+      secret: CHANGE_ME_SHARED_SECRET
+      enable_encryption: false
+
+  - type: wg
+    tag: wg_server
+    interface_name: wg0
+    mtu: 1420
+    addresses:
+      - 10.7.0.1/24
+    private_key: YOUR_SERVER_PRIVATE_KEY_HEX
+    listen_port: 51820
+    peers:
+      - public_key: YOUR_CLIENT_PUBLIC_KEY_HEX
+        allowed_ips:
+          - 10.7.0.2/32

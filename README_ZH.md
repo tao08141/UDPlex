@@ -146,6 +146,10 @@ examples 目录包含多种使用场景的配置示例：
 - [**redundant_server.yaml**](examples/redundant_server.yaml) - UDP冗余服务端配置，接收客户端流量并转发
 - [**wg_bidirectional_client.yaml**](examples/wg_bidirectional_client.yaml) - WireGuard UDP上下行分离通信客户端配置
 - [**wg_bidirectional_server.yaml**](examples/wg_bidirectional_server.yaml) - WireGuard UDP上下行分离通信服务端配置
+- [**wg_component_forward_client.yaml**](examples/wg_component_forward_client.yaml) - 内嵌 WireGuard + Forward 客户端配置
+- [**wg_component_forward_server.yaml**](examples/wg_component_forward_server.yaml) - 内嵌 WireGuard + Forward 服务端配置
+- [**wg_component_tcp_tunnel_client.yaml**](examples/wg_component_tcp_tunnel_client.yaml) - 内嵌 WireGuard + TCP Tunnel 客户端配置
+- [**wg_component_tcp_tunnel_server.yaml**](examples/wg_component_tcp_tunnel_server.yaml) - 内嵌 WireGuard + TCP Tunnel 服务端配置
 - [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP隧道服务端配置，监听TCP连接并转发UDP流量
 - [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
 - [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - 基于带宽阈值的负载均衡配置，当流量小于等于100M时向两个服务器转发，大于100M时只向一个服务器转发

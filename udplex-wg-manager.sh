@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# UDPlex + WireGuard 管理脚本
-# Manage UDPlex + WireGuard
-# and advanced smart traffic control.
-#
+# UDPlex + WireGuard manager
 # Commands:
 #   install | uninstall | start | stop | pause | resume | status | logs | show-keys | update | reload | lang <zh|en> | set-threshold <number>
-#
-# Examples:
-#   sudo bash udplex-wg-manager.sh install
-#   sudo bash udplex-wg-manager.sh lang en
-#   sudo bash udplex-wg-manager.sh set-threshold 80000000
-#   sudo bash udplex-wg-manager.sh start
 
 # --------------------------------
 # Global
@@ -26,9 +17,9 @@ LANG_FILE="${BASE_DIR}/lang"
 THRESHOLD_FILE="${BASE_DIR}/threshold"
 
 WG_DIR="/etc/wireguard"
-WG_CONF="${WG_DIR}/wg0.conf"
 WG_PRIV="${WG_DIR}/wg_private.key"
 WG_PUB="${WG_DIR}/wg_public.key"
+WG_IFACE="wg0"
 
 DOCKER_INSTALL_SCRIPT_URL="https://get.docker.com"
 UDPlex_IMAGE="ghcr.io/tao08141/udplex:latest"
@@ -58,170 +49,155 @@ set_lang_file() {
 LANG_SEL="$(get_lang)"
 
 T() {
-  # t KEY [arg1 arg2 ...]
   local key="$1"; shift || true
-  local L="${LANG_SEL}"
   local msg=""
-  case "${key}|${L}" in
-    "need_root|zh") msg="请使用 root 权限运行本脚本（例如：sudo bash $0 ...）";;
-    "need_root|en") msg="Please run this script as root (e.g., sudo bash $0 ...)";;
+  case "${key}|${LANG_SEL}" in
+    need_root|zh) msg="请使用 root 权限运行此脚本，例如：sudo bash $0 ..." ;;
+    need_root|en) msg="Please run this script as root (e.g., sudo bash $0 ...)" ;;
 
-    "docker_installed|zh") msg="Docker 已安装";;
-    "docker_installed|en") msg="Docker is already installed.";;
-    "docker_installing|zh") msg="开始安装 Docker...";;
-    "docker_installing|en") msg="Installing Docker...";;
-    "compose_missing|zh") msg="未检测到 docker compose，尝试安装 docker compose 插件（如失败请手动安装）。";;
-    "compose_missing|en") msg="Docker compose not found. Trying to install docker compose plugin (install manually if it fails).";;
-    "compose_failed|zh") msg="无法自动安装 docker compose，请手动安装后重试。";;
-    "compose_failed|en") msg="Failed to auto-install docker compose. Please install it manually and retry.";;
-    "wg_installed|zh") msg="WireGuard 已安装";;
-    "wg_installed|en") msg="WireGuard is already installed.";;
-    "wg_installing|zh") msg="开始安装 WireGuard...";;
-    "wg_installing|en") msg="Installing WireGuard...";;
+    docker_installed|zh) msg="Docker 已安装。" ;;
+    docker_installed|en) msg="Docker is already installed." ;;
+    docker_installing|zh) msg="正在安装 Docker..." ;;
+    docker_installing|en) msg="Installing Docker..." ;;
+    compose_missing|zh) msg="未检测到 docker compose，正在尝试安装 compose 插件；如果失败请手动安装。" ;;
+    compose_missing|en) msg="Docker compose not found. Trying to install docker compose plugin (install manually if it fails)." ;;
+    compose_failed|zh) msg="自动安装 docker compose 失败，请手动安装后重试。" ;;
+    compose_failed|en) msg="Failed to auto-install docker compose. Please install it manually and retry." ;;
 
-    "gen_keys|zh") msg="生成 WireGuard 密钥...";;
-    "gen_keys|en") msg="Generating WireGuard keys...";;
-    "keys_exist|zh") msg="已存在 WireGuard 密钥，跳过生成。";;
-    "keys_exist|en") msg="WireGuard keys exist. Skipping generation.";;
-    "show_pubkey_title|zh") msg="本机 WireGuard 公钥（请复制给对端机器）：";;
-    "show_pubkey_title|en") msg="Local WireGuard public key (share it with the peer):";;
+    wg_installed|zh) msg="WireGuard 工具已安装。" ;;
+    wg_installed|en) msg="WireGuard tools are already installed." ;;
+    wg_installing|zh) msg="正在安装 WireGuard 工具..." ;;
+    wg_installing|en) msg="Installing WireGuard tools..." ;;
+    gen_keys|zh) msg="正在生成 WireGuard 密钥..." ;;
+    gen_keys|en) msg="Generating WireGuard keys..." ;;
+    keys_exist|zh) msg="WireGuard 密钥已存在，跳过生成。" ;;
+    keys_exist|en) msg="WireGuard keys exist. Skipping generation." ;;
+    show_pubkey_title|zh) msg="本机 WireGuard 公钥，请发送给对端：" ;;
+    show_pubkey_title|en) msg="Local WireGuard public key (share it with the peer):" ;;
 
-    "select_role|zh") msg="请选择角色：[1] 入口机器(client)  [2] 出口机器(server)";;
-    "select_role|en") msg="Select role: [1] Entry (client)  [2] Exit (server)";;
-    "enable_tcp|zh") msg="是否启用 UDP over TCP (使用 TCP 隧道转发 UDP)？(y/N): ";;
-    "enable_tcp|en") msg="Enable UDP over TCP (Tunneling UDP over TCP)? (y/N): ";;
-    "invalid_choice|zh") msg="无效选择";;
-    "invalid_choice|en") msg="Invalid choice.";;
+    select_role|zh) msg="请选择角色：[1] 入口端(client)  [2] 出口端(server)" ;;
+    select_role|en) msg="Select role: [1] Entry (client)  [2] Exit (server)" ;;
+    enable_tcp|zh) msg="是否启用 UDP over TCP（通过 TCP 隧道转发 UDP）？(y/N): " ;;
+    enable_tcp|en) msg="Enable UDP over TCP (Tunneling UDP over TCP)? (y/N): " ;;
+    invalid_choice|zh) msg="无效选择。" ;;
+    invalid_choice|en) msg="Invalid choice." ;;
 
-    "secret_found|zh") msg="已检测到已存在的共享密钥，将沿用。";;
-    "secret_found|en") msg="Existing shared secret found. Reusing it.";;
-    "prompt_secret|zh") msg="设置 UDPlex 鉴权密钥（两端必须一致，留空使用随机生成）: ";;
-    "prompt_secret|en") msg="Set UDPlex auth secret (must match on both ends, empty to auto-generate): ";;
+    secret_found|zh) msg="检测到已有共享密钥，将继续复用。" ;;
+    secret_found|en) msg="Existing shared secret found. Reusing it." ;;
+    prompt_secret|zh) msg="设置 UDPlex 鉴权密钥（两端必须一致，留空则自动生成）: " ;;
+    prompt_secret|en) msg="Set UDPlex auth secret (must match on both ends, empty to auto-generate): " ;;
+    prompt_peer_pub|zh) msg="请输入对端 WireGuard 公钥（在对端执行 install 时可以看到）:" ;;
+    prompt_peer_pub|en) msg="Paste the peer WireGuard public key (shown by running install on the peer):" ;;
+    bad_pubkey|zh) msg="公钥格式看起来不正确，请重新输入。" ;;
+    bad_pubkey|en) msg="Invalid-looking public key. Please paste again." ;;
 
-    "prompt_peer_pub|zh") msg="请粘贴对端 WireGuard 公钥（可在对端执行本脚本 install 时打印的公钥）：";;
-    "prompt_peer_pub|en") msg="Paste the peer WireGuard public key (shown by running install on the peer):";;
-    "bad_pubkey|zh") msg="公钥看起来不正确，请重新粘贴。";;
-    "bad_pubkey|en") msg="Invalid-looking public key. Please paste again.";;
+    compose_written|zh) msg="docker-compose.yml 已生成。" ;;
+    compose_written|en) msg="docker-compose.yml generated." ;;
+    prompt_client_wg_port|zh) msg="客户端本地 WireGuard 端口（默认 51820）: " ;;
+    prompt_client_wg_port|en) msg="Client local WireGuard port (default 51820): " ;;
+    prompt_line1|zh) msg="线路 1 目标地址（出口服务器 IP:端口，默认端口 9000，例如 1.2.3.4:9000）: " ;;
+    prompt_line1|en) msg="Forward line #1 target (exit server IP:port, default 9000, e.g. 1.2.3.4:9000): " ;;
+    prompt_line2|zh) msg="线路 2 目标地址（出口服务器 IP:端口，默认端口 9001，例如 1.2.3.4:9001）: " ;;
+    prompt_line2|en) msg="Forward line #2 target (exit server IP:port, default 9001, e.g. 1.2.3.4:9001): " ;;
+    need_two_lines|zh) msg="必须同时提供两条线路的目标地址。" ;;
+    need_two_lines|en) msg="Both forward line targets are required." ;;
+    client_cfg_written|zh) msg="高级客户端 config.yaml 已生成。" ;;
+    client_cfg_written|en) msg="Advanced client config.yaml generated." ;;
 
-    "compose_written|zh") msg="已生成 docker-compose.yml";;
-    "compose_written|en") msg="docker-compose.yml generated.";;
+    prompt_server_p1|zh) msg="服务端线路 1 监听端口（默认 9000）: " ;;
+    prompt_server_p1|en) msg="Server listen port for line #1 (default 9000): " ;;
+    prompt_server_p2|zh) msg="服务端线路 2 监听端口（默认 9001）: " ;;
+    prompt_server_p2|en) msg="Server listen port for line #2 (default 9001): " ;;
+    prompt_server_wg|zh) msg="WireGuard 端口（默认 51820）: " ;;
+    prompt_server_wg|en) msg="WireGuard server port (default 51820): " ;;
+    server_cfg_written|zh) msg="高级服务端 config.yaml 已生成。" ;;
+    server_cfg_written|en) msg="Advanced server config.yaml generated." ;;
 
-    "prompt_client_wg_port|zh") msg="客户端本地 UDPlex 监听端口（用于 WireGuard 出口，默认 7000）: ";;
-    "prompt_client_wg_port|en") msg="Client local UDPlex listen port (for WireGuard egress, default 7000): ";;
-    "prompt_line1|zh") msg="转发线路1的目标地址（出口服务器IP:端口，默认 9000 端口，例如 1.2.3.4:9000）: ";;
-    "prompt_line1|en") msg="Forward line #1 target (exit server IP:port, default 9000, e.g. 1.2.3.4:9000): ";;
-    "prompt_line2|zh") msg="转发线路2的目标地址（出口服务器IP:端口，默认 9001 端口，例如 1.2.3.4:9001）: ";;
-    "prompt_line2|en") msg="Forward line #2 target (exit server IP:port, default 9001, e.g. 1.2.3.4:9001): ";;
-    "need_two_lines|zh") msg="必须提供两条线路的目标地址。";;
-    "need_two_lines|en") msg="Both forward line targets are required.";;
-    "client_cfg_written|zh") msg="已生成客户端进阶配置 config.yaml";;
-    "client_cfg_written|en") msg="Advanced client config.yaml generated.";;
+    prompt_client_addr|zh) msg="WireGuard 本机地址（默认 10.0.0.1/24）: " ;;
+    prompt_client_addr|en) msg="WireGuard local address (default 10.0.0.1/24): " ;;
+    prompt_client_peer|zh) msg="WireGuard 对端地址（默认 10.0.0.2）: " ;;
+    prompt_client_peer|en) msg="WireGuard peer address (default 10.0.0.2): " ;;
+    wg_client_written|zh) msg="内嵌 WireGuard 客户端配置已写入 UDPlex config.yaml。" ;;
+    wg_client_written|en) msg="Embedded WireGuard client config written into UDPlex config.yaml." ;;
+    prompt_server_addr|zh) msg="WireGuard 本机地址（默认 10.0.0.2/24）: " ;;
+    prompt_server_addr|en) msg="WireGuard local address (default 10.0.0.2/24): " ;;
+    prompt_server_peer|zh) msg="WireGuard 对端地址（默认 10.0.0.1）: " ;;
+    prompt_server_peer|en) msg="WireGuard peer address (default 10.0.0.1): " ;;
+    wg_server_written|zh) msg="内嵌 WireGuard 服务端配置已写入 UDPlex config.yaml。" ;;
+    wg_server_written|en) msg="Embedded WireGuard server config written into UDPlex config.yaml." ;;
 
-    "prompt_server_p1|zh") msg="服务端线路1监听端口（默认 9000）: ";;
-    "prompt_server_p1|en") msg="Server listen port for line #1 (default 9000): ";;
-    "prompt_server_p2|zh") msg="服务端线路2监听端口（默认 9001）: ";;
-    "prompt_server_p2|en") msg="Server listen port for line #2 (default 9001): ";;
-    "prompt_server_wg|zh") msg="WireGuard 服务端端口（默认 51820）: ";;
-    "prompt_server_wg|en") msg="WireGuard server port (default 51820): ";;
-    "server_cfg_written|zh") msg="已生成服务端进阶配置 config.yaml";;
-    "server_cfg_written|en") msg="Advanced server config.yaml generated.";;
+    prompt_threshold|zh) msg="设置带宽阈值（bps，默认 50000000）: " ;;
+    prompt_threshold|en) msg="Set bandwidth threshold (bps, default 50000000): " ;;
+    threshold_saved|zh) msg="带宽阈值已设置为 %s bps" ;;
+    threshold_saved|en) msg="Bandwidth threshold set to %s bps" ;;
+    install_done|zh) msg="安装准备完成。现在可以执行：sudo bash $0 start" ;;
+    install_done|en) msg="Installation prepared. You can now run: sudo bash $0 start" ;;
 
-    "prompt_client_addr|zh") msg="WireGuard 本机地址（默认 10.0.0.1/24）: ";;
-    "prompt_client_addr|en") msg="WireGuard local address (default 10.0.0.1/24): ";;
-    "prompt_client_peer|zh") msg="WireGuard 对端地址（默认 10.0.0.2）: ";;
-    "prompt_client_peer|en") msg="WireGuard peer address (default 10.0.0.2): ";;
-    "wg_client_written|zh") msg="已生成 WireGuard 客户端配置 /etc/wireguard/wg0.conf";;
-    "wg_client_written|en") msg="WireGuard client config /etc/wireguard/wg0.conf generated.";;
+    start_udplex|zh) msg="UDPlex 容器已启动。" ;;
+    start_udplex|en) msg="UDPlex container started." ;;
+    start_wg_ok|zh) msg="内嵌 WireGuard 接口已就绪。" ;;
+    start_wg_ok|en) msg="Embedded WireGuard interface is up." ;;
+    start_wg_fail|zh) msg="内嵌 WireGuard 接口未就绪，请检查容器日志、/dev/net/tun 与配置。" ;;
+    start_wg_fail|en) msg="Embedded WireGuard interface is not ready. Check container logs, /dev/net/tun, and config." ;;
+    wg_enable_boot|zh) msg="容器已设置自动重启，内嵌 WireGuard 会随 UDPlex 一起启动。" ;;
+    wg_enable_boot|en) msg="Container restart policy is enabled; embedded WireGuard starts with UDPlex." ;;
+    stopped_all|zh) msg="UDPlex 与内嵌 WireGuard 已停止。" ;;
+    stopped_all|en) msg="UDPlex and embedded WireGuard stopped." ;;
+    paused_wg|zh) msg="内嵌 WireGuard 接口已暂停（link down），UDPlex 容器保持运行。" ;;
+    paused_wg|en) msg="Embedded WireGuard interface paused (link down). UDPlex container remains running." ;;
+    wg_not_running|zh) msg="内嵌 WireGuard 接口未运行。" ;;
+    wg_not_running|en) msg="Embedded WireGuard interface is not running." ;;
+    resumed_wg|zh) msg="内嵌 WireGuard 接口已恢复（link up）。" ;;
+    resumed_wg|en) msg="Embedded WireGuard interface resumed (link up)." ;;
+    wg_start_failed|zh) msg="恢复内嵌 WireGuard 接口失败，请检查配置或容器状态。" ;;
+    wg_start_failed|en) msg="Failed to resume embedded WireGuard interface. Check config or container state." ;;
 
-    "prompt_server_addr|zh") msg="WireGuard 本机地址（默认 10.0.0.2/24）: ";;
-    "prompt_server_addr|en") msg="WireGuard local address (default 10.0.0.2/24): ";;
-    "prompt_server_peer|zh") msg="WireGuard 对端地址（默认 10.0.0.1）: ";;
-    "prompt_server_peer|en") msg="WireGuard peer address (default 10.0.0.1): ";;
-    "wg_server_written|zh") msg="已生成 WireGuard 服务端配置 /etc/wireguard/wg0.conf";;
-    "wg_server_written|en") msg="WireGuard server config /etc/wireguard/wg0.conf generated.";;
+    no_config|zh) msg="未找到配置文件，请先执行：sudo bash $0 install" ;;
+    no_config|en) msg="Config not found. Run: sudo bash $0 install first." ;;
+    no_compose|zh) msg="未找到 docker-compose.yml。" ;;
+    no_compose|en) msg="docker-compose.yml not found." ;;
+    logs_follow|zh) msg="正在跟随 UDPlex 容器日志..." ;;
+    logs_follow|en) msg="Following UDPlex container logs..." ;;
+    updated_image|zh) msg="UDPlex 镜像已更新并重启。" ;;
+    updated_image|en) msg="UDPlex image updated and restarted." ;;
+    show_local_pub|zh) msg="本机 WireGuard 公钥：" ;;
+    show_local_pub|en) msg="Local WireGuard public key:" ;;
+    no_local_pub|zh) msg="未找到本机公钥，请先执行 install 生成密钥。" ;;
+    no_local_pub|en) msg="No local public key found. Run install to generate keys first." ;;
 
-    "prompt_threshold|zh") msg="设置带宽阈值（bps，默认 50000000）：";;
-    "prompt_threshold|en") msg="Set bandwidth threshold (bps, default 50000000): ";;
-    "threshold_saved|zh") msg="带宽阈值已设置为 %s bps";;
-    "threshold_saved|en") msg="Bandwidth threshold set to %s bps";;
+    uninstall_confirm|zh) msg="将执行卸载操作：\n- 停止 UDPlex 与内嵌 WireGuard\n- 删除 %s 下的文件\n- 保留 /etc/wireguard 密钥（可选删除）\n确认继续？(y/N): " ;;
+    uninstall_confirm|en) msg="This will uninstall:\n- Stop UDPlex and embedded WireGuard\n- Remove files under %s\n- Keep /etc/wireguard keys (optional removal)\nProceed? (y/N): " ;;
+    uninstall_cancel|zh) msg="已取消。" ;;
+    uninstall_cancel|en) msg="Cancelled." ;;
+    removed_base|zh) msg="已删除 %s" ;;
+    removed_base|en) msg="%s removed." ;;
+    prompt_del_wg|zh) msg="是否同时删除 WireGuard 密钥（/etc/wireguard/wg_private.key, wg_public.key）？(y/N): " ;;
+    prompt_del_wg|en) msg="Also delete WireGuard keys (/etc/wireguard/wg_private.key, wg_public.key)? (y/N): " ;;
+    deleted_wg|zh) msg="WireGuard 密钥已删除。" ;;
+    deleted_wg|en) msg="WireGuard keys deleted." ;;
+    kept_wg|zh) msg="已保留 WireGuard 密钥。" ;;
+    kept_wg|en) msg="Kept WireGuard keys." ;;
+    uninstall_done|zh) msg="卸载完成。" ;;
+    uninstall_done|en) msg="Uninstall completed." ;;
 
-    "install_done|zh") msg="安装准备完成。现在可执行：sudo bash $0 start";;
-    "install_done|en") msg="Installation prepared. You can now run: sudo bash $0 start";;
-
-    "start_udplex|zh") msg="UDPlex 容器已启动。";;
-    "start_udplex|en") msg="UDPlex container started.";;
-    "start_wg_ok|zh") msg="WireGuard 已启动。";;
-    "start_wg_ok|en") msg="WireGuard started.";;
-    "start_wg_fail|zh") msg="WireGuard 启动失败，请检查配置与公钥是否正确。";;
-    "start_wg_fail|en") msg="WireGuard failed to start. Check config and public keys.";;
-    "wg_enable_boot|zh") msg="已设置 WireGuard 开机自启。";;
-    "wg_enable_boot|en") msg="WireGuard enabled on boot.";;
-
-    "stopped_all|zh") msg="已停止 UDPlex 与 WireGuard。";;
-    "stopped_all|en") msg="UDPlex and WireGuard stopped.";;
-    "paused_wg|zh") msg="已暂停（关闭）WireGuard 接口 wg0。UDPlex 容器保持运行。";;
-    "paused_wg|en") msg="WireGuard interface wg0 paused (down). UDPlex container remains running.";;
-    "wg_not_running|zh") msg="WireGuard wg0 未运行。";;
-    "wg_not_running|en") msg="WireGuard wg0 is not running.";;
-    "resumed_wg|zh") msg="已恢复 WireGuard 接口 wg0。";;
-    "resumed_wg|en") msg="WireGuard interface wg0 resumed (up).";;
-    "wg_start_failed|zh") msg="WireGuard 启动失败，请检查配置。";;
-    "wg_start_failed|en") msg="WireGuard start failed. Please check the config.";;
-
-    "no_config|zh") msg="未找到配置文件，请先运行：sudo bash $0 install";;
-    "no_config|en") msg="Config not found. Run: sudo bash $0 install first.";;
-    "no_compose|zh") msg="未找到 docker-compose.yml";;
-    "no_compose|en") msg="docker-compose.yml not found.";;
-    "logs_follow|zh") msg="正在跟随 UDPlex 容器日志...";;
-    "logs_follow|en") msg="Following UDPlex container logs...";;
-
-    "updated_image|zh") msg="UDPlex 镜像已更新并重启。";;
-    "updated_image|en") msg="UDPlex image updated and restarted.";;
-
-    "show_local_pub|zh") msg="本机 WireGuard 公钥：";;
-    "show_local_pub|en") msg="Local WireGuard public key:";;
-    "no_local_pub|zh") msg="未找到本机公钥，请先执行 install 生成密钥。";;
-    "no_local_pub|en") msg="No local public key found. Run install to generate keys first.";;
-
-    "uninstall_confirm|zh") msg="将执行卸载操作：\n- 停止 UDPlex 容器与 WireGuard\n- 删除 %s 下的文件\n- 保留 /etc/wireguard 配置与密钥（可选择删除）\n确认卸载？(y/N): ";;
-    "uninstall_confirm|en") msg="This will uninstall:\n- Stop UDPlex and WireGuard\n- Remove files under %s\n- Keep /etc/wireguard configs and keys (optional removal)\nProceed? (y/N): ";;
-    "uninstall_cancel|zh") msg="已取消。";;
-    "uninstall_cancel|en") msg="Cancelled.";;
-    "removed_base|zh") msg="已删除 %s";;
-    "removed_base|en") msg="%s removed.";;
-    "prompt_del_wg|zh") msg="是否同时删除 WireGuard 配置与密钥（/etc/wireguard/wg0.conf, wg_private.key, wg_public.key）？(y/N): ";;
-    "prompt_del_wg|en") msg="Also delete WireGuard config and keys (/etc/wireguard/wg0.conf, wg_private.key, wg_public.key)? (y/N): ";;
-    "deleted_wg|zh") msg="已删除 WireGuard 配置与密钥。";;
-    "deleted_wg|en") msg="WireGuard config and keys deleted.";;
-    "kept_wg|zh") msg="已保留 WireGuard 配置与密钥。";;
-    "kept_wg|en") msg="Kept WireGuard config and keys.";;
-    "uninstall_done|zh") msg="卸载完成。";;
-    "uninstall_done|en") msg="Uninstall completed.";;
-
-    "lang_set|zh") msg="语言已切换为：%s";;
-    "lang_set|en") msg="Language switched to: %s";;
-
-    "threshold_updated|zh") msg="已更新带宽阈值至 %s bps";;
-    "threshold_updated|en") msg="Bandwidth threshold updated to %s bps";;
-    "threshold_patch_fail|zh") msg="配置文件不包含新规则结构（seq 分流），请先重新 install 以重建配置。";;
-    "threshold_patch_fail|en") msg="Config does not contain new rule structure (seq split). Please re-run install to rebuild config.";;
-
-    "reload_done|zh") msg="配置已重新加载（容器重建/重启）。";;
-    "reload_done|en") msg="Configuration reloaded (container recreated/restarted).";;
-
-    "unknown_cmd|zh") msg="未知命令：%s";;
-    "unknown_cmd|en") msg="Unknown command: %s";;
-
-    *) msg="${key}";;
+    lang_set|zh) msg="语言已切换为：%s" ;;
+    lang_set|en) msg="Language switched to: %s" ;;
+    threshold_updated|zh) msg="带宽阈值已更新为 %s bps" ;;
+    threshold_updated|en) msg="Bandwidth threshold updated to %s bps" ;;
+    threshold_patch_fail|zh) msg="当前配置不包含新的 seq 分流规则，请重新执行 install 重建配置。" ;;
+    threshold_patch_fail|en) msg="Config does not contain new rule structure (seq split). Please re-run install to rebuild config." ;;
+    reload_done|zh) msg="配置已重载（容器已重新创建或重启）。" ;;
+    reload_done|en) msg="Configuration reloaded (container recreated/restarted)." ;;
+    unknown_cmd|zh) msg="未知命令：%s" ;;
+    unknown_cmd|en) msg="Unknown command: %s" ;;
+    *) msg="${key}" ;;
   esac
-  # shellcheck disable=SC2059
   printf -- "$msg" "$@"
 }
 
 err() { echo "[ERROR] $(T "$@")" >&2; }
 info() { echo "[INFO] $(T "$@")"; }
 warn() { echo "[WARN] $(T "$@")"; }
-
 # --------------------------------
 # Helpers
 # --------------------------------
@@ -292,7 +268,7 @@ install_docker() {
 }
 
 install_wireguard() {
-  if command -v wg >/dev/null 2>&1 && command -v wg-quick >/dev/null 2>&1; then
+  if command -v wg >/dev/null 2>&1; then
     info wg_installed
   else
     info wg_installing
@@ -301,7 +277,7 @@ install_wireguard() {
     case "$pm" in
       apt)
         apt-get update -y
-        apt-get install -y wireguard
+        apt-get install -y wireguard-tools
         ;;
       dnf)
         dnf install -y epel-release || true
@@ -369,6 +345,10 @@ services:
     command: ["/app/UDPlex", "-c", "/app/config.yaml"]
     volumes:
       - ./config.yaml:/app/config.yaml
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
     network_mode: host
     logging:
       options:
@@ -381,10 +361,15 @@ YAML
 write_client_config() {
   local LINE1_ADDR="${1}"
   local LINE2_ADDR="${2}"
-  local WG_INPUT_PORT="${3}"
+  local WG_PORT="${3}"
   local SECRET="${4}"
   local THRESH="${5}"
   local PROTO="${6:-udp}"
+  local LOCAL_ADDR="${7}"
+  local PEER_ADDR="${8}"
+  local PEER_PUBKEY="${9}"
+  local PRIV
+  PRIV=$(cat "${WG_PRIV}")
 
   local TYPE="forward"
   local NODELAY_CFG=""
@@ -406,19 +391,27 @@ logging:
   output_path: stdout
   caller: true
 services:
-  - type: listen
-    tag: wg_input
-    listen_addr: 127.0.0.1:${WG_INPUT_PORT}
-    timeout: 120
-    replace_old_mapping: true
+  - type: wg
+    tag: wg_component
+    interface_name: ${WG_IFACE}
+    listen_port: ${WG_PORT}
+    mtu: 1420
+    addresses: [${LOCAL_ADDR}]
+    private_key: ${PRIV}
+    reuse_incoming_detour: false
     detour: [load_balancer]
+    peers:
+      - public_key: ${PEER_PUBKEY}
+        endpoint: ${PEER_ADDR}:${WG_PORT}
+        allowed_ips: [${PEER_ADDR}/32]
+        persistent_keepalive: 25
   - type: ${TYPE}
     tag: redundant_forward1
     forwarders: [${LINE1_ADDR}${SUFFIX}]
     reconnect_interval: 5
     connection_check_time: 30
 ${NODELAY_CFG}
-    detour: [wg_input]
+    detour: [wg_component]
     auth:
       secret: ${SECRET}
       enabled: true
@@ -430,7 +423,7 @@ ${NODELAY_CFG}
     reconnect_interval: 5
     connection_check_time: 30
 ${NODELAY_CFG}
-    detour: [wg_input]
+    detour: [wg_component]
     auth:
       secret: ${SECRET}
       enabled: true
@@ -457,6 +450,11 @@ write_server_config() {
   local SECRET="${4}"
   local THRESH="${5}"
   local PROTO="${6:-udp}"
+  local LOCAL_ADDR="${7}"
+  local PEER_ADDR="${8}"
+  local PEER_PUBKEY="${9}"
+  local PRIV
+  PRIV=$(cat "${WG_PRIV}")
 
   local TYPE="listen"
   local NODELAY_CFG=""
@@ -482,7 +480,7 @@ services:
     timeout: 120
     replace_old_mapping: false
 ${NODELAY_CFG}
-    detour: [wg_forward]
+    detour: [wg_component]
     auth:
       secret: ${SECRET}
       enabled: true
@@ -494,19 +492,24 @@ ${NODELAY_CFG}
     timeout: 120
     replace_old_mapping: false
 ${NODELAY_CFG}
-    detour: [wg_forward]
+    detour: [wg_component]
     auth:
       secret: ${SECRET}
       enabled: true
       enable_encryption: false
       heartbeat_interval: 30
-  - type: forward
-    tag: wg_forward
-    forwarders: [127.0.0.1:${WG_PORT}]
-    reconnect_interval: 5
-    connection_check_time: 30
-    send_keepalive: false
+  - type: wg
+    tag: wg_component
+    interface_name: ${WG_IFACE}
+    listen_port: ${WG_PORT}
+    mtu: 1420
+    addresses: [${LOCAL_ADDR}]
+    private_key: ${PRIV}
+    reuse_incoming_detour: false
     detour: [load_balancer]
+    peers:
+      - public_key: ${PEER_PUBKEY}
+        allowed_ips: [${PEER_ADDR}/32]
   - type: load_balancer
     tag: load_balancer
     window_size: 3
@@ -519,52 +522,6 @@ ${NODELAY_CFG}
         targets: [server_listen2]
 YAML
   info server_cfg_written
-}
-
-write_wg_conf_client() {
-  local LOCAL_ADDR="${1}"
-  local PEER_ADDR="${2}"
-  local PEER_PUBKEY="${3}"
-  local WG_INPUT_PORT="${4}"
-
-  local PRIV
-  PRIV=$(cat "${WG_PRIV}")
-  cat > "${WG_CONF}" <<CONF
-[Interface]
-PrivateKey = ${PRIV}
-Address = ${LOCAL_ADDR}
-
-[Peer]
-PublicKey = ${PEER_PUBKEY}
-Endpoint = 127.0.0.1:${WG_INPUT_PORT}
-AllowedIPs = ${PEER_ADDR}/32
-PersistentKeepalive = 25
-CONF
-  chmod 600 "${WG_CONF}"
-  info wg_client_written
-}
-
-write_wg_conf_server() {
-  local LOCAL_ADDR="${1}"
-  local PEER_ADDR="${2}"
-  local PEER_PUBKEY="${3}"
-  local WG_PORT="${4}"
-
-  local PRIV
-  PRIV=$(cat "${WG_PRIV}")
-  cat > "${WG_CONF}" <<CONF
-[Interface]
-PrivateKey = ${PRIV}
-Address = ${LOCAL_ADDR}
-ListenPort = ${WG_PORT}
-
-[Peer]
-PublicKey = ${PEER_PUBKEY}
-AllowedIPs = ${PEER_ADDR}/32
-PersistentKeepalive = 25
-CONF
-  chmod 600 "${WG_CONF}"
-  info wg_server_written
 }
 
 # --------------------------------
@@ -651,23 +608,23 @@ install_flow() {
   write_compose_file
 
   if [[ "$ROLE" == "client" ]]; then
-    local WG_INPUT_PORT LINE1_ADDR LINE2_ADDR
-    read -rp "$(T prompt_client_wg_port)" WG_INPUT_PORT || true
-    WG_INPUT_PORT="${WG_INPUT_PORT:-7000}"
+    local WG_PORT LINE1_ADDR LINE2_ADDR
+    read -rp "$(T prompt_server_wg)" WG_PORT || true
+    WG_PORT="${WG_PORT:-51820}"
     read -rp "$(T prompt_line1)" LINE1_ADDR
     read -rp "$(T prompt_line2)" LINE2_ADDR
     if [[ -z "$LINE1_ADDR" || -z "$LINE2_ADDR" ]]; then
       err need_two_lines
       exit 1
     fi
-    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$WG_INPUT_PORT" "$SECRET" "$THRESH" "$PROTO"
 
     local LOCAL_ADDR PEER_ADDR
     read -rp "$(T prompt_client_addr)" LOCAL_ADDR || true
     LOCAL_ADDR="${LOCAL_ADDR:-10.0.0.1/24}"
     read -rp "$(T prompt_client_peer)" PEER_ADDR || true
     PEER_ADDR="${PEER_ADDR:-10.0.0.2}"
-    write_wg_conf_client "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY" "$WG_INPUT_PORT"
+    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$WG_PORT" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
+    info wg_client_written
   else
     local LISTEN1_PORT LISTEN2_PORT WG_PORT
     read -rp "$(T prompt_server_p1)" LISTEN1_PORT || true
@@ -676,14 +633,14 @@ install_flow() {
     LISTEN2_PORT="${LISTEN2_PORT:-9001}"
     read -rp "$(T prompt_server_wg)" WG_PORT || true
     WG_PORT="${WG_PORT:-51820}"
-    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$WG_PORT" "$SECRET" "$THRESH" "$PROTO"
 
     local LOCAL_ADDR PEER_ADDR
     read -rp "$(T prompt_server_addr)" LOCAL_ADDR || true
     LOCAL_ADDR="${LOCAL_ADDR:-10.0.0.2/24}"
     read -rp "$(T prompt_server_peer)" PEER_ADDR || true
     PEER_ADDR="${PEER_ADDR:-10.0.0.1}"
-    write_wg_conf_server "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY" "$WG_PORT"
+    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$WG_PORT" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
+    info wg_server_written
   fi
 
   echo
@@ -706,22 +663,27 @@ start_services() {
   $DOCKER_COMPOSE -f "${COMPOSE_FILE}" up -d
   info start_udplex
 
-  if wg-quick up wg0 2>/dev/null; then
+  local ready="0"
+  for _ in $(seq 1 15); do
+    if ip link show "${WG_IFACE}" >/dev/null 2>&1; then
+      ready="1"
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "${ready}" == "1" ]]; then
     info start_wg_ok
   else
     warn start_wg_fail
   fi
 
-  systemctl enable wg-quick@wg0 >/dev/null 2>&1 || true
   info wg_enable_boot
 }
 
 stop_services() {
   need_root
   ensure_compose_cmd
-  if wg show wg0 >/dev/null 2>&1; then
-    wg-quick down wg0 || true
-  fi
   if [[ -f "${COMPOSE_FILE}" ]]; then
     $DOCKER_COMPOSE -f "${COMPOSE_FILE}" down || true
   fi
@@ -730,8 +692,8 @@ stop_services() {
 
 pause_wg() {
   need_root
-  if wg show wg0 >/dev/null 2>&1; then
-    wg-quick down wg0 || true
+  if ip link show "${WG_IFACE}" >/dev/null 2>&1; then
+    ip link set dev "${WG_IFACE}" down || true
     info paused_wg
   else
     info wg_not_running
@@ -740,7 +702,7 @@ pause_wg() {
 
 resume_wg() {
   need_root
-  if wg-quick up wg0; then
+  if ip link show "${WG_IFACE}" >/dev/null 2>&1 && ip link set dev "${WG_IFACE}" up; then
     info resumed_wg
   else
     err wg_start_failed
@@ -764,11 +726,14 @@ show_status() {
     echo "WireGuard not installed."
   fi
   echo
+  echo "=== Interface ==="
+  ip addr show "${WG_IFACE}" 2>/dev/null || echo "${WG_IFACE} not present."
+  echo
   echo "=== Listening Ports ==="
   if command -v ss >/dev/null 2>&1; then
-    ss -lunpt | grep -E ":(7000|9000|9001|51820)\b" || true
+    ss -lunpt | grep -E ":(9000|9001|51820)\b" || true
   else
-    netstat -tulpn | grep -E ":(7000|9000|9001|51820)\b" || true
+    netstat -tulpn | grep -E ":(9000|9001|51820)\b" || true
   fi
   echo
   echo "=== Meta ==="
@@ -780,7 +745,7 @@ show_status() {
   echo "BASE_DIR: ${BASE_DIR}"
   echo "COMPOSE_FILE: ${COMPOSE_FILE}"
   echo "CONFIG_FILE: ${CONFIG_FILE}"
-  echo "WG_CONF: ${WG_CONF}"
+  echo "WG_IFACE: ${WG_IFACE}"
   if [[ -f "${THRESHOLD_FILE}" ]]; then
     echo "Threshold(bps): $(cat "${THRESHOLD_FILE}")"
   else
@@ -844,12 +809,8 @@ patch_threshold_in_config() {
     exit 1
   fi
   # Replace numbers in rules
-  # bps <= old -> bps <= NEW
-  sed -i -E "s/(\"rule\": \"bps <= )([0-9]+)(\")/\1${NEW}\3/" "${CONFIG_FILE}"
-  # bps > old && seq % 2 == 0 -> bps > NEW ...
-  sed -i -E "s/(\"rule\": \"bps > )([0-9]+)( && seq % 2 == 0\")/\1${NEW}\3/" "${CONFIG_FILE}"
-  # bps > old && seq % 2 == 1 -> bps > NEW ...
-  sed -i -E "s/(\"rule\": \"bps > )([0-9]+)( && seq % 2 == 1\")/\1${NEW}\3/" "${CONFIG_FILE}"
+  sed -i -E "s/(rule: \"bps <= )([0-9]+)/\1${NEW}/" "${CONFIG_FILE}"
+  sed -i -E "s/(rule: \"\(bps > )([0-9]+)/\1${NEW}/" "${CONFIG_FILE}"
 }
 
 # --------------------------------
@@ -857,7 +818,7 @@ patch_threshold_in_config() {
 # --------------------------------
 uninstall_flow() {
   need_root
-  printf "$(T uninstall_confirm "${BASE_DIR}")"
+  printf "%b" "$(T uninstall_confirm "${BASE_DIR}")"
   read -r ans
   ans="${ans:-N}"
   if [[ ! "$ans" =~ ^[Yy]$ ]]; then
@@ -874,7 +835,7 @@ uninstall_flow() {
   read -r delwg
   delwg="${delwg:-N}"
   if [[ "$delwg" =~ ^[Yy]$ ]]; then
-    rm -f "${WG_CONF}" "${WG_PRIV}" "${WG_PUB}"
+    rm -f "${WG_PRIV}" "${WG_PUB}"
     info deleted_wg
   else
     info kept_wg
@@ -891,12 +852,12 @@ usage() {
 Usage: sudo bash $0 <command>
 
 Commands:
-  install         Install and configure (with prompts), build advanced config and WireGuard config
-  uninstall       Uninstall (optionally remove WireGuard configs and keys)
-  start           Start UDPlex and WireGuard (enable WG on boot)
-  stop            Stop UDPlex and WireGuard
-  pause           Pause WireGuard (down wg0), keep UDPlex running
-  resume          Resume WireGuard (up wg0)
+  install         Install and configure (with prompts), build advanced config with embedded WireGuard
+  uninstall       Uninstall (optionally remove WireGuard keys)
+  start           Start UDPlex with embedded WireGuard
+  stop            Stop UDPlex and embedded WireGuard
+  pause           Pause embedded WireGuard interface (link down), keep UDPlex running
+  resume          Resume embedded WireGuard interface (link up)
   status          Show status
   logs            Follow UDPlex logs
   update          Pull latest image and restart

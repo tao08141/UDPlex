@@ -1,6 +1,6 @@
 FROM alpine:latest
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates iproute2
 
 WORKDIR /app
 COPY UDPlex /app/

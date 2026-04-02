@@ -214,6 +214,13 @@ func main() {
 				logger.Warnf("Failed to create ip_router component: %v", err)
 				continue
 			}
+		case "wg":
+			var cfg WireGuardComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal wg config: %v", err)
+				continue
+			}
+			component = NewWireGuardComponent(cfg, router)
 		default:
 			logger.Warnf("Unknown component type: %s", typeVal)
 			continue

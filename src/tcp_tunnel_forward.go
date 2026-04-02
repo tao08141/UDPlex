@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type TcpTunnelForwardComponent struct {
 
 	recvBufferSize int
 	sendBufferSize int
+	connIndex      sync.Map
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
@@ -407,6 +409,7 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 		return
 	}
 
+	f.forgetConn(c)
 	f.pools[c.poolID].RemoveConnection(c)
 }
 
@@ -416,6 +419,15 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	err := f.authManager.WrapData(packet)
 	if err != nil {
 		return err
+	}
+
+	if !f.broadcastMode && packet.ConnID() != (ConnID{}) {
+		if conn := f.getConnByID(packet.ConnID()); conn != nil {
+			return conn.Write(packet)
+		}
+
+		logger.Debugf("%s: No TCP tunnel connection found for connection ID %x", f.tag, packet.ConnID())
+		return nil
 	}
 
 	if f.broadcastMode {
@@ -441,4 +453,39 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	}
 
 	return nil
+}
+
+func (f *TcpTunnelForwardComponent) RememberConnID(connID ConnID, c *TcpTunnelConn) {
+	if connID == (ConnID{}) || c == nil {
+		return
+	}
+	f.connIndex.Store(connID, c)
+}
+
+func (f *TcpTunnelForwardComponent) getConnByID(connID ConnID) *TcpTunnelConn {
+	if connID == (ConnID{}) {
+		return nil
+	}
+	value, ok := f.connIndex.Load(connID)
+	if !ok {
+		return nil
+	}
+	conn, ok := value.(*TcpTunnelConn)
+	if !ok || conn == nil || conn.conn == nil {
+		if ok {
+			f.connIndex.Delete(connID)
+		}
+		return nil
+	}
+	return conn
+}
+
+func (f *TcpTunnelForwardComponent) forgetConn(target *TcpTunnelConn) {
+	f.connIndex.Range(func(key, value any) bool {
+		conn, ok := value.(*TcpTunnelConn)
+		if ok && conn == target {
+			f.connIndex.Delete(key)
+		}
+		return true
+	})
 }

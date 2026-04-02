@@ -239,6 +239,22 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 						if upd, ok := serviceConfig["geoip_update_interval"]; ok {
 							result["geoip_update_interval"] = upd
 						}
+					case "wg":
+						if interfaceName, ok := serviceConfig["interface_name"]; ok {
+							result["interface_name"] = interfaceName
+						}
+						if listenPort, ok := serviceConfig["listen_port"]; ok {
+							result["listen_port"] = listenPort
+						}
+						if addresses, ok := serviceConfig["addresses"]; ok {
+							result["addresses"] = addresses
+						}
+						if routes, ok := serviceConfig["routes"]; ok {
+							result["routes"] = routes
+						}
+						if peers, ok := serviceConfig["peers"]; ok {
+							result["peers"] = peers
+						}
 					}
 				}
 

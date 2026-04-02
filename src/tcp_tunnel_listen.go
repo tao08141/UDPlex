@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -22,6 +23,7 @@ type TcpTunnelListenComponent struct {
 	listener          net.Listener
 	recvBufferSize    int
 	sendBufferSize    int
+	connIndex         sync.Map
 }
 
 func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnelListenComponent {
@@ -141,6 +143,15 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 		return err
 	}
 
+	if !l.broadcastMode && packet.ConnID() != (ConnID{}) {
+		if conn := l.getConnByID(packet.ConnID()); conn != nil {
+			return conn.Write(packet)
+		}
+
+		logger.Debugf("%s: No TCP tunnel connection found for connection ID %x", l.tag, packet.ConnID())
+		return nil
+	}
+
 	if l.broadcastMode {
 		connections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
 		for _, pools := range connections {
@@ -254,6 +265,7 @@ func (l *TcpTunnelListenComponent) Disconnect(c *TcpTunnelConn) {
 		l.connections.Store(newConnections)
 	}
 
+	l.forgetConn(c)
 	c.Close()
 }
 
@@ -298,6 +310,41 @@ func (l *TcpTunnelListenComponent) HandleAuthenticatedConnection(c *TcpTunnelCon
 	c.authState.SetAuthenticated(1)
 
 	return nil
+}
+
+func (l *TcpTunnelListenComponent) RememberConnID(connID ConnID, c *TcpTunnelConn) {
+	if connID == (ConnID{}) || c == nil {
+		return
+	}
+	l.connIndex.Store(connID, c)
+}
+
+func (l *TcpTunnelListenComponent) getConnByID(connID ConnID) *TcpTunnelConn {
+	if connID == (ConnID{}) {
+		return nil
+	}
+	value, ok := l.connIndex.Load(connID)
+	if !ok {
+		return nil
+	}
+	conn, ok := value.(*TcpTunnelConn)
+	if !ok || conn == nil || conn.conn == nil {
+		if ok {
+			l.connIndex.Delete(connID)
+		}
+		return nil
+	}
+	return conn
+}
+
+func (l *TcpTunnelListenComponent) forgetConn(target *TcpTunnelConn) {
+	l.connIndex.Range(func(key, value any) bool {
+		conn, ok := value.(*TcpTunnelConn)
+		if ok && conn == target {
+			l.connIndex.Delete(key)
+		}
+		return true
+	})
 }
 
 func cloneConnections(src map[ForwardID]map[PoolID]*TcpTunnelConnPool) map[ForwardID]map[PoolID]*TcpTunnelConnPool {

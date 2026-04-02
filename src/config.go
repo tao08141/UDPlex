@@ -75,3 +75,28 @@ type LoadBalancerComponentConfig struct {
 	WindowSize  uint32                   `json:"window_size" yaml:"window_size"`
 	EnableCache bool                     `json:"enable_cache" yaml:"enable_cache"`
 }
+
+type WireGuardPeerConfig struct {
+	PublicKey           string   `json:"public_key" yaml:"public_key"`
+	PresharedKey        string   `json:"preshared_key" yaml:"preshared_key"`
+	Endpoint            string   `json:"endpoint" yaml:"endpoint"`
+	AllowedIPs          []string `json:"allowed_ips" yaml:"allowed_ips"`
+	PersistentKeepalive int      `json:"persistent_keepalive" yaml:"persistent_keepalive"`
+}
+
+type WireGuardComponentConfig struct {
+	Type                string                `json:"type" yaml:"type"`
+	Tag                 string                `json:"tag" yaml:"tag"`
+	InterfaceName       string                `json:"interface_name" yaml:"interface_name"`
+	Detour              []string              `json:"detour" yaml:"detour"`
+	PrivateKey          string                `json:"private_key" yaml:"private_key"`
+	ListenPort          int                   `json:"listen_port" yaml:"listen_port"`
+	Addresses           []string              `json:"addresses" yaml:"addresses"`
+	Routes              []string              `json:"routes" yaml:"routes"`
+	RouteAllowedIPs     *bool                 `json:"route_allowed_ips" yaml:"route_allowed_ips"`
+	MTU                 int                   `json:"mtu" yaml:"mtu"`
+	SendTimeout         int                   `json:"send_timeout" yaml:"send_timeout"`
+	Peers               []WireGuardPeerConfig `json:"peers" yaml:"peers"`
+	SetupInterface      *bool                 `json:"setup_interface" yaml:"setup_interface"`
+	ReuseIncomingDetour *bool                 `json:"reuse_incoming_detour" yaml:"reuse_incoming_detour"`
+}

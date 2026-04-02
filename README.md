@@ -102,6 +102,7 @@ UDPlex supports multiple component types, each with specific functions and confi
 - [Listen Component](docs/listen_en.md) - Listen on UDP ports and receive packets
 - [Forward Component](docs/forward_en.md) - Forward packets to target servers
 - [Filter Component](docs/filter_en.md) - Filter and classify packets based on protocol characteristics
+- [WireGuard Component](docs/wg_component_en.md) - Embed `wireguard-go` and route WireGuard packets through UDPlex
 - [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening endpoint
 - [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding endpoint
 - [Load Balancer Component](docs/load_balancer_en.md) - Load balancing component
@@ -142,6 +143,10 @@ The examples directory contains configuration examples for various use cases:
 - [**redundant_server.yaml**](examples/redundant_server.yaml) - UDP redundancy server configuration, receives client traffic and forwards
 - [**wg_bidirectional_client.yaml**](examples/wg_bidirectional_client.yaml) - WireGuard UDP upstream/downstream separation client configuration
 - [**wg_bidirectional_server.yaml**](examples/wg_bidirectional_server.yaml) - WireGuard UDP upstream/downstream separation server configuration
+- [**wg_component_forward_client.yaml**](examples/wg_component_forward_client.yaml) - Embedded WireGuard client over UDP forward
+- [**wg_component_forward_server.yaml**](examples/wg_component_forward_server.yaml) - Embedded WireGuard server over UDP forward
+- [**wg_component_tcp_tunnel_client.yaml**](examples/wg_component_tcp_tunnel_client.yaml) - Embedded WireGuard client over TCP tunnel
+- [**wg_component_tcp_tunnel_server.yaml**](examples/wg_component_tcp_tunnel_server.yaml) - Embedded WireGuard server over TCP tunnel
 - [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic
 - [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
 - [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M

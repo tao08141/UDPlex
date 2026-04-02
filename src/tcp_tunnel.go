@@ -207,6 +207,10 @@ type TcpTunnelComponent interface {
 	GetSendTimeout() time.Duration
 }
 
+type TcpTunnelConnIDTracker interface {
+	RememberConnID(connID ConnID, c *TcpTunnelConn)
+}
+
 func (c *TcpTunnelConn) writeLoop() {
 	defer c.writeWg.Done()
 
@@ -463,6 +467,9 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 
 						_, err := (*c.t).GetAuthManager().UnwrapData(&packet)
 						if err == nil {
+							if tracker, ok := (*c.t).(TcpTunnelConnIDTracker); ok && packet.ConnID() != (ConnID{}) {
+								tracker.RememberConnID(packet.ConnID(), c)
+							}
 							// Set source address for downstream components (TCP remote)
 							packet.SetSrcAddr(c.conn.RemoteAddr())
 							err := (*c.t).GetRouter().Route(&packet, (*c.t).GetDetour())
