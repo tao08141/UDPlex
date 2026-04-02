@@ -112,6 +112,11 @@ type WGEchoMetrics struct {
 	MaxLatencyMs    float64 `json:"max_latency_ms"`
 }
 
+type IntegrationSelection struct {
+	Suite         string
+	SelectedTests map[string]struct{}
+}
+
 // Bitset is a compact bitmap used to track seen packet IDs with minimal memory.
 type Bitset struct {
 	words []uint64
@@ -173,15 +178,18 @@ func main() {
 
 	if len(os.Args) > 1 && os.Args[1] == "-help" {
 		fmt.Println("UDPlex Integration Test Tool")
-		fmt.Println("Usage: go run udp_integration.go [-suite wg|all]")
-		fmt.Println("Default suite is 'wg', which only runs WireGuard integration tests.")
-		fmt.Println("Use '-suite all' to run the full integration matrix.")
+		fmt.Println("Usage: go run udp_integration.go [-suite all|wg] [-tests test1,test2,...]")
+		fmt.Println("Default suite is 'all', which runs the full integration matrix.")
+		fmt.Println("Use '-suite wg' to run only WireGuard integration tests.")
+		fmt.Println("Use '-tests' to run a subset, for example:")
+		fmt.Println("  go run udp_integration.go -tests wg_forward,wg_tcp_tunnel")
+		fmt.Println("  go run udp_integration.go -tests basic,tcp_tunnel")
 		return
 	}
 
 	projectRoot := getProjectRoot()
 	examplesDir := filepath.Join(projectRoot, "examples")
-	suite := parseIntegrationSuite()
+	selection := parseIntegrationSelection()
 
 	// Build UDPlex binary
 	fmt.Println("Building UDPlex...")
@@ -237,7 +245,7 @@ func main() {
 	}
 
 	var testConfigs []TestConfig
-	if suite == "all" {
+	if selection.Suite == "all" {
 		testConfigs = append(testConfigs, regularConfigs...)
 	}
 
@@ -258,8 +266,10 @@ func main() {
 		fmt.Printf("Skipping WireGuard integration tests: %s\n", reason)
 	}
 
+	testConfigs = filterIntegrationConfigs(testConfigs, selection.SelectedTests)
+
 	if len(testConfigs) == 0 {
-		fmt.Printf("No integration tests selected for suite %q\n", suite)
+		fmt.Printf("No integration tests selected for suite %q\n", selection.Suite)
 		return
 	}
 
@@ -360,25 +370,102 @@ func buildUDPlex(projectRoot string) error {
 	return nil
 }
 
-func parseIntegrationSuite() string {
-	suite := "wg"
+func parseIntegrationSelection() IntegrationSelection {
+	selection := IntegrationSelection{
+		Suite:         "all",
+		SelectedTests: make(map[string]struct{}),
+	}
+
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "-suite":
 			if i+1 < len(os.Args) {
 				candidate := strings.ToLower(strings.TrimSpace(os.Args[i+1]))
 				if candidate == "all" || candidate == "wg" {
-					suite = candidate
+					selection.Suite = candidate
+				}
+				i++
+			}
+		case "-tests":
+			if i+1 < len(os.Args) {
+				for _, raw := range strings.Split(os.Args[i+1], ",") {
+					name := normalizeIntegrationTestName(raw)
+					if name != "" {
+						selection.SelectedTests[name] = struct{}{}
+					}
 				}
 				i++
 			}
 		case "-all":
-			suite = "all"
+			selection.Suite = "all"
 		case "-wg":
-			suite = "wg"
+			selection.Suite = "wg"
 		}
 	}
-	return suite
+
+	return selection
+}
+
+func filterIntegrationConfigs(configs []TestConfig, selected map[string]struct{}) []TestConfig {
+	if len(selected) == 0 {
+		return configs
+	}
+
+	filtered := make([]TestConfig, 0, len(configs))
+	for _, config := range configs {
+		if integrationConfigSelected(config.Name, selected) {
+			filtered = append(filtered, config)
+		}
+	}
+	return filtered
+}
+
+func integrationConfigSelected(name string, selected map[string]struct{}) bool {
+	if len(selected) == 0 {
+		return true
+	}
+
+	normalized := normalizeIntegrationTestName(name)
+	if _, ok := selected[normalized]; ok {
+		return true
+	}
+	if strings.HasPrefix(normalized, "wireguard_") {
+		if _, ok := selected["wg"]; ok {
+			return true
+		}
+		if _, ok := selected["wireguard"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeIntegrationTestName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	replacer := strings.NewReplacer(
+		"-", "_",
+		" ", "_",
+		"/", "_",
+	)
+	value = replacer.Replace(value)
+	value = strings.Trim(value, "_")
+
+	switch value {
+	case "auth", "auth_client_server":
+		return "auth_client_server"
+	case "load_balancer", "loadbalancer":
+		return "load_balancer"
+	case "tcp_tunnel", "tcptunnel":
+		return "tcp_tunnel"
+	case "ip_router", "iprouter":
+		return "ip_router"
+	case "wg_forward", "wireguard_forward":
+		return "wireguard_forward"
+	case "wg_tcp_tunnel", "wireguard_tcp_tunnel", "wg_tcptunnel":
+		return "wireguard_tcp_tunnel"
+	}
+
+	return value
 }
 
 func runTest(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {

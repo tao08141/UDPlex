@@ -53,7 +53,7 @@ pkill -f "udplex_test" 2>/dev/null || true
 sleep 1
 
 # Run the integration test
-if go run udp_integration.go; then
+if go run udp_integration.go "$@"; then
     echo
     echo -e "${GREEN}✓ All integration tests passed!${NC}"
     exit_code=0

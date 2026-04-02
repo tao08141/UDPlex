@@ -26,10 +26,18 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Run All Tests
+      - name: Run Unit Tests
         run: |
-          echo "Running all tests (unit + integration)..."
-          make test
+          echo "Running unit tests..."
+          cd src
+          go test ./...
+
+      - name: Run Integration Tests
+        run: |
+          echo "Running integration tests..."
+          cd tests/integration
+          chmod +x run_integration_tests.sh
+          sudo env "PATH=$PATH" bash ./run_integration_tests.sh -suite all
       
       - name: Push metrics to dedicated branch
         if: always()
