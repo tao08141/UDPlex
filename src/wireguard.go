@@ -42,12 +42,14 @@ type WireGuardComponent struct {
 }
 
 type WireGuardBind struct {
-	component *WireGuardComponent
-	port      uint16
-	rxQueue   chan wireGuardInboundPacket
-	mu        sync.RWMutex
-	closeCh   chan struct{}
-	isOpen    bool
+	component  *WireGuardComponent
+	port       uint16
+	rxQueue    chan wireGuardInboundPacket
+	bufferPool sync.Pool
+	bufferSize int
+	mu         sync.RWMutex
+	closeCh    chan struct{}
+	isOpen     bool
 }
 
 type wireGuardInboundPacket struct {
@@ -114,12 +116,26 @@ func NewWireGuardBind(component *WireGuardComponent) *WireGuardBind {
 		queueSize = 1024
 	}
 
-	return &WireGuardBind{
-		component: component,
-		port:      component.listenPort,
-		rxQueue:   make(chan wireGuardInboundPacket, queueSize),
-		closeCh:   make(chan struct{}),
+	bufferSize := component.router.config.BufferSize
+	if bufferSize <= 0 {
+		bufferSize = component.mtu + 256
 	}
+	if bufferSize < component.mtu+256 {
+		bufferSize = component.mtu + 256
+	}
+
+	bind := &WireGuardBind{
+		component:  component,
+		port:       component.listenPort,
+		rxQueue:    make(chan wireGuardInboundPacket, queueSize),
+		bufferSize: bufferSize,
+		closeCh:    make(chan struct{}),
+	}
+	bind.bufferPool.New = func() any {
+		buf := make([]byte, bind.bufferSize)
+		return &buf
+	}
+	return bind
 }
 
 func (w *WireGuardComponent) Start() error {
@@ -166,6 +182,11 @@ func (w *WireGuardComponent) Start() error {
 	}
 
 	logger.Infof("%s: WireGuard interface %s started with %d peers", w.tag, w.actualInterfaceName, len(w.peers))
+	return nil
+}
+
+func (w *WireGuardComponent) PostStart() error {
+	w.warmPeerHandshakes(5 * time.Second)
 	return nil
 }
 
@@ -345,6 +366,131 @@ func (w *WireGuardComponent) collectRoutes() []string {
 	return routes
 }
 
+func (w *WireGuardComponent) warmPeerHandshakes(timeout time.Duration) {
+	targets := w.buildWarmupTargets()
+	if len(targets) == 0 {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, target := range targets {
+			localAddr := &net.UDPAddr{IP: net.IP(target.local.AsSlice())}
+			remoteAddr := &net.UDPAddr{IP: net.IP(target.remote.AsSlice()), Port: 9}
+
+			conn, err := net.DialUDP("udp", localAddr, remoteAddr)
+			if err != nil {
+				logger.Debugf("%s: failed to dial WireGuard warmup target %s: %v", w.tag, remoteAddr.String(), err)
+				continue
+			}
+			_, _ = conn.Write([]byte{0})
+			_ = conn.Close()
+		}
+
+		if w.hasEstablishedHandshakes(targets) {
+			return
+		}
+		if time.Now().After(deadline) {
+			logger.Debugf("%s: timed out waiting for WireGuard handshake warmup", w.tag)
+			return
+		}
+
+		select {
+		case <-w.GetStopChannel():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+type wireGuardWarmupTarget struct {
+	local   netip.Addr
+	remote  netip.Addr
+	peerKey string
+}
+
+func (w *WireGuardComponent) buildWarmupTargets() []wireGuardWarmupTarget {
+	localByFamily := map[int]netip.Addr{}
+	for _, raw := range w.addresses {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		addr := prefix.Addr()
+		if !addr.IsValid() || !addr.Is4() {
+			continue
+		}
+		localByFamily[4] = addr
+	}
+
+	targets := make([]wireGuardWarmupTarget, 0, len(w.peers))
+	for _, peer := range w.peers {
+		if strings.TrimSpace(peer.Endpoint) == "" {
+			continue
+		}
+
+		for _, rawAllowedIP := range peer.AllowedIPs {
+			prefix, err := netip.ParsePrefix(strings.TrimSpace(rawAllowedIP))
+			if err != nil {
+				continue
+			}
+			dst := prefix.Addr()
+			src, ok := localByFamily[4]
+			if !ok || !dst.IsValid() || !dst.Is4() {
+				continue
+			}
+
+			targets = append(targets, wireGuardWarmupTarget{
+				local:   src,
+				remote:  dst,
+				peerKey: normalizeWGKey(peer.PublicKey),
+			})
+			break
+		}
+	}
+
+	return targets
+}
+
+func (w *WireGuardComponent) hasEstablishedHandshakes(targets []wireGuardWarmupTarget) bool {
+	if w.wgDevice == nil {
+		return false
+	}
+
+	state, err := w.wgDevice.IpcGet()
+	if err != nil {
+		logger.Debugf("%s: failed to inspect WireGuard state: %v", w.tag, err)
+		return false
+	}
+
+	handshakeByKey := map[string]int64{}
+	currentKey := ""
+	for _, line := range strings.Split(state, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "public_key="):
+			currentKey = strings.TrimSpace(strings.TrimPrefix(line, "public_key="))
+		case strings.HasPrefix(line, "last_handshake_time_sec=") && currentKey != "":
+			secStr := strings.TrimSpace(strings.TrimPrefix(line, "last_handshake_time_sec="))
+			secs, err := strconv.ParseInt(secStr, 10, 64)
+			if err == nil {
+				handshakeByKey[currentKey] = secs
+			}
+		}
+	}
+
+	for _, target := range targets {
+		if handshakeByKey[target.peerKey] <= 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (b *WireGuardBind) Open(port uint16) ([]wgconn.ReceiveFunc, uint16, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -415,7 +561,7 @@ func (b *WireGuardBind) ParseEndpoint(s string) (wgconn.Endpoint, error) {
 }
 
 func (b *WireGuardBind) BatchSize() int {
-	return 1
+	return wgconn.IdealBatchSize
 }
 
 func (b *WireGuardBind) Enqueue(packet *Packet, endpoint *WireGuardEndpoint) error {
@@ -430,7 +576,7 @@ func (b *WireGuardBind) Enqueue(packet *Packet, endpoint *WireGuardEndpoint) err
 	default:
 	}
 
-	data := make([]byte, packet.Length())
+	data := b.getInboundBuffer(packet.Length())
 	copy(data, packet.GetData())
 
 	msg := wireGuardInboundPacket{
@@ -440,10 +586,12 @@ func (b *WireGuardBind) Enqueue(packet *Packet, endpoint *WireGuardEndpoint) err
 
 	select {
 	case <-closeCh:
+		b.putInboundBuffer(msg.data)
 		return net.ErrClosed
 	case b.rxQueue <- msg:
 		return nil
 	default:
+		b.putInboundBuffer(msg.data)
 		return fmt.Errorf("%s: wireguard receive queue is full", b.component.tag)
 	}
 }
@@ -453,6 +601,7 @@ func (b *WireGuardBind) makeReceiveFunc(closeCh chan struct{}) wgconn.ReceiveFun
 		readOne := func(index int, msg wireGuardInboundPacket) {
 			sizes[index] = copy(packets[index], msg.data)
 			eps[index] = msg.endpoint
+			b.putInboundBuffer(msg.data)
 		}
 
 		select {
@@ -484,6 +633,25 @@ func (b *WireGuardBind) currentCloseCh() (chan struct{}, bool) {
 		return nil, false
 	}
 	return b.closeCh, true
+}
+
+func (b *WireGuardBind) getInboundBuffer(length int) []byte {
+	if length <= 0 {
+		return nil
+	}
+	if length > b.bufferSize {
+		return make([]byte, length)
+	}
+	buf := *(b.bufferPool.Get().(*[]byte))
+	return buf[:length]
+}
+
+func (b *WireGuardBind) putInboundBuffer(buf []byte) {
+	if cap(buf) != b.bufferSize {
+		return
+	}
+	buf = buf[:b.bufferSize]
+	b.bufferPool.Put(&buf)
 }
 
 func newWireGuardEndpoint(raw string, connID ConnID, routeTags []string, srcAddr net.Addr) *WireGuardEndpoint {

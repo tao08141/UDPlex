@@ -490,6 +490,7 @@ func (l *ListenComponent) handlePackets() {
 					}
 
 					mapping.lastActive = time.Now()
+					packet.SetConnID(mapping.connID)
 				}
 
 				// Handle address mapping for non-auth mode

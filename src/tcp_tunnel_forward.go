@@ -409,25 +409,44 @@ func (f *TcpTunnelForwardComponent) Disconnect(c *TcpTunnelConn) {
 		return
 	}
 
-	f.forgetConn(c)
-	f.pools[c.poolID].RemoveConnection(c)
+	pool := f.pools[c.poolID]
+	pool.RemoveConnection(c)
+	if pool.ConnectionCount() == 0 {
+		f.forgetPool(pool)
+	}
 }
 
 func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
+	if !f.broadcastMode {
+		pool := f.pickPoolForPacket(packet)
+		if pool == nil {
+			if packet.ConnID() != (ConnID{}) {
+				logger.Debugf("%s: No TCP tunnel connection found for connection ID %x", f.tag, packet.ConnID())
+			} else {
+				logger.Debugf("%s: No available TCP tunnel pool for packet without connection ID", f.tag)
+			}
+			return nil
+		}
+
+		err := f.authManager.WrapData(packet)
+		if err != nil {
+			return err
+		}
+
+		conn := pool.GetNextConn()
+		if conn == nil {
+			logger.Debugf("%s: No available TCP tunnel connection in selected pool for connection ID %x", f.tag, packet.ConnID())
+			return nil
+		}
+
+		return conn.Write(packet)
+	}
+
 	err := f.authManager.WrapData(packet)
 	if err != nil {
 		return err
-	}
-
-	if !f.broadcastMode && packet.ConnID() != (ConnID{}) {
-		if conn := f.getConnByID(packet.ConnID()); conn != nil {
-			return conn.Write(packet)
-		}
-
-		logger.Debugf("%s: No TCP tunnel connection found for connection ID %x", f.tag, packet.ConnID())
-		return nil
 	}
 
 	if f.broadcastMode {
@@ -455,14 +474,39 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 	return nil
 }
 
-func (f *TcpTunnelForwardComponent) RememberConnID(connID ConnID, c *TcpTunnelConn) {
-	if connID == (ConnID{}) || c == nil {
-		return
+func (f *TcpTunnelForwardComponent) pickPoolForPacket(packet *Packet) *TcpTunnelConnPool {
+	if packet.ConnID() != (ConnID{}) {
+		if pool := f.getPoolByID(packet.ConnID()); pool != nil {
+			return pool
+		}
 	}
-	f.connIndex.Store(connID, c)
+
+	for _, pool := range f.pools {
+		if pool == nil {
+			continue
+		}
+		if conn := pool.GetNextConn(); conn != nil {
+			if packet.ConnID() == (ConnID{}) {
+				packet.SetConnID(f.generateConnID())
+			}
+			if packet.ConnID() != (ConnID{}) {
+				f.rememberConnIDPool(packet.ConnID(), pool)
+			}
+			return pool
+		}
+	}
+
+	return nil
 }
 
-func (f *TcpTunnelForwardComponent) getConnByID(connID ConnID) *TcpTunnelConn {
+func (f *TcpTunnelForwardComponent) rememberConnIDPool(connID ConnID, pool *TcpTunnelConnPool) {
+	if connID == (ConnID{}) || pool == nil {
+		return
+	}
+	f.connIndex.Store(connID, pool)
+}
+
+func (f *TcpTunnelForwardComponent) getPoolByID(connID ConnID) *TcpTunnelConnPool {
 	if connID == (ConnID{}) {
 		return nil
 	}
@@ -470,22 +514,48 @@ func (f *TcpTunnelForwardComponent) getConnByID(connID ConnID) *TcpTunnelConn {
 	if !ok {
 		return nil
 	}
-	conn, ok := value.(*TcpTunnelConn)
-	if !ok || conn == nil || conn.conn == nil {
+	pool, ok := value.(*TcpTunnelConnPool)
+	if !ok || pool == nil {
 		if ok {
 			f.connIndex.Delete(connID)
 		}
 		return nil
 	}
-	return conn
+	if pool.ConnectionCount() == 0 {
+		f.connIndex.Delete(connID)
+		return nil
+	}
+	return pool
 }
 
-func (f *TcpTunnelForwardComponent) forgetConn(target *TcpTunnelConn) {
+func (f *TcpTunnelForwardComponent) RememberConnID(connID ConnID, c *TcpTunnelConn) {
+	if connID == (ConnID{}) || c == nil {
+		return
+	}
+	pool, ok := f.pools[c.poolID]
+	if !ok || pool == nil {
+		return
+	}
+	f.rememberConnIDPool(connID, pool)
+}
+
+func (f *TcpTunnelForwardComponent) forgetPool(target *TcpTunnelConnPool) {
+	if target == nil {
+		return
+	}
 	f.connIndex.Range(func(key, value any) bool {
-		conn, ok := value.(*TcpTunnelConn)
-		if ok && conn == target {
+		pool, ok := value.(*TcpTunnelConnPool)
+		if ok && pool == target {
 			f.connIndex.Delete(key)
 		}
 		return true
 	})
+}
+
+func (f *TcpTunnelForwardComponent) getConnByID(connID ConnID) *TcpTunnelConn {
+	if pool := f.getPoolByID(connID); pool != nil {
+		return pool.GetNextConn()
+	}
+
+	return nil
 }

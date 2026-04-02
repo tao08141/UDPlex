@@ -227,7 +227,20 @@ func (r *Router) StartAll() error {
 		}
 	}
 
+	// Post-start hooks may emit warmup traffic through the router, so workers
+	// must already be available before they run.
 	r.startWorkers()
+
+	for tag, component := range r.components {
+		postStarter, ok := component.(PostStarter)
+		if !ok {
+			continue
+		}
+		logger.Infof("Post-starting component: %s", tag)
+		if err := postStarter.PostStart(); err != nil {
+			return fmt.Errorf("failed to post-start component %s: %w", tag, err)
+		}
+	}
 
 	return nil
 }

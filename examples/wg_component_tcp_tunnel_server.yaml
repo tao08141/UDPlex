@@ -1,27 +1,31 @@
 buffer_size: 2048
 queue_size: 10240
 worker_count: 4
+logging:
+  level: debug
+  format: console
+  output_path: stdout
 services:
   - type: tcp_tunnel_listen
     tag: tcp_server
-    listen_addr: 0.0.0.0:9000
+    listen_addr: 0.0.0.0:5910
     timeout: 120
     broadcast_mode: false
     detour: [wg_server]
     auth:
       enabled: true
-      secret: CHANGE_ME_SHARED_SECRET
+      secret: integration-wg-secret
       enable_encryption: false
 
   - type: wg
     tag: wg_server
-    interface_name: wg0
+    interface_name: wgtests0
     mtu: 1420
     addresses:
-      - 10.7.0.1/24
-    private_key: YOUR_SERVER_PRIVATE_KEY_HEX
+      - 10.66.0.1/24
+    private_key: 28e0153a3f10376886d3a1de6153cc1c6026ca301ac854104861eafa41b9a067
     listen_port: 51820
     peers:
-      - public_key: YOUR_CLIENT_PUBLIC_KEY_HEX
+      - public_key: edfbbb2364ea4d1f8c85034c3358172f6154055e4c9d0bbf86825b03d10ed25c
         allowed_ips:
-          - 10.7.0.2/32
+          - 10.66.0.2/32

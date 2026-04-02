@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net"
 	"sync"
@@ -125,6 +126,7 @@ func (p *TcpTunnelConnPool) GetNextConn() *TcpTunnelConn {
 }
 
 type TcpTunnelConn struct {
+	connID     ConnID
 	forwardID  ForwardID
 	poolID     PoolID
 	conn       net.Conn
@@ -143,7 +145,13 @@ type TcpTunnelConn struct {
 }
 
 func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, queueSize int, mode int) *TcpTunnelConn {
+	connID := ConnID{}
+	if _, err := rand.Read(connID[:]); err != nil {
+		connID = ConnID{}
+	}
+
 	c := &TcpTunnelConn{
+		connID:     connID,
 		forwardID:  forwardID,
 		poolID:     poolID,
 		conn:       conn,
@@ -166,6 +174,10 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 	go c.readLoop(mode)
 
 	return c
+}
+
+func (c *TcpTunnelConn) ConnID() ConnID {
+	return c.connID
 }
 
 func (c *TcpTunnelConn) Close() {
@@ -467,6 +479,9 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 
 						_, err := (*c.t).GetAuthManager().UnwrapData(&packet)
 						if err == nil {
+							if packet.ConnID() == (ConnID{}) {
+								packet.SetConnID(c.connID)
+							}
 							if tracker, ok := (*c.t).(TcpTunnelConnIDTracker); ok && packet.ConnID() != (ConnID{}) {
 								tracker.RememberConnID(packet.ConnID(), c)
 							}

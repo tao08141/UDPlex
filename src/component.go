@@ -47,6 +47,10 @@ type AvailabilityChecker interface {
 	IsAvailable() bool
 }
 
+type PostStarter interface {
+	PostStart() error
+}
+
 // Component is the interface that all network components must implement
 type Component interface {
 	Start() error
