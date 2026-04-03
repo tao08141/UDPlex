@@ -16,10 +16,13 @@ SECRET_FILE="${BASE_DIR}/secret"
 LANG_FILE="${BASE_DIR}/lang"
 THRESHOLD_FILE="${BASE_DIR}/threshold"
 
-WG_DIR="/etc/wireguard"
+WG_DIR="${BASE_DIR}/wireguard"
 WG_PRIV="${WG_DIR}/wg_private.key"
 WG_PUB="${WG_DIR}/wg_public.key"
-WG_IFACE="wg0"
+LEGACY_WG_DIR="/etc/wireguard"
+LEGACY_WG_PRIV="${LEGACY_WG_DIR}/wg_private.key"
+LEGACY_WG_PUB="${LEGACY_WG_DIR}/wg_public.key"
+WG_IFACE="wg_udplex"
 WG_ENDPOINT_LABEL="udplex-peer"
 
 DOCKER_INSTALL_SCRIPT_URL="https://get.docker.com"
@@ -171,19 +174,27 @@ T() {
     zh:no_local_pub) msg="未找到本机公钥，请先执行 install 生成密钥。" ;;
     en:no_local_pub) msg="No local public key found. Run install to generate keys first." ;;
     zh:uninstall_confirm) msg="将执行卸载操作：\n- 停止 UDPlex 与内嵌 WireGuard\n- 删除 %s 下的文件\n- 保留 /etc/wireguard 密钥（可选删除）\n确认继续？(y/N): " ;;
-    en:uninstall_confirm) msg="This will uninstall:\n- Stop UDPlex and embedded WireGuard\n- Remove files under %s\n- Keep /etc/wireguard keys (optional removal)\nProceed? (y/N): " ;;
+    en:uninstall_confirm) msg="This will uninstall:\n- Stop UDPlex and embedded WireGuard\n- Remove files under %s\n- WireGuard keys are stored in %s (you can delete or back them up)\nProceed? (y/N): " ;;
     zh:uninstall_cancel) msg="已取消。" ;;
     en:uninstall_cancel) msg="Cancelled." ;;
     zh:removed_base) msg="已删除 %s" ;;
     en:removed_base) msg="%s removed." ;;
     zh:prompt_del_wg) msg="是否同时删除 WireGuard 密钥（/etc/wireguard/wg_private.key, wg_public.key）？(y/N): " ;;
-    en:prompt_del_wg) msg="Also delete WireGuard keys (/etc/wireguard/wg_private.key, wg_public.key)? (y/N): " ;;
+    en:prompt_del_wg) msg="Also delete WireGuard keys (%s, %s)? Choose N to back them up before uninstall. (y/N): " ;;
     zh:deleted_wg) msg="WireGuard 密钥已删除。" ;;
     en:deleted_wg) msg="WireGuard keys deleted." ;;
     zh:kept_wg) msg="已保留 WireGuard 密钥。" ;;
-    en:kept_wg) msg="Kept WireGuard keys." ;;
+    en:kept_wg) msg="WireGuard keys backed up to: %s" ;;
+    zh:wg_keys_migrated) msg="已将旧路径 WireGuard 密钥迁移到：%s" ;;
+    en:wg_keys_migrated) msg="Migrated legacy WireGuard keys to: %s" ;;
     zh:uninstall_done) msg="卸载完成。" ;;
     en:uninstall_done) msg="Uninstall completed." ;;
+    zh:uninstall_confirm_keys) msg="将执行卸载操作：\n- 停止 UDPlex 与内嵌 WireGuard\n- 删除 %s 下的文件\n- WireGuard 密钥当前位于 %s（可选择删除或备份）\n确认继续？(y/N): " ;;
+    en:uninstall_confirm_keys) msg="This will uninstall:\n- Stop UDPlex and embedded WireGuard\n- Remove files under %s\n- WireGuard keys are stored in %s (you can delete or back them up)\nProceed? (y/N): " ;;
+    zh:prompt_del_wg_keys) msg="是否同时删除 WireGuard 密钥（%s, %s）？选择 N 将先备份再卸载。(y/N): " ;;
+    en:prompt_del_wg_keys) msg="Also delete WireGuard keys (%s, %s)? Choose N to back them up before uninstall. (y/N): " ;;
+    zh:kept_wg_backup) msg="WireGuard 密钥已备份到：%s" ;;
+    en:kept_wg_backup) msg="WireGuard keys backed up to: %s" ;;
     zh:lang_set) msg="语言已切换为：%s" ;;
     en:lang_set) msg="Language switched to: %s" ;;
     zh:threshold_updated) msg="带宽阈值已更新为 %s bps" ;;
@@ -227,6 +238,21 @@ detect_pkg_mgr() {
 ensure_dirs() {
   mkdir -p "${BASE_DIR}"
   mkdir -p "${WG_DIR}"
+}
+
+migrate_legacy_wg_keys() {
+  if [[ -f "${WG_PRIV}" && -f "${WG_PUB}" ]]; then
+    return
+  fi
+
+  if [[ -f "${LEGACY_WG_PRIV}" && -f "${LEGACY_WG_PUB}" ]]; then
+    mkdir -p "${WG_DIR}"
+    mv -f "${LEGACY_WG_PRIV}" "${WG_PRIV}"
+    mv -f "${LEGACY_WG_PUB}" "${WG_PUB}"
+    chmod 600 "${WG_PRIV}" "${WG_PUB}"
+    rmdir "${LEGACY_WG_DIR}" >/dev/null 2>&1 || true
+    info wg_keys_migrated "${WG_DIR}"
+  fi
 }
 
 ensure_compose_cmd() {
@@ -304,6 +330,7 @@ random_secret() {
 }
 
 generate_wg_keys() {
+  migrate_legacy_wg_keys
   if [[ -f "$WG_PRIV" && -f "$WG_PUB" ]]; then
     info keys_exist
   else
@@ -315,6 +342,7 @@ generate_wg_keys() {
 }
 
 show_local_pubkey() {
+  migrate_legacy_wg_keys
   if [[ -f "$WG_PUB" ]]; then
     echo
     echo "========================================"
@@ -414,7 +442,7 @@ services:
     mtu: 1420
     addresses: [${LOCAL_ADDR}]
     private_key: ${PRIV}
-    reuse_incoming_detour: false
+    reuse_incoming_detour: true
     detour: [load_balancer]
     peers:
       - public_key: ${PEER_PUBKEY}
@@ -489,11 +517,23 @@ logging:
   output_path: stdout
   caller: true
 services:
+  - type: wg
+    tag: wg_component
+    interface_name: ${WG_IFACE}
+    mtu: 1420
+    addresses: [${LOCAL_ADDR}]
+    private_key: ${PRIV}
+    reuse_incoming_detour: true
+    detour: [load_balancer]
+    peers:
+      - public_key: ${PEER_PUBKEY}
+        allowed_ips: [${PEER_ADDR}/32]
   - type: ${TYPE}
     tag: server_listen1
     listen_addr: 0.0.0.0:${LISTEN1_PORT}
     timeout: 120
     replace_old_mapping: false
+    broadcast_mode: false
 ${NODELAY_CFG}
     detour: [wg_component]
     auth:
@@ -506,6 +546,7 @@ ${NODELAY_CFG}
     listen_addr: 0.0.0.0:${LISTEN2_PORT}
     timeout: 120
     replace_old_mapping: false
+    broadcast_mode: false
 ${NODELAY_CFG}
     detour: [wg_component]
     auth:
@@ -513,17 +554,6 @@ ${NODELAY_CFG}
       enabled: true
       enable_encryption: false
       heartbeat_interval: 30
-  - type: wg
-    tag: wg_component
-    interface_name: ${WG_IFACE}
-    mtu: 1420
-    addresses: [${LOCAL_ADDR}]
-    private_key: ${PRIV}
-    reuse_incoming_detour: false
-    detour: [load_balancer]
-    peers:
-      - public_key: ${PEER_PUBKEY}
-        allowed_ips: [${PEER_ADDR}/32]
   - type: load_balancer
     tag: load_balancer
     window_size: 3
@@ -754,6 +784,7 @@ show_status() {
     echo "Role: (unset)"
   fi
   echo "BASE_DIR: ${BASE_DIR}"
+  echo "WG_DIR: ${WG_DIR}"
   echo "COMPOSE_FILE: ${COMPOSE_FILE}"
   echo "CONFIG_FILE: ${CONFIG_FILE}"
   echo "WG_IFACE: ${WG_IFACE}"
@@ -800,6 +831,7 @@ reload_services() {
 }
 
 show_keys() {
+  migrate_legacy_wg_keys
   if [[ -f "${WG_PUB}" ]]; then
     T show_local_pub; echo
     cat "${WG_PUB}"
@@ -807,6 +839,20 @@ show_keys() {
   else
     err no_local_pub
   fi
+}
+
+backup_wg_keys() {
+  local backup_dir="/root/udplex-wireguard-backup-$(date +%Y%m%d%H%M%S)"
+  mkdir -p "${backup_dir}"
+
+  if [[ -f "${WG_PRIV}" ]]; then
+    mv -f "${WG_PRIV}" "${backup_dir}/wg_private.key"
+  fi
+  if [[ -f "${WG_PUB}" ]]; then
+    mv -f "${WG_PUB}" "${backup_dir}/wg_public.key"
+  fi
+
+  printf '%s' "${backup_dir}"
 }
 
 # --------------------------------
@@ -829,7 +875,7 @@ patch_threshold_in_config() {
 # --------------------------------
 uninstall_flow() {
   need_root
-  printf "%b" "$(T uninstall_confirm "${BASE_DIR}")"
+  printf "%b" "$(T uninstall_confirm_keys "${BASE_DIR}" "${WG_DIR}")"
   read -r ans
   ans="${ans:-N}"
   if [[ ! "$ans" =~ ^[Yy]$ ]]; then
@@ -839,18 +885,20 @@ uninstall_flow() {
 
   stop_services
 
-  rm -rf "${BASE_DIR}"
-  info removed_base "${BASE_DIR}"
-
-  printf "$(T prompt_del_wg)"
+  printf "$(T prompt_del_wg_keys "${WG_PRIV}" "${WG_PUB}")"
   read -r delwg
   delwg="${delwg:-N}"
   if [[ "$delwg" =~ ^[Yy]$ ]]; then
     rm -f "${WG_PRIV}" "${WG_PUB}"
     info deleted_wg
   else
-    info kept_wg
+    local backup_dir
+    backup_dir="$(backup_wg_keys)"
+    info kept_wg_backup "${backup_dir}"
   fi
+
+  rm -rf "${BASE_DIR}"
+  info removed_base "${BASE_DIR}"
 
   echo "$(T uninstall_done)"
 }

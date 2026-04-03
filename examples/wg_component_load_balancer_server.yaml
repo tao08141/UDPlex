@@ -1,0 +1,55 @@
+buffer_size: 2048
+queue_size: 10240
+worker_count: 4
+logging:
+  level: debug
+  format: console
+  output_path: stdout
+services:
+  - type: wg
+    tag: wg_server
+    interface_name: wgtests0
+    mtu: 1420
+    addresses:
+      - 10.66.0.1/24
+    private_key: 28e0153a3f10376886d3a1de6153cc1c6026ca301ac854104861eafa41b9a067
+    listen_port: 51820
+    reuse_incoming_detour: true
+    detour: [load_balancer]
+    peers:
+      - public_key: edfbbb2364ea4d1f8c85034c3358172f6154055e4c9d0bbf86825b03d10ed25c
+        allowed_ips:
+          - 10.66.0.2/32
+
+  - type: listen
+    tag: server_listen1
+    listen_addr: 0.0.0.0:5900
+    timeout: 120
+    broadcast_mode: false
+    detour: [wg_server]
+    auth:
+      enabled: true
+      secret: integration-wg-secret
+      enable_encryption: false
+
+  - type: listen
+    tag: server_listen2
+    listen_addr: 0.0.0.0:5901
+    timeout: 120
+    broadcast_mode: false
+    detour: [wg_server]
+    auth:
+      enabled: true
+      secret: integration-wg-secret
+      enable_encryption: false
+
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 3
+    detour:
+      - rule: "bps <= 50000000 || !available_server_listen1 || !available_server_listen2"
+        targets: [server_listen1, server_listen2]
+      - rule: "(bps > 50000000) && (seq % 2 == 0) && available_server_listen1 && available_server_listen2"
+        targets: [server_listen1]
+      - rule: "(bps > 50000000) && (seq % 2 == 1) && available_server_listen2 && available_server_listen1"
+        targets: [server_listen2]

@@ -191,8 +191,9 @@ const (
 )
 
 const (
-	wgModeForward   = "forward"
-	wgModeTCPTunnel = "tcp_tunnel"
+	wgModeForward      = "forward"
+	wgModeTCPTunnel    = "tcp_tunnel"
+	wgModeLoadBalancer = "load_balancer"
 )
 
 const (
@@ -296,6 +297,13 @@ func main() {
 				Runner:   runWireGuardTCPTunnelIntegration,
 			},
 		)
+		if integrationModeExplicitlySelected("WireGuard Load Balancer", selection.SelectedTests) {
+			testConfigs = append(testConfigs, TestConfig{
+				Name:     "WireGuard Load Balancer",
+				Duration: TEST_DURATION,
+				Runner:   runWireGuardLoadBalancerIntegration,
+			})
+		}
 	} else {
 		fmt.Printf("Skipping WireGuard integration tests: %s\n", reason)
 	}
@@ -489,6 +497,10 @@ func filterIntegrationConfigs(configs []TestConfig, selected map[string]struct{}
 	return filtered
 }
 
+func integrationModeExplicitlySelected(name string, selected map[string]struct{}) bool {
+	return len(selected) > 0 && integrationConfigSelected(name, selected)
+}
+
 func integrationConfigSelected(name string, selected map[string]struct{}) bool {
 	if len(selected) == 0 {
 		return true
@@ -530,6 +542,8 @@ func normalizeIntegrationTestName(value string) string {
 		return "ip_router"
 	case "wg_forward", "wireguard_forward":
 		return "wireguard_forward"
+	case "wg_load_balancer", "wireguard_load_balancer", "wg_lb", "wireguard_lb":
+		return "wireguard_load_balancer"
 	case "wg_tcp_tunnel", "wireguard_tcp_tunnel", "wg_tcptunnel":
 		return "wireguard_tcp_tunnel"
 	}
@@ -864,6 +878,10 @@ func isRootUser() bool {
 
 func runWireGuardForwardIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {
 	return runWireGuardIntegration(projectRoot, config, label, withSleep, wgModeForward)
+}
+
+func runWireGuardLoadBalancerIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {
+	return runWireGuardIntegration(projectRoot, config, label, withSleep, wgModeLoadBalancer)
 }
 
 func runWireGuardTCPTunnelIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {
@@ -1321,6 +1339,9 @@ func writeWGConfigs(projectRoot, tempDir, mode string) (string, string, error) {
 	case wgModeForward:
 		clientExample = "wg_component_forward_client.yaml"
 		serverExample = "wg_component_forward_server.yaml"
+	case wgModeLoadBalancer:
+		clientExample = "wg_component_load_balancer_client.yaml"
+		serverExample = "wg_component_load_balancer_server.yaml"
 	case wgModeTCPTunnel:
 		clientExample = "wg_component_tcp_tunnel_client.yaml"
 		serverExample = "wg_component_tcp_tunnel_server.yaml"
