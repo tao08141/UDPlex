@@ -23,6 +23,7 @@ type TcpTunnelListenComponent struct {
 	listener          net.Listener
 	recvBufferSize    int
 	sendBufferSize    int
+	writeBatchSize    int
 	connIndex         sync.Map
 }
 
@@ -55,6 +56,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 
 	recvBufferSize := cfg.RecvBufferSize
 	sendBufferSize := cfg.SendBufferSize
+	writeBatchSize := normalizeTcpTunnelWriteBatchSize(cfg.WriteBatchSize)
 
 	component := &TcpTunnelListenComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
@@ -69,6 +71,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		sendTimeout:       sendTimeout,
 		recvBufferSize:    recvBufferSize,
 		sendBufferSize:    sendBufferSize,
+		writeBatchSize:    writeBatchSize,
 	}
 
 	emptyConnections := make(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
@@ -119,7 +122,7 @@ func (l *TcpTunnelListenComponent) Start() error {
 			}
 
 			logger.Infof("%s: Accepted connection from %s", l.tag, conn.RemoteAddr())
-			NewTcpTunnelConn(conn, ForwardID{}, PoolID{}, l, l.router.config.QueueSize, TcpTunnelListenMode)
+			NewTcpTunnelConn(conn, ForwardID{}, PoolID{}, l, l.router.config.QueueSize, l.writeBatchSize, TcpTunnelListenMode)
 
 			if l.noDelay {
 				if tcpConn, ok := conn.(*net.TCPConn); ok {

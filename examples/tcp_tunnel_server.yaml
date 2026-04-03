@@ -10,6 +10,7 @@ services:
   - type: tcp_tunnel_listen
     tag: server_listen
     listen_addr: 0.0.0.0:5203
+    write_batch_size: 64
     replace_old_mapping: true
     detour: [server_forward]
     auth:

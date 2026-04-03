@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -235,12 +234,12 @@ func (w *WireGuardComponent) endpointFromPacket(packet *Packet) *WireGuardEndpoi
 		raw = fmt.Sprintf("conn:%x", packet.ConnID())
 	}
 
-	var routeTags []string
-	if w.reuseIncomingDetour && packet.SrcTag() != "" {
-		routeTags = []string{packet.SrcTag()}
+	srcTag := ""
+	if w.reuseIncomingDetour {
+		srcTag = packet.SrcTag()
 	}
 
-	return newWireGuardEndpoint(raw, packet.ConnID(), routeTags, packet.SrcAddr())
+	return newWireGuardEndpoint(raw, packet.ConnID(), srcTag)
 }
 
 func (w *WireGuardComponent) buildIPCConfig() string {
@@ -557,7 +556,7 @@ func (b *WireGuardBind) ParseEndpoint(s string) (wgconn.Endpoint, error) {
 	if s == "" {
 		return nil, fmt.Errorf("wireguard endpoint is empty")
 	}
-	return newWireGuardEndpoint(s, ConnID{}, nil, nil), nil
+	return newWireGuardEndpoint(s, ConnID{}, ""), nil
 }
 
 func (b *WireGuardBind) BatchSize() int {
@@ -654,18 +653,29 @@ func (b *WireGuardBind) putInboundBuffer(buf []byte) {
 	b.bufferPool.Put(&buf)
 }
 
-func newWireGuardEndpoint(raw string, connID ConnID, routeTags []string, srcAddr net.Addr) *WireGuardEndpoint {
+func newWireGuardEndpoint(raw string, connID ConnID, srcTag string) *WireGuardEndpoint {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		raw = "wireguard-peer"
 	}
 
+	var routeTags []string
+	if srcTag != "" {
+		routeTags = []string{srcTag}
+	}
+
+	addr := parsedEndpointAddr(raw)
+	dstIP := addr
+	if !dstIP.IsValid() {
+		dstIP = endpointIP(raw, connID)
+	}
+
 	return &WireGuardEndpoint{
 		raw:       raw,
 		connID:    connID,
-		routeTags: append([]string(nil), routeTags...),
-		dstIP:     endpointIP(raw, connID),
-		srcIP:     addrToIP(srcAddr),
+		routeTags: routeTags,
+		dstIP:     dstIP,
+		srcIP:     addr,
 		dstBytes:  endpointBytes(raw, connID),
 	}
 }
@@ -684,7 +694,7 @@ func (e *WireGuardEndpoint) DstToString() string {
 }
 
 func (e *WireGuardEndpoint) DstToBytes() []byte {
-	return append([]byte(nil), e.dstBytes...)
+	return e.dstBytes
 }
 
 func (e *WireGuardEndpoint) DstIP() netip.Addr {
@@ -701,11 +711,22 @@ func endpointBytes(raw string, connID ConnID) []byte {
 		return hash[:]
 	}
 
-	buf := bytes.NewBufferString(raw)
-	buf.WriteByte(0)
-	buf.Write(connID[:])
-	hash := sha256.Sum256(buf.Bytes())
+	buf := make([]byte, len(raw)+1+len(connID))
+	copy(buf, raw)
+	buf[len(raw)] = 0
+	copy(buf[len(raw)+1:], connID[:])
+	hash := sha256.Sum256(buf)
 	return hash[:]
+}
+
+func parsedEndpointAddr(raw string) netip.Addr {
+	if addrPort, err := netip.ParseAddrPort(raw); err == nil {
+		return addrPort.Addr()
+	}
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		return addr
+	}
+	return netip.Addr{}
 }
 
 func normalizeWGKey(value string) string {
@@ -744,10 +765,7 @@ func isHexString(value string) bool {
 }
 
 func endpointIP(raw string, connID ConnID) netip.Addr {
-	if addrPort, err := netip.ParseAddrPort(raw); err == nil {
-		return addrPort.Addr()
-	}
-	if addr, err := netip.ParseAddr(raw); err == nil {
+	if addr := parsedEndpointAddr(raw); addr.IsValid() {
 		return addr
 	}
 

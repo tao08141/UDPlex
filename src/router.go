@@ -116,6 +116,23 @@ func (r *Router) processRouteTaskConcurrent(task routeTask) {
 	packet := task.packet
 	defer packet.Release(1)
 
+	if len(task.destTags) == 1 {
+		tag := task.destTags[0]
+		if tag == packet.srcTag {
+			return
+		}
+		c, exists := r.components[tag]
+		if !exists {
+			logger.Warnf("Warning: trying to route to non-existing component: %s", tag)
+			return
+		}
+		packet.AddRef(1)
+		if err := c.HandlePacket(packet); err != nil {
+			logger.Warnf("Error routing to %s: %v", tag, err)
+		}
+		return
+	}
+
 	lastTargetIndex := -1
 	for i, tag := range task.destTags {
 		if tag == packet.srcTag {

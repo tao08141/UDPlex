@@ -50,7 +50,7 @@ func TestTcpTunnelConn_CloseDoesNotDeadlock(t *testing.T) {
 
 	comp := &testTcpTunnelComponent{tag: "test", stop: make(chan struct{}), r: router, a: auth}
 
-	conn := NewTcpTunnelConn(c1, ForwardID{}, PoolID{}, comp, 16, TcpTunnelListenMode)
+	conn := NewTcpTunnelConn(c1, ForwardID{}, PoolID{}, comp, 16, 64, TcpTunnelListenMode)
 
 	// Close immediately; prior implementation could deadlock because readLoop deferred Close()
 	// and Close waited for the readLoop goroutine.

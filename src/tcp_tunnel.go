@@ -14,8 +14,8 @@ import (
 const (
 	TcpTunnelListenMode = iota
 	TcpTunnelForwardMode
-	tcpTunnelWriteBatchSize = 64
-	tcpTunnelReadBufferSize = 64 * 1024
+	defaultTcpTunnelWriteBatchSize = 64
+	tcpTunnelReadBufferSize        = 64 * 1024
 )
 
 func max(a, b int) int {
@@ -141,18 +141,28 @@ type TcpTunnelConn struct {
 	heartbeatMissCount int
 	lastHeartbeatSent  time.Time
 
-	writeQueue chan *Packet
-	writePrio  chan *Packet
-	writeWg    sync.WaitGroup
-	closed     chan struct{}
-	closeOnce  sync.Once
+	writeQueue     chan *Packet
+	writePrio      chan *Packet
+	writeBatchSize int
+	writeWg        sync.WaitGroup
+	closed         chan struct{}
+	closeOnce      sync.Once
 }
 
-func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, queueSize int, mode int) *TcpTunnelConn {
+func normalizeTcpTunnelWriteBatchSize(size int) int {
+	if size <= 0 {
+		return defaultTcpTunnelWriteBatchSize
+	}
+	return size
+}
+
+func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, queueSize int, writeBatchSize int, mode int) *TcpTunnelConn {
 	connID := ConnID{}
 	if _, err := rand.Read(connID[:]); err != nil {
 		connID = ConnID{}
 	}
+
+	writeBatchSize = normalizeTcpTunnelWriteBatchSize(writeBatchSize)
 
 	c := &TcpTunnelConn{
 		connID:     connID,
@@ -163,12 +173,13 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 		lastActive: time.Now(),
 		// Split write queue into priority (heartbeat/control) and normal (data).
 		// Priority queue is small but always preferred by the writer.
-		writePrio:  make(chan *Packet, max(4, queueSize/16)),
-		writeQueue: make(chan *Packet, queueSize), // Buffered channel for normal packets
-		closed:     make(chan struct{}),
-		closeOnce:  sync.Once{},
-		writeWg:    sync.WaitGroup{},
-		t:          &t,
+		writePrio:      make(chan *Packet, max(4, queueSize/16)),
+		writeQueue:     make(chan *Packet, queueSize), // Buffered channel for normal packets
+		writeBatchSize: writeBatchSize,
+		closed:         make(chan struct{}),
+		closeOnce:      sync.Once{},
+		writeWg:        sync.WaitGroup{},
+		t:              &t,
 	}
 
 	// Start to write goroutine
@@ -263,8 +274,8 @@ func (c *TcpTunnelConn) writeLoop() {
 		return nil
 	}
 
-	batch := make([]*Packet, 0, tcpTunnelWriteBatchSize)
-	buffers := make(net.Buffers, 0, tcpTunnelWriteBatchSize)
+	batch := make([]*Packet, 0, c.writeBatchSize)
+	buffers := make(net.Buffers, 0, c.writeBatchSize)
 
 	releaseBatch := func() {
 		for i := range batch {
@@ -323,7 +334,7 @@ func (c *TcpTunnelConn) writeLoop() {
 		}
 
 		drain := func(ch <-chan *Packet) {
-			for len(batch) < tcpTunnelWriteBatchSize {
+			for len(batch) < c.writeBatchSize {
 				select {
 				case packet, ok := <-ch:
 					if !ok {

@@ -23,6 +23,7 @@ type TcpTunnelForwardComponent struct {
 
 	recvBufferSize int
 	sendBufferSize int
+	writeBatchSize int
 	connIndex      sync.Map
 }
 
@@ -55,6 +56,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 
 	recvBufferSize := cfg.RecvBufferSize
 	sendBufferSize := cfg.SendBufferSize
+	writeBatchSize := normalizeTcpTunnelWriteBatchSize(cfg.WriteBatchSize)
 
 	forwardID := ForwardID{}
 	_, err = rand.Read(forwardID[:])
@@ -91,6 +93,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		noDelay:             noDelay,
 		recvBufferSize:      recvBufferSize,
 		sendBufferSize:      sendBufferSize,
+		writeBatchSize:      writeBatchSize,
 	}
 }
 
@@ -226,7 +229,7 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 		}
 	}
 
-	ttc := NewTcpTunnelConn(conn, f.forwardID, poolID, f, f.router.config.QueueSize, TcpTunnelForwardMode)
+	ttc := NewTcpTunnelConn(conn, f.forwardID, poolID, f, f.router.config.QueueSize, f.writeBatchSize, TcpTunnelForwardMode)
 
 	packet := f.router.GetPacket(f.GetTag())
 	defer packet.Release(1)

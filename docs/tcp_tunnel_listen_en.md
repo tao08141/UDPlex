@@ -12,6 +12,7 @@ The TCP Tunnel Listen component is responsible for listening for TCP connections
 | `listen_addr` | Listening address and port, format "IP:port", e.g. "0.0.0.0:9001" |
 | `timeout` | Connection timeout (seconds), after which connections are closed if no data is transmitted |
 | `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
+| `write_batch_size` | Maximum number of packets grouped into a single TCP write batch; defaults to `64` |
 | `detour` | Forwarding path, specifies the component identifiers that receive data |
 | `auth` | Authentication configuration, see the authentication section |
 
@@ -23,6 +24,7 @@ tag: tcp_tunnel_server
 listen_addr: 0.0.0.0:9001
 timeout: 300
 no_delay: true
+write_batch_size: 64
 detour:
   - forward_component
 auth:

@@ -12,6 +12,7 @@ The TCP Tunnel Forward component is responsible for establishing connections to 
 | `forwarders` | List of target server addresses, format "IP:port[:connection_count]", e.g. "1.2.3.4:9001:4". Using multiple connections may cause UDP packet reordering, which might lead to unknown issues in some scenarios |
 | `connection_check_time` | Connection check interval (seconds), regularly checks and reconnects broken connections |
 | `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
+| `write_batch_size` | Maximum number of packets grouped into a single TCP write batch; defaults to `64` |
 | `detour` | Forwarding path, specifies the component identifiers that receive return data |
 | `auth` | Authentication configuration, see the authentication section |
 
@@ -25,6 +26,7 @@ forwarders:
   - 203.0.113.2:9001:2
 connection_check_time: 30
 no_delay: true
+write_batch_size: 64
 detour:
   - listen_component
 auth:
