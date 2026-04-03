@@ -4,8 +4,10 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
 	"sync/atomic"
 )
 
@@ -26,8 +28,16 @@ func (r *Router) logBufferRef() {
 // initPprof Start the pprof server in the dev environment
 func initPprof() {
 	go func() {
-		logger.Infof("Starting pprof server on http://localhost:6060")
-		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+		addr := os.Getenv("UDPLEX_PPROF_ADDR")
+		if addr == "" {
+			if port := os.Getenv("UDPLEX_PPROF_PORT"); port != "" {
+				addr = fmt.Sprintf("127.0.0.1:%s", port)
+			} else {
+				addr = "127.0.0.1:6060"
+			}
+		}
+		logger.Infof("Starting pprof server on http://%s", addr)
+		if err := http.ListenAndServe(addr, nil); err != nil {
 			logger.Errorf("Failed to start pprof server: %v", err)
 		}
 	}()

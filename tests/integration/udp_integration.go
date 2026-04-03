@@ -58,6 +58,31 @@ type TestResult struct {
 	Error        string
 }
 
+type IntegrationProfileTarget struct {
+	Name      string
+	Namespace string
+	PprofAddr string
+}
+
+type ProfileArtifactIndex struct {
+	GeneratedAt time.Time                  `json:"generated_at"`
+	Entries     []ProfileArtifactIndexItem `json:"entries"`
+}
+
+type ProfileArtifactIndexItem struct {
+	ConfigName       string   `json:"config_name"`
+	ConfigNormalized string   `json:"config_normalized"`
+	TargetName       string   `json:"target_name"`
+	TargetNormalized string   `json:"target_normalized"`
+	Namespace        string   `json:"namespace,omitempty"`
+	PprofAddr        string   `json:"pprof_addr,omitempty"`
+	BaseName         string   `json:"base_name"`
+	RawProfile       string   `json:"raw_profile"`
+	TopReport        string   `json:"top_report"`
+	SVGReport        string   `json:"svg_report,omitempty"`
+	TopHotspots      []string `json:"top_hotspots,omitempty"`
+}
+
 type PacketData struct {
 	ID        uint32
 	Timestamp int64
@@ -115,7 +140,13 @@ type WGEchoMetrics struct {
 type IntegrationSelection struct {
 	Suite         string
 	SelectedTests map[string]struct{}
+	BuildTags     string
+	ProfileDir    string
+	ProfileTests  map[string]struct{}
+	ProfileSecs   int
 }
+
+var integrationSelection IntegrationSelection
 
 // Bitset is a compact bitmap used to track seen packet IDs with minimal memory.
 type Bitset struct {
@@ -184,16 +215,19 @@ func main() {
 		fmt.Println("Use '-tests' to run a subset, for example:")
 		fmt.Println("  go run udp_integration.go -tests wg_forward,wg_tcp_tunnel")
 		fmt.Println("  go run udp_integration.go -tests basic,tcp_tunnel")
+		fmt.Println("Optional profiling flags:")
+		fmt.Println("  go run udp_integration.go -build-tags dev -profile-dir ./profiles -profile-tests tcp_tunnel,wg_tcp_tunnel -profile-seconds 10")
 		return
 	}
 
 	projectRoot := getProjectRoot()
 	examplesDir := filepath.Join(projectRoot, "examples")
 	selection := parseIntegrationSelection()
+	integrationSelection = selection
 
 	// Build UDPlex binary
 	fmt.Println("Building UDPlex...")
-	if err := buildUDPlex(projectRoot); err != nil {
+	if err := buildUDPlex(projectRoot, selection.BuildTags); err != nil {
 		fmt.Printf("Failed to build UDPlex: %v\n", err)
 		os.Exit(1)
 	}
@@ -350,7 +384,7 @@ func getProjectRoot() string {
 	return "../../" // fallback
 }
 
-func buildUDPlex(projectRoot string) error {
+func buildUDPlex(projectRoot string, buildTags string) error {
 	srcDir := filepath.Join(projectRoot, "src")
 	binaryName := "udplex_test"
 	// Add .exe extension on Windows
@@ -359,7 +393,13 @@ func buildUDPlex(projectRoot string) error {
 	}
 	binaryPath := filepath.Join(projectRoot, binaryName)
 
-	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
+	args := []string{"build"}
+	if strings.TrimSpace(buildTags) != "" {
+		args = append(args, "-tags", strings.TrimSpace(buildTags))
+	}
+	args = append(args, "-o", binaryPath, ".")
+
+	cmd := exec.Command("go", args...)
 	cmd.Dir = srcDir
 
 	output, err := cmd.CombinedOutput()
@@ -374,6 +414,8 @@ func parseIntegrationSelection() IntegrationSelection {
 	selection := IntegrationSelection{
 		Suite:         "all",
 		SelectedTests: make(map[string]struct{}),
+		ProfileTests:  make(map[string]struct{}),
+		ProfileSecs:   int(TEST_DURATION / time.Second),
 	}
 
 	for i := 1; i < len(os.Args); i++ {
@@ -393,6 +435,33 @@ func parseIntegrationSelection() IntegrationSelection {
 					if name != "" {
 						selection.SelectedTests[name] = struct{}{}
 					}
+				}
+				i++
+			}
+		case "-build-tags":
+			if i+1 < len(os.Args) {
+				selection.BuildTags = strings.TrimSpace(os.Args[i+1])
+				i++
+			}
+		case "-profile-dir":
+			if i+1 < len(os.Args) {
+				selection.ProfileDir = strings.TrimSpace(os.Args[i+1])
+				i++
+			}
+		case "-profile-tests":
+			if i+1 < len(os.Args) {
+				for _, raw := range strings.Split(os.Args[i+1], ",") {
+					name := normalizeIntegrationTestName(raw)
+					if name != "" {
+						selection.ProfileTests[name] = struct{}{}
+					}
+				}
+				i++
+			}
+		case "-profile-seconds":
+			if i+1 < len(os.Args) {
+				if secs, err := strconv.Atoi(strings.TrimSpace(os.Args[i+1])); err == nil && secs > 0 {
+					selection.ProfileSecs = secs
 				}
 				i++
 			}
@@ -480,20 +549,28 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 
 	// Start UDPlex processes
 	var processes []*exec.Cmd
+	var profileTargets []IntegrationProfileTarget
 
-	for _, configFile := range config.ConfigFiles {
+	for index, configFile := range config.ConfigFiles {
 		configPath := filepath.Join(examplesDir, configFile)
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			result.Error = fmt.Sprintf("Config file not found: %s", configPath)
 			return result
 		}
 
-		process := startUDPlexProcess(projectRoot, configPath)
+		profileTarget, err := newLocalProfileTarget(config.Name, configFile, index)
+		if err != nil {
+			result.Error = fmt.Sprintf("Failed to allocate profile target: %v", err)
+			return result
+		}
+
+		process := startUDPlexProcess(projectRoot, configPath, profileTarget)
 		if process == nil {
 			result.Error = "Failed to start UDPlex process"
 			return result
 		}
 		processes = append(processes, process)
+		profileTargets = append(profileTargets, profileTarget)
 	}
 
 	// Wait for processes to start
@@ -518,8 +595,20 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 		}
 	}()
 
+	profileWait, err := maybeStartProfiles(projectRoot, config.Name, withSleep, profileTargets)
+	if err != nil {
+		result.Error = fmt.Sprintf("Failed to start profiles: %v", err)
+		return result
+	}
+
 	// Run UDP test
 	sent, received, errorPackets, bytesSent, bytesReceived, lat := runUDPTest(config.TestPort, config.TargetPort, config.Duration, withSleep)
+	if profileWait != nil {
+		if waitErr := profileWait(); waitErr != nil {
+			result.Error = fmt.Sprintf("Profile capture failed: %v", waitErr)
+			return result
+		}
+	}
 
 	result.Sent = sent
 	result.Received = received
@@ -579,7 +668,7 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 	return result
 }
 
-func startUDPlexProcess(projectRoot, configPath string) *exec.Cmd {
+func startUDPlexProcess(projectRoot, configPath string, profileTarget IntegrationProfileTarget) *exec.Cmd {
 	binaryName := "udplex_test"
 	// Add .exe extension on Windows
 	if filepath.Ext(os.Args[0]) == ".exe" {
@@ -588,10 +677,11 @@ func startUDPlexProcess(projectRoot, configPath string) *exec.Cmd {
 	binaryPath := filepath.Join(projectRoot, binaryName)
 
 	cmd := exec.Command(binaryPath, "-c", configPath)
+	cmd.Env = append(os.Environ(), formatPprofEnv(profileTarget)...)
 	return startManagedProcess(cmd, configPath, "UDPlex started and ready", 10*time.Second)
 }
 
-func startUDPlexProcessInNamespace(projectRoot, configPath, netns string) *exec.Cmd {
+func startUDPlexProcessInNamespace(projectRoot, configPath, netns string, profileTarget IntegrationProfileTarget) *exec.Cmd {
 	binaryName := "udplex_test"
 	if filepath.Ext(os.Args[0]) == ".exe" {
 		binaryName += ".exe"
@@ -599,6 +689,7 @@ func startUDPlexProcessInNamespace(projectRoot, configPath, netns string) *exec.
 	binaryPath := filepath.Join(projectRoot, binaryName)
 
 	cmd := exec.Command("ip", "netns", "exec", netns, binaryPath, "-c", configPath)
+	cmd.Env = append(os.Environ(), formatPprofEnv(profileTarget)...)
 	return startManagedProcess(cmd, fmt.Sprintf("%s [%s]", configPath, netns), "UDPlex started and ready", 12*time.Second)
 }
 
@@ -805,14 +896,17 @@ func runWireGuardIntegration(projectRoot string, config TestConfig, label string
 		return result
 	}
 
-	serverProcess := startUDPlexProcessInNamespace(projectRoot, serverConfigPath, env.serverNS)
+	serverProfileTarget := newNamespaceProfileTarget("server", env.serverNS)
+	clientProfileTarget := newNamespaceProfileTarget("client", env.clientNS)
+
+	serverProcess := startUDPlexProcessInNamespace(projectRoot, serverConfigPath, env.serverNS, serverProfileTarget)
 	if serverProcess == nil {
 		result.Error = "failed to start WireGuard server UDPlex process"
 		return result
 	}
 	defer stopProcess(serverProcess)
 
-	clientProcess := startUDPlexProcessInNamespace(projectRoot, clientConfigPath, env.clientNS)
+	clientProcess := startUDPlexProcessInNamespace(projectRoot, clientConfigPath, env.clientNS, clientProfileTarget)
 	if clientProcess == nil {
 		result.Error = "failed to start WireGuard client UDPlex process"
 		return result
@@ -828,7 +922,21 @@ func runWireGuardIntegration(projectRoot string, config TestConfig, label string
 
 	time.Sleep(1500 * time.Millisecond)
 
+	profileWait, err := maybeStartProfiles(projectRoot, config.Name, withSleep, []IntegrationProfileTarget{
+		clientProfileTarget,
+		serverProfileTarget,
+	})
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to start profiles: %v", err)
+		return result
+	}
+
 	metrics, err := runWGEchoClientInNamespace(env.clientNS, wgInnerServerAddr, config.Duration, withSleep)
+	if profileWait != nil {
+		if waitErr := profileWait(); waitErr != nil && err == nil {
+			err = fmt.Errorf("profile capture failed: %w", waitErr)
+		}
+	}
 	if err != nil {
 		result.Error = fmt.Sprintf("WireGuard echo client failed: %v", err)
 		return result
@@ -836,6 +944,323 @@ func runWireGuardIntegration(projectRoot string, config TestConfig, label string
 
 	populateResultFromWGEchoMetrics(&result, metrics, config.Duration, withSleep)
 	return result
+}
+
+func maybeStartProfiles(projectRoot, configName string, withSleep bool, targets []IntegrationProfileTarget) (func() error, error) {
+	if withSleep || integrationSelection.ProfileDir == "" || len(targets) == 0 {
+		return nil, nil
+	}
+	if len(integrationSelection.ProfileTests) > 0 && !integrationConfigSelected(configName, integrationSelection.ProfileTests) {
+		return nil, nil
+	}
+
+	profileSecs := integrationSelection.ProfileSecs
+	if profileSecs <= 0 {
+		profileSecs = int(TEST_DURATION / time.Second)
+	}
+
+	profileDir := integrationSelection.ProfileDir
+	if !filepath.IsAbs(profileDir) {
+		profileDir = filepath.Join(projectRoot, profileDir)
+	}
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		return nil, err
+	}
+
+	type profileTask struct {
+		name       string
+		cmd        *exec.Cmd
+		raw        string
+		target     IntegrationProfileTarget
+		artifactID string
+	}
+
+	tasks := make([]profileTask, 0, len(targets))
+	for _, target := range targets {
+		artifactID := profileArtifactBaseName(configName, target.Name)
+		rawPath := filepath.Join(profileDir, artifactID+".prof")
+		profileURL := fmt.Sprintf("http://%s/debug/pprof/profile?seconds=%d", target.PprofAddr, profileSecs)
+
+		var cmd *exec.Cmd
+		if target.Namespace != "" {
+			cmd = exec.Command("ip", "netns", "exec", target.Namespace, "curl", "-sS", profileURL, "-o", rawPath)
+		} else {
+			cmd = exec.Command("curl", "-sS", profileURL, "-o", rawPath)
+		}
+
+		tasks = append(tasks, profileTask{
+			name:       target.Name,
+			cmd:        cmd,
+			raw:        rawPath,
+			target:     target,
+			artifactID: artifactID,
+		})
+	}
+
+	for i := range tasks {
+		if err := tasks[i].cmd.Start(); err != nil {
+			return nil, fmt.Errorf("start %s profile capture: %w", tasks[i].name, err)
+		}
+	}
+
+	return func() error {
+		binaryPath := filepath.Join(projectRoot, "udplex_test")
+		indexEntries := make([]ProfileArtifactIndexItem, 0, len(tasks))
+		for _, task := range tasks {
+			if err := task.cmd.Wait(); err != nil {
+				return fmt.Errorf("%s profile capture failed: %w", task.name, err)
+			}
+			if err := writePprofArtifacts(binaryPath, task.raw); err != nil {
+				return fmt.Errorf("%s profile post-processing failed: %w", task.name, err)
+			}
+			indexEntries = append(indexEntries, buildProfileArtifactIndexItem(configName, task))
+		}
+		if err := upsertProfileArtifactIndex(profileDir, indexEntries); err != nil {
+			return fmt.Errorf("write profile index: %w", err)
+		}
+		if err := writeProfileSummary(profileDir); err != nil {
+			return fmt.Errorf("write profile summary: %w", err)
+		}
+		return nil
+	}, nil
+}
+
+func writePprofArtifacts(binaryPath, rawProfilePath string) error {
+	topCmd := exec.Command("go", "tool", "pprof", "-top", "-nodecount=30", binaryPath, rawProfilePath)
+	topOutput, err := topCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("generate top report: %v: %s", err, strings.TrimSpace(string(topOutput)))
+	}
+	if err := os.WriteFile(strings.TrimSuffix(rawProfilePath, ".prof")+".top.txt", topOutput, 0o644); err != nil {
+		return err
+	}
+
+	svgCmd := exec.Command("go", "tool", "pprof", "-svg", binaryPath, rawProfilePath)
+	svgOutput, err := svgCmd.CombinedOutput()
+	if err == nil {
+		if writeErr := os.WriteFile(strings.TrimSuffix(rawProfilePath, ".prof")+".svg", svgOutput, 0o644); writeErr != nil {
+			return writeErr
+		}
+	}
+
+	return nil
+}
+
+func newLocalProfileTarget(configName, configFile string, index int) (IntegrationProfileTarget, error) {
+	port, err := allocateLocalTCPPort()
+	if err != nil {
+		return IntegrationProfileTarget{}, err
+	}
+
+	baseName := strings.TrimSuffix(filepath.Base(configFile), filepath.Ext(configFile))
+	if baseName == "" {
+		baseName = fmt.Sprintf("process_%d", index+1)
+	}
+
+	return IntegrationProfileTarget{
+		Name:      baseName,
+		PprofAddr: fmt.Sprintf("127.0.0.1:%d", port),
+	}, nil
+}
+
+func newNamespaceProfileTarget(name, namespace string) IntegrationProfileTarget {
+	return IntegrationProfileTarget{
+		Name:      name,
+		Namespace: namespace,
+		PprofAddr: "127.0.0.1:6060",
+	}
+}
+
+func formatPprofEnv(target IntegrationProfileTarget) []string {
+	if strings.TrimSpace(target.PprofAddr) == "" {
+		return nil
+	}
+	return []string{fmt.Sprintf("UDPLEX_PPROF_ADDR=%s", target.PprofAddr)}
+}
+
+func allocateLocalTCPPort() (int, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer listener.Close()
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return 0, fmt.Errorf("unexpected listener address type %T", listener.Addr())
+	}
+	return tcpAddr.Port, nil
+}
+
+func normalizeProfileTargetName(name string) string {
+	name = normalizeIntegrationTestName(name)
+	if name == "" {
+		return "process"
+	}
+	return name
+}
+
+func profileArtifactBaseName(configName, targetName string) string {
+	configPart := normalizeIntegrationTestName(configName)
+	targetPart := normalizeProfileTargetName(targetName)
+
+	if configPart == "" {
+		return targetPart
+	}
+	if targetPart == "" {
+		return configPart
+	}
+	if targetPart == configPart || strings.HasPrefix(targetPart, configPart+"_") {
+		return targetPart
+	}
+	return configPart + "_" + targetPart
+}
+
+func buildProfileArtifactIndexItem(configName string, task struct {
+	name       string
+	cmd        *exec.Cmd
+	raw        string
+	target     IntegrationProfileTarget
+	artifactID string
+}) ProfileArtifactIndexItem {
+	topReport := strings.TrimSuffix(task.raw, ".prof") + ".top.txt"
+	svgReport := strings.TrimSuffix(task.raw, ".prof") + ".svg"
+	item := ProfileArtifactIndexItem{
+		ConfigName:       configName,
+		ConfigNormalized: normalizeIntegrationTestName(configName),
+		TargetName:       task.target.Name,
+		TargetNormalized: normalizeProfileTargetName(task.target.Name),
+		Namespace:        task.target.Namespace,
+		PprofAddr:        task.target.PprofAddr,
+		BaseName:         task.artifactID,
+		RawProfile:       task.raw,
+		TopReport:        topReport,
+		TopHotspots:      extractTopHotspots(topReport, 5),
+	}
+	if _, err := os.Stat(svgReport); err == nil {
+		item.SVGReport = svgReport
+	}
+	return item
+}
+
+func extractTopHotspots(topReportPath string, limit int) []string {
+	content, err := os.ReadFile(topReportPath)
+	if err != nil {
+		return nil
+	}
+
+	lines := strings.Split(string(content), "\n")
+	hotspots := make([]string, 0, limit)
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		if !strings.HasSuffix(fields[1], "%") || !strings.HasSuffix(fields[4], "%") {
+			continue
+		}
+		symbol := fields[len(fields)-1]
+		if symbol == "cum%" || symbol == "Type:" || symbol == "Time:" || symbol == "Duration:" {
+			continue
+		}
+		if strings.HasSuffix(symbol, "%") {
+			continue
+		}
+		if _, err := strconv.ParseFloat(strings.TrimSuffix(fields[1], "%"), 64); err != nil {
+			continue
+		}
+		hotspots = append(hotspots, fmt.Sprintf("%s (%s flat)", symbol, fields[1]))
+		if len(hotspots) >= limit {
+			break
+		}
+	}
+	return hotspots
+}
+
+func upsertProfileArtifactIndex(profileDir string, newEntries []ProfileArtifactIndexItem) error {
+	indexPath := filepath.Join(profileDir, "profile_index.json")
+	index := ProfileArtifactIndex{}
+
+	if content, err := os.ReadFile(indexPath); err == nil {
+		if err := json.Unmarshal(content, &index); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	existingByBase := make(map[string]ProfileArtifactIndexItem, len(index.Entries)+len(newEntries))
+	for _, entry := range index.Entries {
+		existingByBase[entry.BaseName] = entry
+	}
+	for _, entry := range newEntries {
+		existingByBase[entry.BaseName] = entry
+	}
+
+	index.Entries = index.Entries[:0]
+	for _, entry := range existingByBase {
+		index.Entries = append(index.Entries, entry)
+	}
+	sort.Slice(index.Entries, func(i, j int) bool {
+		if index.Entries[i].ConfigNormalized == index.Entries[j].ConfigNormalized {
+			return index.Entries[i].TargetNormalized < index.Entries[j].TargetNormalized
+		}
+		return index.Entries[i].ConfigNormalized < index.Entries[j].ConfigNormalized
+	})
+	index.GeneratedAt = time.Now().UTC()
+
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(indexPath, data, 0o644)
+}
+
+func writeProfileSummary(profileDir string) error {
+	indexPath := filepath.Join(profileDir, "profile_index.json")
+	content, err := os.ReadFile(indexPath)
+	if err != nil {
+		return err
+	}
+
+	index := ProfileArtifactIndex{}
+	if err := json.Unmarshal(content, &index); err != nil {
+		return err
+	}
+
+	var builder strings.Builder
+	builder.WriteString("# Profile Summary\n\n")
+	builder.WriteString(fmt.Sprintf("Generated: %s\n\n", index.GeneratedAt.Format(time.RFC3339)))
+	builder.WriteString("| Test | Target | Namespace | Pprof Addr | Top Hotspots | Raw | Top |\n")
+	builder.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
+
+	for _, entry := range index.Entries {
+		namespace := entry.Namespace
+		if namespace == "" {
+			namespace = "-"
+		}
+		pprofAddr := entry.PprofAddr
+		if pprofAddr == "" {
+			pprofAddr = "-"
+		}
+		hotspots := "-"
+		if len(entry.TopHotspots) > 0 {
+			hotspots = strings.Join(entry.TopHotspots, "<br>")
+		}
+
+		builder.WriteString(fmt.Sprintf(
+			"| %s | %s | %s | %s | %s | `%s` | `%s` |\n",
+			entry.ConfigNormalized,
+			entry.TargetNormalized,
+			namespace,
+			pprofAddr,
+			hotspots,
+			filepath.Base(entry.RawProfile),
+			filepath.Base(entry.TopReport),
+		))
+	}
+
+	return os.WriteFile(filepath.Join(profileDir, "profile_summary.md"), []byte(builder.String()), 0o644)
 }
 
 type wgNamespaceEnv struct {

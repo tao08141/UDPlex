@@ -20,6 +20,7 @@ WG_DIR="/etc/wireguard"
 WG_PRIV="${WG_DIR}/wg_private.key"
 WG_PUB="${WG_DIR}/wg_public.key"
 WG_IFACE="wg0"
+WG_ENDPOINT_LABEL="udplex-peer"
 
 DOCKER_INSTALL_SCRIPT_URL="https://get.docker.com"
 UDPlex_IMAGE="ghcr.io/tao08141/udplex:latest"
@@ -95,14 +96,16 @@ T() {
     en:secret_found) msg="Existing shared secret found. Reusing it." ;;
     zh:prompt_secret) msg="设置 UDPlex 鉴权密钥（两端必须一致，留空则自动生成）: " ;;
     en:prompt_secret) msg="Set UDPlex auth secret (must match on both ends, empty to auto-generate): " ;;
+    zh:show_secret_title) msg="当前 UDPlex 共享密钥（请复制到对端）:" ;;
+    en:show_secret_title) msg="Current UDPlex shared secret (copy this to the peer):" ;;
+    zh:using_wg_port) msg="使用固定 WireGuard 端口：%s" ;;
+    en:using_wg_port) msg="Using fixed WireGuard port: %s" ;;
     zh:prompt_peer_pub) msg="请输入对端 WireGuard 公钥（在对端执行 install 时可以看到）:" ;;
     en:prompt_peer_pub) msg="Paste the peer WireGuard public key (shown by running install on the peer):" ;;
     zh:bad_pubkey) msg="公钥格式看起来不正确，请重新输入。" ;;
     en:bad_pubkey) msg="Invalid-looking public key. Please paste again." ;;
     zh:compose_written) msg="docker-compose.yml 已生成。" ;;
     en:compose_written) msg="docker-compose.yml generated." ;;
-    zh:prompt_client_wg_port) msg="客户端本地 WireGuard 端口（默认 51820）: " ;;
-    en:prompt_client_wg_port) msg="Client local WireGuard port (default 51820): " ;;
     zh:prompt_line1) msg="线路 1 目标地址（出口服务器 IP:端口，默认端口 9000，例如 1.2.3.4:9000）: " ;;
     en:prompt_line1) msg="Forward line #1 target (exit server IP:port, default 9000, e.g. 1.2.3.4:9000): " ;;
     zh:prompt_line2) msg="线路 2 目标地址（出口服务器 IP:端口，默认端口 9001，例如 1.2.3.4:9001）: " ;;
@@ -323,6 +326,20 @@ show_local_pubkey() {
   fi
 }
 
+show_shared_secret() {
+  local secret="${1:-}"
+  if [[ -z "$secret" ]]; then
+    return
+  fi
+  echo
+  echo "========================================"
+  T show_secret_title; echo
+  printf '%s\n' "$secret"
+  echo
+  echo "========================================"
+  echo
+}
+
 validate_pubkey() {
   local key="${1:-}"
   [[ -n "$key" ]] || return 1
@@ -362,13 +379,12 @@ YAML
 write_client_config() {
   local LINE1_ADDR="${1}"
   local LINE2_ADDR="${2}"
-  local WG_PORT="${3}"
-  local SECRET="${4}"
-  local THRESH="${5}"
-  local PROTO="${6:-udp}"
-  local LOCAL_ADDR="${7}"
-  local PEER_ADDR="${8}"
-  local PEER_PUBKEY="${9}"
+  local SECRET="${3}"
+  local THRESH="${4}"
+  local PROTO="${5:-udp}"
+  local LOCAL_ADDR="${6}"
+  local PEER_ADDR="${7}"
+  local PEER_PUBKEY="${8}"
   local PRIV
   PRIV=$(cat "${WG_PRIV}")
 
@@ -395,7 +411,6 @@ services:
   - type: wg
     tag: wg_component
     interface_name: ${WG_IFACE}
-    listen_port: ${WG_PORT}
     mtu: 1420
     addresses: [${LOCAL_ADDR}]
     private_key: ${PRIV}
@@ -403,7 +418,7 @@ services:
     detour: [load_balancer]
     peers:
       - public_key: ${PEER_PUBKEY}
-        endpoint: ${PEER_ADDR}:${WG_PORT}
+        endpoint: ${WG_ENDPOINT_LABEL}
         allowed_ips: [${PEER_ADDR}/32]
         persistent_keepalive: 25
   - type: ${TYPE}
@@ -447,13 +462,12 @@ YAML
 write_server_config() {
   local LISTEN1_PORT="${1}"
   local LISTEN2_PORT="${2}"
-  local WG_PORT="${3}"
-  local SECRET="${4}"
-  local THRESH="${5}"
-  local PROTO="${6:-udp}"
-  local LOCAL_ADDR="${7}"
-  local PEER_ADDR="${8}"
-  local PEER_PUBKEY="${9}"
+  local SECRET="${3}"
+  local THRESH="${4}"
+  local PROTO="${5:-udp}"
+  local LOCAL_ADDR="${6}"
+  local PEER_ADDR="${7}"
+  local PEER_PUBKEY="${8}"
   local PRIV
   PRIV=$(cat "${WG_PRIV}")
 
@@ -502,7 +516,6 @@ ${NODELAY_CFG}
   - type: wg
     tag: wg_component
     interface_name: ${WG_IFACE}
-    listen_port: ${WG_PORT}
     mtu: 1420
     addresses: [${LOCAL_ADDR}]
     private_key: ${PRIV}
@@ -582,6 +595,7 @@ install_flow() {
     SECRET="${SECRET_INPUT:-$default_secret}"
     echo -n "${SECRET}" > "${SECRET_FILE}"
   fi
+  show_shared_secret "${SECRET}"
 
   # Peer public key
   local PEER_PUBKEY=""
@@ -609,9 +623,7 @@ install_flow() {
   write_compose_file
 
   if [[ "$ROLE" == "client" ]]; then
-    local WG_PORT LINE1_ADDR LINE2_ADDR
-    read -rp "$(T prompt_server_wg)" WG_PORT || true
-    WG_PORT="${WG_PORT:-51820}"
+    local LINE1_ADDR LINE2_ADDR
     read -rp "$(T prompt_line1)" LINE1_ADDR
     read -rp "$(T prompt_line2)" LINE2_ADDR
     if [[ -z "$LINE1_ADDR" || -z "$LINE2_ADDR" ]]; then
@@ -624,23 +636,21 @@ install_flow() {
     LOCAL_ADDR="${LOCAL_ADDR:-10.0.0.1/24}"
     read -rp "$(T prompt_client_peer)" PEER_ADDR || true
     PEER_ADDR="${PEER_ADDR:-10.0.0.2}"
-    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$WG_PORT" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
+    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
     info wg_client_written
   else
-    local LISTEN1_PORT LISTEN2_PORT WG_PORT
+    local LISTEN1_PORT LISTEN2_PORT
     read -rp "$(T prompt_server_p1)" LISTEN1_PORT || true
     LISTEN1_PORT="${LISTEN1_PORT:-9000}"
     read -rp "$(T prompt_server_p2)" LISTEN2_PORT || true
     LISTEN2_PORT="${LISTEN2_PORT:-9001}"
-    read -rp "$(T prompt_server_wg)" WG_PORT || true
-    WG_PORT="${WG_PORT:-51820}"
 
     local LOCAL_ADDR PEER_ADDR
     read -rp "$(T prompt_server_addr)" LOCAL_ADDR || true
     LOCAL_ADDR="${LOCAL_ADDR:-10.0.0.2/24}"
     read -rp "$(T prompt_server_peer)" PEER_ADDR || true
     PEER_ADDR="${PEER_ADDR:-10.0.0.1}"
-    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$WG_PORT" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
+    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
     info wg_server_written
   fi
 
@@ -732,9 +742,9 @@ show_status() {
   echo
   echo "=== Listening Ports ==="
   if command -v ss >/dev/null 2>&1; then
-    ss -lunpt | grep -E ":(9000|9001|51820)\b" || true
+    ss -lunpt | grep -E ":(9000|9001)\b" || true
   else
-    netstat -tulpn | grep -E ":(9000|9001|51820)\b" || true
+    netstat -tulpn | grep -E ":(9000|9001)\b" || true
   fi
   echo
   echo "=== Meta ==="
