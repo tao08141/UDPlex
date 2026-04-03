@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Commit SHA, tag, or branch to test. Leave empty to use the triggering commit.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -17,8 +24,38 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.inputs.target_ref || github.sha }}
           
       - run: git fetch --force --tags
+
+      - name: Resolve target commit metadata
+        id: target
+        shell: bash
+        run: |
+          requested_ref="${{ github.event.inputs.target_ref }}"
+          resolved_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short HEAD)"
+
+          if [ -n "$requested_ref" ]; then
+            ref_name="$requested_ref"
+            run_mode="historical"
+          else
+            ref_name="${GITHUB_REF_NAME}"
+            run_mode="nightly"
+          fi
+
+          echo "requested_ref=$ref_name" >> "$GITHUB_OUTPUT"
+          echo "sha=$resolved_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "ref_name=$ref_name" >> "$GITHUB_OUTPUT"
+          echo "run_mode=$run_mode" >> "$GITHUB_OUTPUT"
+
+      - name: Show target commit
+        shell: bash
+        run: |
+          echo "Running mode: ${{ steps.target.outputs.run_mode }}"
+          echo "Requested ref: ${{ steps.target.outputs.requested_ref }}"
+          echo "Resolved SHA: ${{ steps.target.outputs.sha }}"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -27,12 +64,18 @@ jobs:
           cache: true
 
       - name: Run Unit Tests
+        env:
+          GITHUB_SHA: ${{ steps.target.outputs.sha }}
+          GITHUB_REF_NAME: ${{ steps.target.outputs.ref_name }}
         run: |
           echo "Running unit tests..."
           cd src
           go test ./...
 
       - name: Run Integration Tests
+        env:
+          GITHUB_SHA: ${{ steps.target.outputs.sha }}
+          GITHUB_REF_NAME: ${{ steps.target.outputs.ref_name }}
         run: |
           echo "Running integration tests..."
           cd tests/integration
@@ -43,6 +86,8 @@ jobs:
         if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_COMMIT_SHA: ${{ steps.target.outputs.sha }}
+          TARGET_REF_NAME: ${{ steps.target.outputs.ref_name }}
         shell: bash
         run: |
           echo "Publishing metrics to 'metrics' branch..."
@@ -72,7 +117,7 @@ jobs:
           # Stage both new metrics content and deletions of any other files
           git add -A
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "chore(metrics): update for ${GITHUB_SHA} (run ${GITHUB_RUN_ID})"
+            git commit -m "chore(metrics): update for ${TARGET_COMMIT_SHA} (ref ${TARGET_REF_NAME}, run ${GITHUB_RUN_ID})"
             git push --set-upstream origin metrics
             echo "Metrics pushed to 'metrics' branch."
           else
@@ -92,10 +137,6 @@ jobs:
       - name: Set build date
         id: build_date
         run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
-
-      - name: Set commit short hash
-        id: commit_hash
-        run: echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -105,16 +146,17 @@ jobs:
           args: release --snapshot --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: nightly-${{ steps.build_date.outputs.date }}-${{ steps.commit_hash.outputs.hash }}
+          VERSION: ${{ steps.target.outputs.run_mode }}-${{ steps.build_date.outputs.date }}-${{ steps.target.outputs.short_sha }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
 
       - name: Upload assets
         uses: actions/upload-artifact@v4
         with:
-          name: UDPlex
+          name: UDPlex-${{ steps.target.outputs.run_mode }}-${{ steps.target.outputs.short_sha }}
           path: dist/*
 
       - name: Push Docker images
+        if: github.event_name == 'push'
         run: |
           docker push ghcr.io/${{ github.repository_owner }}/udplex:dev
