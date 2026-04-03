@@ -46,10 +46,13 @@ func (p *Packet) Copy() Packet {
 		srcAddr: p.srcAddr,
 		srcTag:  p.srcTag,
 		count:   1, // New packet starts with a reference count of 1
+		proto:   p.proto,
 		router:  p.router,
 		connID:  p.connID,
 	}
-	copy(newPacket.buffer, p.buffer)
+	if p.length > 0 {
+		copy(newPacket.buffer[newPacket.offset:newPacket.offset+newPacket.length], p.buffer[p.offset:p.offset+p.length])
+	}
 	return newPacket
 }
 

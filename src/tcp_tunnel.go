@@ -236,33 +236,66 @@ func (c *TcpTunnelConn) writeLoop() {
 	}
 	defer logger.Infof("Write loop for %s exiting", remote)
 
-	releaseBatch := func(packets []*Packet) {
-		for _, packet := range packets {
-			if packet != nil {
-				packet.Release(1)
-			}
+	var lastWriteDeadlineTimeout time.Duration
+	var lastWriteDeadlineUpdate time.Time
+
+	refreshWriteDeadline := func(timeout time.Duration) error {
+		if timeout <= 0 {
+			return nil
 		}
+
+		now := time.Now()
+		refreshInterval := timeout / 4
+		if refreshInterval <= 0 {
+			refreshInterval = timeout
+		}
+
+		if timeout == lastWriteDeadlineTimeout && !lastWriteDeadlineUpdate.IsZero() && now.Sub(lastWriteDeadlineUpdate) < refreshInterval {
+			return nil
+		}
+
+		if err := c.conn.SetWriteDeadline(now.Add(timeout)); err != nil {
+			return err
+		}
+
+		lastWriteDeadlineTimeout = timeout
+		lastWriteDeadlineUpdate = now
+		return nil
 	}
 
-	sendPacketBatch := func(packets []*Packet) bool {
-		if len(packets) == 0 {
+	batch := make([]*Packet, 0, tcpTunnelWriteBatchSize)
+	buffers := make(net.Buffers, 0, tcpTunnelWriteBatchSize)
+
+	releaseBatch := func() {
+		for i := range batch {
+			if batch[i] != nil {
+				batch[i].Release(1)
+				batch[i] = nil
+			}
+		}
+		batch = batch[:0]
+		buffers = buffers[:0]
+	}
+
+	sendPacketBatch := func() bool {
+		if len(batch) == 0 {
 			return true
 		}
 		if c.conn == nil {
-			releaseBatch(packets)
+			releaseBatch()
 			return true
 		}
 
-		if (*c.t).GetSendTimeout() > 0 {
-			if err := c.conn.SetWriteDeadline(time.Now().Add((*c.t).GetSendTimeout())); err != nil {
+		if sendTimeout := (*c.t).GetSendTimeout(); sendTimeout > 0 {
+			if err := refreshWriteDeadline(sendTimeout); err != nil {
 				logger.Infof("Failed to set write deadline: %v", err)
-				releaseBatch(packets)
+				releaseBatch()
 				return false
 			}
 		}
 
-		buffers := make(net.Buffers, 0, len(packets))
-		for _, packet := range packets {
+		buffers = buffers[:0]
+		for _, packet := range batch {
 			if packet == nil {
 				continue
 			}
@@ -273,18 +306,18 @@ func (c *TcpTunnelConn) writeLoop() {
 			_, err := buffers.WriteTo(c.conn)
 			if err != nil {
 				logger.Infof("Write error: %v", err)
-				releaseBatch(packets)
+				releaseBatch()
 				(*c.t).Disconnect(c)
 				return false
 			}
 		}
 
-		releaseBatch(packets)
+		releaseBatch()
 		return true
 	}
 
-	drainBatch := func(first *Packet, preferPriority bool) []*Packet {
-		batch := make([]*Packet, 0, tcpTunnelWriteBatchSize)
+	drainBatch := func(first *Packet, preferPriority bool) bool {
+		batch = batch[:0]
 		if first != nil {
 			batch = append(batch, first)
 		}
@@ -311,7 +344,7 @@ func (c *TcpTunnelConn) writeLoop() {
 			drain(c.writePrio)
 		}
 
-		return batch
+		return sendPacketBatch()
 	}
 
 	for {
@@ -327,7 +360,7 @@ func (c *TcpTunnelConn) writeLoop() {
 				logger.Infof("Write queue for %s closed", remote)
 				return
 			}
-			if !sendPacketBatch(drainBatch(packet, true)) {
+			if !drainBatch(packet, true) {
 				return
 			}
 		case packet, ok := <-c.writeQueue:
@@ -335,7 +368,7 @@ func (c *TcpTunnelConn) writeLoop() {
 				logger.Infof("Write queue for %s closed", remote)
 				return
 			}
-			if !sendPacketBatch(drainBatch(packet, false)) {
+			if !drainBatch(packet, false) {
 				return
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,6 +48,8 @@ type LoadBalancerComponent struct {
 	ruleTargets     [][]string                     // Corresponding targets for each rule (array of arrays)
 	expressionCache map[string]*CompiledExpression // Cache for compiled expressions
 	enableCache     bool
+	evalEnvPool     sync.Pool
+	vmPool          sync.Pool
 }
 
 // NewLoadBalancerComponent creates a new load balancer component
@@ -62,6 +65,12 @@ func NewLoadBalancerComponent(cfg LoadBalancerComponentConfig, router *Router) (
 		packetSeq:       0,
 		expressionCache: make(map[string]*CompiledExpression),
 		enableCache:     cfg.EnableCache,
+	}
+	lb.evalEnvPool.New = func() any {
+		return make(map[string]any, 8)
+	}
+	lb.vmPool.New = func() any {
+		return &vm.VM{}
 	}
 
 	return lb, nil
@@ -404,8 +413,9 @@ func (lb *LoadBalancerComponent) evaluateCompiledRules(seq, bps, pps, size uint6
 
 // evaluateExpressionDirect performs direct expression evaluation without caching
 func (lb *LoadBalancerComponent) evaluateExpressionDirect(compiled *CompiledExpression, seq, bps, pps, size uint64) bool {
-	// Create environment with variables for expr evaluation
-	env := map[string]any{}
+	env := lb.evalEnvPool.Get().(map[string]any)
+	clear(env)
+	defer lb.evalEnvPool.Put(env)
 
 	// Add variables to environment without $ prefix
 	for _, varKey := range compiled.varKeys {
@@ -433,7 +443,9 @@ func (lb *LoadBalancerComponent) evaluateExpressionDirect(compiled *CompiledExpr
 	}
 
 	// Evaluate the expression
-	result, err := expr.Run(compiled.program, env)
+	runner := lb.vmPool.Get().(*vm.VM)
+	result, err := runner.Run(compiled.program, env)
+	lb.vmPool.Put(runner)
 	if err != nil {
 		logger.Errorf("%s: Error evaluating compiled expression: %v", lb.tag, err)
 		return false

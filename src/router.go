@@ -116,17 +116,32 @@ func (r *Router) processRouteTaskConcurrent(task routeTask) {
 	packet := task.packet
 	defer packet.Release(1)
 
+	lastTargetIndex := -1
 	for i, tag := range task.destTags {
 		if tag == packet.srcTag {
 			continue
 		}
-		c, exists := r.GetComponent(tag)
-		if !exists {
+		if _, exists := r.components[tag]; !exists {
 			logger.Warnf("Warning: trying to route to non-existing component: %s", tag)
 			continue
 		}
+		lastTargetIndex = i
+	}
 
-		if i < len(task.destTags)-1 {
+	if lastTargetIndex == -1 {
+		return
+	}
+
+	for i, tag := range task.destTags {
+		if tag == packet.srcTag {
+			continue
+		}
+		c, exists := r.components[tag]
+		if !exists {
+			continue
+		}
+
+		if i != lastTargetIndex {
 			// Create a copy for all but the last destination
 			newPacket := packet.Copy()
 			if err := c.HandlePacket(&newPacket); err != nil {
