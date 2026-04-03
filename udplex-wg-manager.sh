@@ -93,6 +93,20 @@ T() {
     en:select_role) msg="Select role: [1] Entry (client)  [2] Exit (server)" ;;
     zh:enable_tcp) msg="是否启用 UDP over TCP（通过 TCP 隧道转发 UDP）？(y/N): " ;;
     en:enable_tcp) msg="Enable UDP over TCP (Tunneling UDP over TCP)? (y/N): " ;;
+    zh:prompt_line1_proto) msg="线路 1 外层协议 [1] UDP  [2] TCP（默认 1，可自由组合）: " ;;
+    en:prompt_line1_proto) msg="Outer protocol for line #1 [1] UDP  [2] TCP (default 1, mix freely): " ;;
+    zh:prompt_line2_proto) msg="线路 2 外层协议 [1] UDP  [2] TCP（默认 1，可自由组合）: " ;;
+    en:prompt_line2_proto) msg="Outer protocol for line #2 [1] UDP  [2] TCP (default 1, mix freely): " ;;
+    zh:invalid_proto) msg="无效协议选择，请输入 1/2、udp 或 tcp。" ;;
+    en:invalid_proto) msg="Invalid protocol choice. Enter 1/2, udp, or tcp." ;;
+    zh:prompt_high_traffic_mode) msg="大流量阶段策略 [1] 两条线路均衡分流  [2] 全部走单条线路（默认 1）: " ;;
+    en:prompt_high_traffic_mode) msg="High-traffic strategy [1] Balance across both lines  [2] Use a single line only (default 1): " ;;
+    zh:invalid_high_traffic_mode) msg="无效策略选择，请输入 1/2、balance 或 single。" ;;
+    en:invalid_high_traffic_mode) msg="Invalid strategy choice. Enter 1/2, balance, or single." ;;
+    zh:prompt_preferred_line) msg="大流量固定走哪条线路 [1] 线路 1  [2] 线路 2（默认 1）: " ;;
+    en:prompt_preferred_line) msg="Which line should carry high traffic [1] Line #1  [2] Line #2 (default 1): " ;;
+    zh:invalid_preferred_line) msg="无效线路选择，请输入 1 或 2。" ;;
+    en:invalid_preferred_line) msg="Invalid line choice. Enter 1 or 2." ;;
     zh:invalid_choice) msg="无效选择。" ;;
     en:invalid_choice) msg="Invalid choice." ;;
     zh:secret_found) msg="检测到已有共享密钥，将继续复用。" ;;
@@ -199,8 +213,8 @@ T() {
     en:lang_set) msg="Language switched to: %s" ;;
     zh:threshold_updated) msg="带宽阈值已更新为 %s bps" ;;
     en:threshold_updated) msg="Bandwidth threshold updated to %s bps" ;;
-    zh:threshold_patch_fail) msg="当前配置不包含新的 seq 分流规则，请重新执行 install 重建配置。" ;;
-    en:threshold_patch_fail) msg="Config does not contain new rule structure (seq split). Please re-run install to rebuild config." ;;
+    zh:threshold_patch_fail) msg="当前配置不包含新的阈值分流规则，请重新执行 install 重建配置。" ;;
+    en:threshold_patch_fail) msg="Config does not contain the new threshold rule structure. Please re-run install to rebuild config." ;;
     zh:reload_done) msg="配置已重载（容器已重新创建或重启）。" ;;
     en:reload_done) msg="Configuration reloaded (container recreated/restarted)." ;;
     zh:unknown_cmd) msg="未知命令：%s" ;;
@@ -404,27 +418,191 @@ YAML
   info compose_written
 }
 
+select_line_protocol() {
+  local prompt_key="${1}"
+  local answer=""
+  while true; do
+    read -rp "$(T "${prompt_key}")" answer || true
+    answer="${answer,,}"
+    answer="${answer:-1}"
+    case "${answer}" in
+      1|u|udp)
+        printf '%s' "udp"
+        return 0
+        ;;
+      2|t|tcp)
+        printf '%s' "tcp"
+        return 0
+        ;;
+      *)
+        warn invalid_proto
+        ;;
+    esac
+  done
+}
+
+select_high_traffic_mode() {
+  local answer=""
+  while true; do
+    read -rp "$(T prompt_high_traffic_mode)" answer || true
+    answer="${answer,,}"
+    answer="${answer:-1}"
+    case "${answer}" in
+      1|b|balance)
+        printf '%s' "balance"
+        return 0
+        ;;
+      2|s|single)
+        printf '%s' "single"
+        return 0
+        ;;
+      *)
+        warn invalid_high_traffic_mode
+        ;;
+    esac
+  done
+}
+
+select_preferred_line() {
+  local answer=""
+  while true; do
+    read -rp "$(T prompt_preferred_line)" answer || true
+    answer="${answer:-1}"
+    case "${answer}" in
+      1|2)
+        printf '%s' "${answer}"
+        return 0
+        ;;
+      *)
+        warn invalid_preferred_line
+        ;;
+    esac
+  done
+}
+
+render_load_balancer_rules() {
+  local THRESH="${1}"
+  local TAG1="${2}"
+  local TAG2="${3}"
+  local HIGH_TRAFFIC_MODE="${4:-balance}"
+  local PREFERRED_LINE="${5:-1}"
+
+  cat <<YAML
+      - rule: "bps <= ${THRESH} || !available_${TAG1} || !available_${TAG2}"
+        targets: [${TAG1}, ${TAG2}]
+YAML
+
+  if [[ "${HIGH_TRAFFIC_MODE}" == "single" ]]; then
+    local PRIMARY_TAG="${TAG1}"
+    if [[ "${PREFERRED_LINE}" == "2" ]]; then
+      PRIMARY_TAG="${TAG2}"
+    fi
+    cat <<YAML
+      - rule: "(bps > ${THRESH}) && available_${PRIMARY_TAG}"
+        targets: [${PRIMARY_TAG}]
+YAML
+  else
+    cat <<YAML
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 0) && available_${TAG1} && available_${TAG2}"
+        targets: [${TAG1}]
+      - rule: "(bps > ${THRESH}) && (seq % 2 == 1) && available_${TAG2} && available_${TAG1}"
+        targets: [${TAG2}]
+YAML
+  fi
+}
+
+render_client_outer_service() {
+  local TAG="${1}"
+  local TARGET_ADDR="${2}"
+  local PROTO="${3}"
+  local SECRET="${4}"
+
+  if [[ "${PROTO}" == "tcp" ]]; then
+    cat <<YAML
+  - type: tcp_tunnel_forward
+    tag: ${TAG}
+    forwarders: [${TARGET_ADDR}:4]
+    reconnect_interval: 5
+    connection_check_time: 30
+    no_delay: true
+    detour: [wg_component]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+YAML
+  else
+    cat <<YAML
+  - type: forward
+    tag: ${TAG}
+    forwarders: [${TARGET_ADDR}]
+    reconnect_interval: 5
+    connection_check_time: 30
+    detour: [wg_component]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+YAML
+  fi
+}
+
+render_server_outer_service() {
+  local TAG="${1}"
+  local LISTEN_PORT="${2}"
+  local PROTO="${3}"
+  local SECRET="${4}"
+
+  if [[ "${PROTO}" == "tcp" ]]; then
+    cat <<YAML
+  - type: tcp_tunnel_listen
+    tag: ${TAG}
+    listen_addr: 0.0.0.0:${LISTEN_PORT}
+    timeout: 120
+    replace_old_mapping: false
+    broadcast_mode: false
+    no_delay: true
+    detour: [wg_component]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+YAML
+  else
+    cat <<YAML
+  - type: listen
+    tag: ${TAG}
+    listen_addr: 0.0.0.0:${LISTEN_PORT}
+    timeout: 120
+    replace_old_mapping: false
+    broadcast_mode: false
+    detour: [wg_component]
+    auth:
+      secret: ${SECRET}
+      enabled: true
+      enable_encryption: false
+      heartbeat_interval: 30
+YAML
+  fi
+}
+
 write_client_config() {
   local LINE1_ADDR="${1}"
   local LINE2_ADDR="${2}"
   local SECRET="${3}"
   local THRESH="${4}"
-  local PROTO="${5:-udp}"
-  local LOCAL_ADDR="${6}"
-  local PEER_ADDR="${7}"
-  local PEER_PUBKEY="${8}"
+  local LINE1_PROTO="${5:-udp}"
+  local LINE2_PROTO="${6:-udp}"
+  local HIGH_TRAFFIC_MODE="${7:-balance}"
+  local PREFERRED_LINE="${8:-1}"
+  local LOCAL_ADDR="${9}"
+  local PEER_ADDR="${10}"
+  local PEER_PUBKEY="${11}"
   local PRIV
   PRIV=$(cat "${WG_PRIV}")
-
-  local TYPE="forward"
-  local NODELAY_CFG=""
-  local SUFFIX=""
-  
-  if [[ "$PROTO" == "tcp" ]]; then
-    TYPE="tcp_tunnel_forward"
-    NODELAY_CFG="    no_delay: true"
-    SUFFIX=":4"
-  fi
 
   cat > "${CONFIG_FILE}" <<YAML
 buffer_size: 1500
@@ -449,40 +627,13 @@ services:
         endpoint: ${WG_ENDPOINT_LABEL}
         allowed_ips: [${PEER_ADDR}/32]
         persistent_keepalive: 25
-  - type: ${TYPE}
-    tag: redundant_forward1
-    forwarders: [${LINE1_ADDR}${SUFFIX}]
-    reconnect_interval: 5
-    connection_check_time: 30
-${NODELAY_CFG}
-    detour: [wg_component]
-    auth:
-      secret: ${SECRET}
-      enabled: true
-      enable_encryption: false
-      heartbeat_interval: 30
-  - type: ${TYPE}
-    tag: redundant_forward2
-    forwarders: [${LINE2_ADDR}${SUFFIX}]
-    reconnect_interval: 5
-    connection_check_time: 30
-${NODELAY_CFG}
-    detour: [wg_component]
-    auth:
-      secret: ${SECRET}
-      enabled: true
-      enable_encryption: false
-      heartbeat_interval: 30
+$(render_client_outer_service "redundant_forward1" "${LINE1_ADDR}" "${LINE1_PROTO}" "${SECRET}")
+$(render_client_outer_service "redundant_forward2" "${LINE2_ADDR}" "${LINE2_PROTO}" "${SECRET}")
   - type: load_balancer
     tag: load_balancer
     window_size: 3
     detour:
-      - rule: "bps <= ${THRESH} || !available_redundant_forward1 || !available_redundant_forward2"
-        targets: [redundant_forward1, redundant_forward2]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 0) && available_redundant_forward1 && available_redundant_forward2"
-        targets: [redundant_forward1]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 1) && available_redundant_forward2 && available_redundant_forward1"
-        targets: [redundant_forward2]
+$(render_load_balancer_rules "${THRESH}" "redundant_forward1" "redundant_forward2" "${HIGH_TRAFFIC_MODE}" "${PREFERRED_LINE}")
 YAML
   info client_cfg_written
 }
@@ -492,20 +643,15 @@ write_server_config() {
   local LISTEN2_PORT="${2}"
   local SECRET="${3}"
   local THRESH="${4}"
-  local PROTO="${5:-udp}"
-  local LOCAL_ADDR="${6}"
-  local PEER_ADDR="${7}"
-  local PEER_PUBKEY="${8}"
+  local LINE1_PROTO="${5:-udp}"
+  local LINE2_PROTO="${6:-udp}"
+  local HIGH_TRAFFIC_MODE="${7:-balance}"
+  local PREFERRED_LINE="${8:-1}"
+  local LOCAL_ADDR="${9}"
+  local PEER_ADDR="${10}"
+  local PEER_PUBKEY="${11}"
   local PRIV
   PRIV=$(cat "${WG_PRIV}")
-
-  local TYPE="listen"
-  local NODELAY_CFG=""
-
-  if [[ "$PROTO" == "tcp" ]]; then
-    TYPE="tcp_tunnel_listen"
-    NODELAY_CFG="    no_delay: true"
-  fi
 
   cat > "${CONFIG_FILE}" <<YAML
 buffer_size: 1500
@@ -528,42 +674,13 @@ services:
     peers:
       - public_key: ${PEER_PUBKEY}
         allowed_ips: [${PEER_ADDR}/32]
-  - type: ${TYPE}
-    tag: server_listen1
-    listen_addr: 0.0.0.0:${LISTEN1_PORT}
-    timeout: 120
-    replace_old_mapping: false
-    broadcast_mode: false
-${NODELAY_CFG}
-    detour: [wg_component]
-    auth:
-      secret: ${SECRET}
-      enabled: true
-      enable_encryption: false
-      heartbeat_interval: 30
-  - type: ${TYPE}
-    tag: server_listen2
-    listen_addr: 0.0.0.0:${LISTEN2_PORT}
-    timeout: 120
-    replace_old_mapping: false
-    broadcast_mode: false
-${NODELAY_CFG}
-    detour: [wg_component]
-    auth:
-      secret: ${SECRET}
-      enabled: true
-      enable_encryption: false
-      heartbeat_interval: 30
+$(render_server_outer_service "server_listen1" "${LISTEN1_PORT}" "${LINE1_PROTO}" "${SECRET}")
+$(render_server_outer_service "server_listen2" "${LISTEN2_PORT}" "${LINE2_PROTO}" "${SECRET}")
   - type: load_balancer
     tag: load_balancer
     window_size: 3
     detour:
-      - rule: "bps <= ${THRESH} || !available_server_listen1 || !available_server_listen2"
-        targets: [server_listen1, server_listen2]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 0) && available_server_listen1 && available_server_listen2"
-        targets: [server_listen1]
-      - rule: "(bps > ${THRESH}) && (seq % 2 == 1) && available_server_listen2 && available_server_listen1"
-        targets: [server_listen2]
+$(render_load_balancer_rules "${THRESH}" "server_listen1" "server_listen2" "${HIGH_TRAFFIC_MODE}" "${PREFERRED_LINE}")
 YAML
   info server_cfg_written
 }
@@ -640,13 +757,17 @@ install_flow() {
     fi
   done
 
-  # Protocol selection (UDP over TCP)
-  local PROTO="udp"
+  # Outer protocol selection per line
+  local LINE1_PROTO="udp"
+  local LINE2_PROTO="udp"
+  local HIGH_TRAFFIC_MODE="balance"
+  local PREFERRED_LINE="1"
   echo
-  printf "$(T enable_tcp)"
-  read -r enable_tcp_ans
-  if [[ "${enable_tcp_ans:-}" =~ ^[Yy]$ ]]; then
-    PROTO="tcp"
+  LINE1_PROTO="$(select_line_protocol prompt_line1_proto)"
+  LINE2_PROTO="$(select_line_protocol prompt_line2_proto)"
+  HIGH_TRAFFIC_MODE="$(select_high_traffic_mode)"
+  if [[ "${HIGH_TRAFFIC_MODE}" == "single" ]]; then
+    PREFERRED_LINE="$(select_preferred_line)"
   fi
 
   # docker-compose
@@ -666,7 +787,7 @@ install_flow() {
     LOCAL_ADDR="${LOCAL_ADDR:-10.0.0.1/24}"
     read -rp "$(T prompt_client_peer)" PEER_ADDR || true
     PEER_ADDR="${PEER_ADDR:-10.0.0.2}"
-    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
+    write_client_config "$LINE1_ADDR" "$LINE2_ADDR" "$SECRET" "$THRESH" "$LINE1_PROTO" "$LINE2_PROTO" "$HIGH_TRAFFIC_MODE" "$PREFERRED_LINE" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
     info wg_client_written
   else
     local LISTEN1_PORT LISTEN2_PORT
@@ -680,7 +801,7 @@ install_flow() {
     LOCAL_ADDR="${LOCAL_ADDR:-10.0.0.2/24}"
     read -rp "$(T prompt_server_peer)" PEER_ADDR || true
     PEER_ADDR="${PEER_ADDR:-10.0.0.1}"
-    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$SECRET" "$THRESH" "$PROTO" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
+    write_server_config "$LISTEN1_PORT" "$LISTEN2_PORT" "$SECRET" "$THRESH" "$LINE1_PROTO" "$LINE2_PROTO" "$HIGH_TRAFFIC_MODE" "$PREFERRED_LINE" "$LOCAL_ADDR" "$PEER_ADDR" "$PEER_PUBKEY"
     info wg_server_written
   fi
 
@@ -860,12 +981,10 @@ backup_wg_keys() {
 # --------------------------------
 patch_threshold_in_config() {
   local NEW="${1}"
-  if ! grep -q 'seq % 2' "${CONFIG_FILE}" 2>/dev/null; then
-    # not new structure
+  if ! grep -q 'rule: "bps <=' "${CONFIG_FILE}" 2>/dev/null || ! grep -q 'rule: "(bps > ' "${CONFIG_FILE}" 2>/dev/null; then
     err threshold_patch_fail
     exit 1
   fi
-  # Replace numbers in rules
   sed -i -E "s/(rule: \"bps <= )([0-9]+)/\1${NEW}/" "${CONFIG_FILE}"
   sed -i -E "s/(rule: \"\(bps > )([0-9]+)/\1${NEW}/" "${CONFIG_FILE}"
 }
@@ -924,7 +1043,7 @@ Commands:
   show-keys       Print local WireGuard public key
   lang <zh|en>    Switch script language
   set-threshold <bps>
-                  Update bandwidth threshold in config rules (seq split). Then run 'reload'.
+                  Update bandwidth threshold in config rules. Then run 'reload'.
 
 Examples:
   sudo bash $0 install

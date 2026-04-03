@@ -1,140 +1,224 @@
-# UDPlex + WireGuard One-click Deployment Guide
+# UDPlex + Embedded WireGuard Deployment Guide
 
-## Why UDPlex accelerates games:
+## What This Mode Does
 
-1. Multi-path redundant transmission: send over multiple paths simultaneously; if one path drops or delays, others still carry packets
-2. Lower packet loss: redundancy ensures delivery as long as one path succeeds
-3. Route/path optimization: avoid congested public routes via better paths
-4. Real-time failover: automatically switch when a path has issues
+UDPlex can embed `wireguard-go` directly inside the UDPlex process. In this mode:
+
+- UDPlex still provides multi-line forwarding and load balancing
+- WireGuard traffic is carried through UDPlex lines instead of relying on system `wg-quick`
+- A WireGuard interface is still created automatically for the host
+- Return traffic follows the incoming outer line correctly through `reuse_incoming_detour: true`
+
+This is intended for scenarios such as:
+
+- game acceleration
+- multi-line UDP redundancy
+- low-loss forwarding across unstable public networks
 
 ## Topology
 
+```text
+Application
+  -> WireGuard interface on Entry
+  -> Embedded WireGuard in UDPlex
+  -> UDPlex outer line #1 / outer line #2
+  -> UDPlex on Exit
+  -> Embedded WireGuard on Exit
+  -> WireGuard interface on Exit
+  -> Application / target network
 ```
-Game client -> WireGuard(Client) -> UDPlex Client -> Line 1 -> UDPlex Server -> WireGuard(Server) -> Game server
-                                              -> Line 2 ->
-```
+
+At low bandwidth, the generated config sends the same packet on both outer lines.
+At higher bandwidth, it can either split packets by sequence across both lines or keep all traffic on a single preferred line.
+
+Each outer line can be configured independently as UDP or TCP.
+For example, line #1 can use UDP while line #2 uses TCP.
 
 ## Requirements
 
-- 1 Entry host (close to the player)
-- 1 Exit host (close to the game server)
-- At least 2 working network paths from entry to exit (ideally different ISPs/paths)
-- Docker environment (the script will install Docker and compose if missing)
-- sudo privileges and public internet access on both
+- 1 Entry host close to the player/client
+- 1 Exit host close to the target/game server
+- At least 2 working outer network paths from Entry to Exit
+- Linux
+- `sudo`
+- public internet access
 
-## Quick install and initialization
+The install script will install:
 
-Run on both Entry and Exit machines. The script will:
-- Install Docker and docker compose if missing
-- Install WireGuard if missing
-- Generate WireGuard keys and show your local public key
-- Interactively write configs to /opt/udplex and /etc/wireguard
+- Docker
+- Docker Compose plugin if needed
+- `wireguard-tools` if needed
 
-1) Download the script
+Note:
+`wireguard-tools` is only used for key generation and inspection convenience.
+The runtime data path uses UDPlex with embedded WireGuard, not system `wg-quick`.
+
+## Quick Start
+
+Run on both Entry and Exit:
 
 ```bash
 curl -fsSL -o udplex-wg-manager.sh https://raw.githubusercontent.com/tao08141/UDPlex/master/udplex-wg-manager.sh
 chmod +x udplex-wg-manager.sh
-```
-
-2) Start installation (open one terminal on each side and proceed step-by-step)
-
-```bash
 sudo bash ./udplex-wg-manager.sh install
 ```
 
-Install flow highlights:
-- The script first prints your local WireGuard public key. Run the installer on both sides and exchange public keys.
-- Choose language (English/中文)
-- Set bandwidth threshold in bps (default 50,000,000 = 50 Mbps, used by smart split)
-- Select role: 1=Entry (client), 2=Exit (server)
-- Paste the peer WireGuard public key
-- Fill ports when asked:
-  - Entry: local UDPlex listen port (default 7000), forward line #1 and #2 targets (ExitIP:9000 / ExitIP:9001)
-  - Exit: listen ports for line #1/#2 (defaults 9000/9001), WireGuard server port (default 51820)
-- Default WireGuard addresses: Entry 10.0.0.1/24 ↔ Exit 10.0.0.2/24 (customize if needed)
+During install, the script will:
 
-Generated files:
-- /opt/udplex/docker-compose.yml
-- /opt/udplex/config.yaml (smart traffic rules included)
-- /etc/wireguard/wg0.conf
+- show the local WireGuard public key
+- ask for language
+- ask for the UDPlex shared secret, or generate one automatically
+- ask for role: Entry or Exit
+- ask for the peer public key
+- ask the outer protocol for line #1 and line #2 independently
+- ask how high-bandwidth traffic should be handled
+- generate `/opt/udplex/config.yaml`
+- generate `/opt/udplex/docker-compose.yml`
 
-## Start and enable on boot
+## Files Written By The Script
 
-Run on both sides:
+- `/opt/udplex/config.yaml`
+- `/opt/udplex/docker-compose.yml`
+- `/opt/udplex/role`
+- `/opt/udplex/secret`
+- `/opt/udplex/threshold`
+- `/opt/udplex/lang`
+- `/opt/udplex/wireguard/wg_private.key`
+- `/opt/udplex/wireguard/wg_public.key`
+
+Legacy behavior:
+
+- older versions stored keys in `/etc/wireguard`
+- the current script migrates legacy keys automatically to `/opt/udplex/wireguard`
+
+No system `wg0.conf` is generated anymore.
+
+## Start
 
 ```bash
 sudo bash ./udplex-wg-manager.sh start
 ```
 
-This will start the UDPlex container, bring up WireGuard, and enable wg0 on boot.
+This starts the UDPlex container and brings up the embedded WireGuard interface.
 
-## Useful operations
+The generated interface name is:
 
-```bash
-sudo bash ./udplex-wg-manager.sh status     # Show UDPlex/WireGuard/ports
-sudo bash ./udplex-wg-manager.sh logs       # Follow UDPlex logs
-sudo bash ./udplex-wg-manager.sh stop       # Stop UDPlex and WireGuard
-sudo bash ./udplex-wg-manager.sh pause      # Down wg0 (container stays up)
-sudo bash ./udplex-wg-manager.sh resume     # Up wg0
-sudo bash ./udplex-wg-manager.sh update     # Pull latest image and restart container
-sudo bash ./udplex-wg-manager.sh reload     # Reload config (compose up -d)
-sudo bash ./udplex-wg-manager.sh show-keys  # Show local WireGuard public key
-sudo bash ./udplex-wg-manager.sh lang en    # Switch script language (zh/en)
+```text
+wg_udplex
 ```
 
-## Smart split and threshold
+## Common Commands
 
-The generated `config.yaml` includes a bandwidth-based + sequence-based split:
-- When bps ≤ threshold (default 50 Mbps): send on both lines (redundant), reducing loss
-- When bps > threshold: split by packet sequence parity to avoid waste
+```bash
+sudo bash ./udplex-wg-manager.sh status
+sudo bash ./udplex-wg-manager.sh logs
+sudo bash ./udplex-wg-manager.sh stop
+sudo bash ./udplex-wg-manager.sh pause
+sudo bash ./udplex-wg-manager.sh resume
+sudo bash ./udplex-wg-manager.sh update
+sudo bash ./udplex-wg-manager.sh reload
+sudo bash ./udplex-wg-manager.sh show-keys
+sudo bash ./udplex-wg-manager.sh lang en
+sudo bash ./udplex-wg-manager.sh set-threshold 80000000
+```
 
-Update threshold online:
+`pause` and `resume` operate on the embedded interface `wg_udplex`.
+
+## Threshold And Redundancy
+
+The generated config uses a load balancer with two behaviors:
+
+- when bandwidth is below the threshold:
+  send on both lines for redundancy
+- when bandwidth is above the threshold:
+  either split by packet sequence across the two lines, or stay on one preferred line
+
+Update threshold:
 
 ```bash
 sudo bash ./udplex-wg-manager.sh set-threshold 80000000
 sudo bash ./udplex-wg-manager.sh reload
 ```
 
-## Firewall and ports
+## Ports
 
-If you used defaults during install, open these UDP ports:
-- Entry: 7000/udp (UDPlex listens; WireGuard peer connects to 127.0.0.1:7000)
-- Exit: 9000/udp and 9001/udp (two relay lines), 51820/udp (WireGuard server)
+If you keep the defaults:
 
-## Validate connectivity
+- Exit line #1: `9000/udp`
+- Exit line #2: `9001/udp`
 
-After start on both sides:
+The manager now lets you choose the transport for each outer line independently:
+
+- line #1 can be UDP or TCP
+- line #2 can be UDP or TCP
+
+Examples:
+
+- `9000/udp` + `9001/udp`
+- `9000/udp` + `9001/tcp`
+- `9000/tcp` + `9001/udp`
+- `9000/tcp` + `9001/tcp`
+
+Important:
+
+- the manager no longer relies on a system WireGuard service port prompt for runtime startup
+- embedded WireGuard is configured inside `config.yaml`
+- outer forwarding still depends on the UDPlex line ports you configure
+
+## Verification
 
 ```bash
 sudo bash ./udplex-wg-manager.sh status
 sudo wg show
-# From Entry side (if using default addresses):
+ip addr show wg_udplex
+```
+
+If you use the default inner addresses:
+
+```bash
 ping 10.0.0.2
 ```
 
 ## Troubleshooting
 
-- Container logs:
-  ```bash
-  sudo bash ./udplex-wg-manager.sh logs
-  ```
-- WireGuard state:
-  ```bash
-  sudo wg show
-  ```
-- Ports listening / firewall:
-  ```bash
-  ss -lunpt | grep -E ":(7000|9000|9001|51820)\b" || netstat -tulpn | grep -E ":(7000|9000|9001|51820)\b"
-  ```
-- Docker networking hiccups:
-  ```bash
-  sudo systemctl restart docker
-  ```
+Container logs:
 
-## Security notes
+```bash
+sudo bash ./udplex-wg-manager.sh logs
+```
 
-- The installer auto-generates a strong UDPlex auth secret (must match on both ends). See /opt/udplex/secret if you need to copy it across.
-- Run `update` periodically to get the latest image.
-- Only open required UDP ports; restrict source IPs where possible.
-- Review logs regularly.
+WireGuard state:
+
+```bash
+sudo wg show
+ip addr show wg_udplex
+```
+
+Outer line ports:
+
+```bash
+ss -lunpt | grep -E ":(9000|9001)\b" || true
+ss -lntp | grep -E ":(9000|9001)\b" || true
+```
+
+If replies do not come back correctly on the outer lines, check:
+
+- `reuse_incoming_detour: true`
+- `broadcast_mode: false` on outer `listen`
+- whether both outer lines are actually authenticated and available
+- whether the correct ports are open in the firewall
+
+## Uninstall
+
+```bash
+sudo bash ./udplex-wg-manager.sh uninstall
+```
+
+If you choose not to delete keys, the script backs them up before removing `/opt/udplex`.
+
+## Security Notes
+
+- the UDPlex auth secret must match on both sides
+- only open the required outer ports
+- rotate keys and secrets when needed
+- update the container image periodically

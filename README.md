@@ -83,6 +83,16 @@ docker-compose down
 
 - UDPlex + WireGuard: One-click deployment guide (English): [docs/udplex_wireguard_en.md](docs/udplex_wireguard_en.md)
 
+The current `udplex-wg-manager.sh` workflow uses embedded `wireguard-go` inside UDPlex instead of system `wg-quick`.
+It supports:
+
+- automatic creation of the WireGuard interface inside the UDPlex runtime
+- per-line outer transport selection, including `UDP+UDP`, `UDP+TCP`, `TCP+UDP`, and `TCP+TCP`
+- low-bandwidth dual-line redundancy
+- high-bandwidth strategy selection:
+  `balance` across both lines by packet sequence, or keep all high-bandwidth traffic on one preferred line
+- WireGuard traffic forwarding through `forward` or `tcp_tunnel_*` components instead of relying on a kernel WireGuard port
+
 # UDPlex Parameter Details
 
 ## Global Configuration
@@ -131,7 +141,7 @@ UDPlex provides RESTful API interfaces to query component status and connection 
 - **Protocol-based Classification**: Uses protocol detectors to distribute different protocol traffic to different processing paths, such as prioritizing important heartbeat packets.
 - **UDP over TCP Tunnel**: Transmits UDP traffic in network environments that do not support UDP.
 - **Network Debugging**: Forwards UDP traffic to a specified server for debugging and analysis without affecting the original network structure.
-- **Load Balancing**: Intelligently distributes packets based on traffic volume and load balancing strategies, supporting various algorithms. For example, when traffic is low, packets are forwarded to both servers to avoid packet loss; when traffic exceeds a certain threshold, packets are distributed in a round-robin manner to ensure bandwidth.
+- **Load Balancing**: Intelligently distributes packets based on traffic volume and load balancing strategies. For example, when traffic is low, packets can be forwarded to both servers for redundancy; when traffic exceeds a threshold, they can either be split across both lines or pinned to a single preferred line.
 
 ## Configuration Examples
 
@@ -145,6 +155,8 @@ The examples directory contains configuration examples for various use cases:
 - [**wg_bidirectional_server.yaml**](examples/wg_bidirectional_server.yaml) - WireGuard UDP upstream/downstream separation server configuration
 - [**wg_component_forward_client.yaml**](examples/wg_component_forward_client.yaml) - Embedded WireGuard client over UDP forward
 - [**wg_component_forward_server.yaml**](examples/wg_component_forward_server.yaml) - Embedded WireGuard server over UDP forward
+- [**wg_component_load_balancer_client.yaml**](examples/wg_component_load_balancer_client.yaml) - Embedded WireGuard client with dual-line load balancing
+- [**wg_component_load_balancer_server.yaml**](examples/wg_component_load_balancer_server.yaml) - Embedded WireGuard server with dual-line load balancing
 - [**wg_component_tcp_tunnel_client.yaml**](examples/wg_component_tcp_tunnel_client.yaml) - Embedded WireGuard client over TCP tunnel
 - [**wg_component_tcp_tunnel_server.yaml**](examples/wg_component_tcp_tunnel_server.yaml) - Embedded WireGuard server over TCP tunnel
 - [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic

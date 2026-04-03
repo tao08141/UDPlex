@@ -1,144 +1,226 @@
-# UDPlex + WireGuard 一键部署教程
+# UDPlex + 内嵌 WireGuard 部署指南
 
-## 为什么 UDPlex 能加速游戏？
+## 这套模式是什么
 
-UDPlex 通过以下机制实现游戏加速：
-1. **多路径冗余传输**：同时使用多条网络路径传输数据包，当某条路径出现丢包或延迟时，其他路径仍可正常工作
-2. **降低丢包率**：通过冗余传输，即使某条线路丢包，只要有一条线路成功传输，数据包就能到达
-3. **路径优化**：选择更优质的网络路径，避开拥堵的公网路由
-4. **实时故障切换**：当某条线路出现问题时，自动使用其他正常线路
+UDPlex 现在可以直接内嵌 `wireguard-go`。在这种模式下：
 
-## 架构说明
+- UDPlex 仍然负责多线路转发与负载均衡
+- WireGuard 数据通过 UDPlex 的外层线路传输
+- 系统上仍会自动创建一个 WireGuard 网卡
+- 但运行时不再依赖系统 `wg-quick` 或 `/etc/wireguard/*.conf`
 
+这适合：
+
+- 游戏加速
+- 双线或多线 UDP 冗余
+- 公网抖动较大时的低丢包转发
+
+## 拓扑
+
+```text
+应用
+  -> 入口机 WireGuard 网卡
+  -> UDPlex 内嵌 WireGuard
+  -> UDPlex 外层线路 1 / 外层线路 2
+  -> 出口机 UDPlex
+  -> UDPlex 内嵌 WireGuard
+  -> 出口机 WireGuard 网卡
+  -> 目标应用 / 目标网络
 ```
-游戏客户端 -> WireGuard(Client) -> UDPlex Client -> 转发线路1 -> UDPlex Server -> WireGuard(Server) -> 游戏服务器
-                                                  -> 转发线路2 ->
-```
 
-## 准备条件
+默认生成规则中：
 
-- 入口机器 1 台（靠近玩家）
-- 出口机器 1 台（靠近游戏服）
-- 至少 2 条可达出口的线路（建议不同运营商/网络）
-- Docker 环境
+- 低带宽时，两条外层线同时发同一份数据
+- 高带宽时，可以选择按包序号分流到两条线路，或固定走一条首选线路
 
-## 一键安装与初始化
+两条外层线路的协议现在可以独立选择。
+例如线路 1 走 UDP、线路 2 走 TCP，也可以反过来。
 
-在「入口」与「出口」两台机器上各执行以下步骤。脚本会自动：
-- 安装 Docker 与 docker compose（如缺失）
-- 安装 WireGuard（如缺失）
-- 生成 WireGuard 密钥并展示本机公钥
-- 交互式配置 UDPlex 与 WireGuard（写入 /opt/udplex 与 /etc/wireguard）
+## 运行要求
 
-1) 下载脚本
+- 1 台入口机，靠近玩家或客户端
+- 1 台出口机，靠近目标或游戏服务器
+- 入口到出口至少 2 条可用外层链路
+- Linux
+- `sudo`
+- 公网访问能力
+
+安装脚本会自动处理：
+
+- Docker
+- Docker Compose 插件
+- `wireguard-tools`
+
+注意：
+现在安装 `wireguard-tools` 主要是为了生成和查看密钥。
+实际数据面走的是 UDPlex 内嵌 WireGuard，不是系统 `wg-quick`。
+
+## 快速开始
+
+在入口和出口都执行：
 
 ```bash
 curl -fsSL -o udplex-wg-manager.sh https://raw.githubusercontent.com/tao08141/UDPlex/master/udplex-wg-manager.sh
 chmod +x udplex-wg-manager.sh
-```
-
-2) 同步进行安装（两端各开一个终端）
-
-```bash
 sudo bash ./udplex-wg-manager.sh install
 ```
 
-安装流程要点：
-- 一开始脚本会显示本机 WireGuard 公钥；请在两端都执行到这一步，互相复制对端公钥备用
-- 选择语言（中文/英文）
-- 设置带宽阈值 bps（默认 50,000,000，即 50Mbps，用于“智能分流”）
-- 选择角色：1=入口(client)，2=出口(server)
-- 粘贴对端的 WireGuard 公钥
-- 根据提示填写端口：
-    - 入口：本地 UDPlex 监听端口（默认 7000），转发线路1/2的出口目标（形如 出口IP:9000 / 出口IP:9001）
-    - 出口：两条线路监听端口（默认 9000、9001），WireGuard 服务端口（默认 51820）
-- WireGuard 地址段默认：入口 10.0.0.1/24 ↔ 出口 10.0.0.2/24（可按需修改）
+安装过程中脚本会：
 
-完成后，关键文件：
-- /opt/udplex/docker-compose.yml
-- /opt/udplex/config.yaml（已内置智能分流规则）
-- /etc/wireguard/wg0.conf
+- 显示本机 WireGuard 公钥
+- 询问语言
+- 询问 UDPlex 共享密钥，或自动生成
+- 询问角色：入口 / 出口
+- 询问对端公钥
+- 分别询问线路 1 和线路 2 的外层协议
+- 询问大流量阶段的线路策略
+- 生成 `/opt/udplex/config.yaml`
+- 生成 `/opt/udplex/docker-compose.yml`
 
-## 启动与开机自启
+## 脚本现在会写入哪些文件
 
-在两端分别执行：
+- `/opt/udplex/config.yaml`
+- `/opt/udplex/docker-compose.yml`
+- `/opt/udplex/role`
+- `/opt/udplex/secret`
+- `/opt/udplex/threshold`
+- `/opt/udplex/lang`
+- `/opt/udplex/wireguard/wg_private.key`
+- `/opt/udplex/wireguard/wg_public.key`
+
+兼容说明：
+
+- 旧版本脚本可能把密钥放在 `/etc/wireguard`
+- 当前脚本会自动迁移到 `/opt/udplex/wireguard`
+
+现在不会再生成系统级的 `wg0.conf`。
+
+## 启动
 
 ```bash
 sudo bash ./udplex-wg-manager.sh start
 ```
 
-说明：
-- 会启动/拉起 UDPlex 容器
-- 启动 WireGuard，并设置 wg0 开机自启
+这会启动 UDPlex 容器，并拉起内嵌 WireGuard 网卡。
 
-## 常用管理命令
+默认接口名是：
 
-```bash
-sudo bash ./udplex-wg-manager.sh status     # 查看 UDPlex/WireGuard/端口状态
-sudo bash ./udplex-wg-manager.sh logs       # 跟随 UDPlex 日志
-sudo bash ./udplex-wg-manager.sh stop       # 停止 UDPlex 与 WireGuard
-sudo bash ./udplex-wg-manager.sh pause      # 暂停 wg0（容器保留运行）
-sudo bash ./udplex-wg-manager.sh resume     # 恢复 wg0
-sudo bash ./udplex-wg-manager.sh update     # 拉取最新镜像并重启容器
-sudo bash ./udplex-wg-manager.sh reload     # 仅重载配置（compose up -d）
-sudo bash ./udplex-wg-manager.sh show-keys  # 显示本机 WireGuard 公钥
-sudo bash ./udplex-wg-manager.sh lang en    # 切换脚本语言（zh/en）
+```text
+wg_udplex
 ```
 
-## 智能分流与阈值
+## 常用命令
 
-脚本内置的 `config.yaml` 已包含基于带宽与序号（seq）的分流：
-- 当 bps ≤ 阈值（默认 50Mbps）时：两条线路冗余发送，降低丢包
-- 当 bps > 阈值时：按照数据包序号奇偶拆分到不同线路，避免带宽浪费
+```bash
+sudo bash ./udplex-wg-manager.sh status
+sudo bash ./udplex-wg-manager.sh logs
+sudo bash ./udplex-wg-manager.sh stop
+sudo bash ./udplex-wg-manager.sh pause
+sudo bash ./udplex-wg-manager.sh resume
+sudo bash ./udplex-wg-manager.sh update
+sudo bash ./udplex-wg-manager.sh reload
+sudo bash ./udplex-wg-manager.sh show-keys
+sudo bash ./udplex-wg-manager.sh lang zh
+sudo bash ./udplex-wg-manager.sh set-threshold 80000000
+```
 
-在线更新阈值：
+`pause` 和 `resume` 操作的是内嵌接口 `wg_udplex`。
+
+## 阈值与冗余策略
+
+生成的负载均衡规则有两种行为：
+
+- 当带宽低于阈值：
+  同时走两条外层线，做冗余
+- 当带宽高于阈值：
+  可以按包序号拆分到两条线路，或者固定走一条首选线路
+
+在线修改阈值：
 
 ```bash
 sudo bash ./udplex-wg-manager.sh set-threshold 80000000
 sudo bash ./udplex-wg-manager.sh reload
 ```
 
-## 防火墙与端口
+## 端口说明
 
-默认端口（如在安装时未改）：
-- 入口：7000/udp（本地 UDPlex 监听，WireGuard 出口会连 127.0.0.1:7000）
-- 出口：9000/udp、9001/udp（两条线路监听）、51820/udp（WireGuard 服务端口）
+如果使用默认值：
 
-请在云厂商/系统防火墙中放通这些 UDP 端口。
+- 出口线路 1：`9000/udp`
+- 出口线路 2：`9001/udp`
 
-## 验证连接
+脚本现在支持每条外层线路独立选择协议：
 
-在两端启动后：
+- 线路 1 可以是 UDP 或 TCP
+- 线路 2 可以是 UDP 或 TCP
+
+例如：
+
+- `9000/udp` + `9001/udp`
+- `9000/udp` + `9001/tcp`
+- `9000/tcp` + `9001/udp`
+- `9000/tcp` + `9001/tcp`
+
+要点：
+
+- manager 不再依赖系统 WireGuard 服务配置文件启动
+- 内嵌 WireGuard 的运行配置都在 `config.yaml`
+- 真正需要放通的，仍然是你配置的 UDPlex 外层线路端口
+
+## 联通性验证
 
 ```bash
 sudo bash ./udplex-wg-manager.sh status
 sudo wg show
-# 从入口 ping 出口（若按默认地址）：
+ip addr show wg_udplex
+```
+
+如果使用默认内层地址，可以测试：
+
+```bash
 ping 10.0.0.2
 ```
 
 ## 故障排查
 
-- 查看容器日志：
-    ```bash
-    sudo bash ./udplex-wg-manager.sh logs
-    ```
-- 查看 WireGuard 状态：
-    ```bash
-    sudo wg show
-    ```
-- 端口占用/放通：
-    ```bash
-    ss -lunpt | grep -E ":(7000|9000|9001|51820)\b" || netstat -tulpn | grep -E ":(7000|9000|9001|51820)\b"
-    ```
-- Docker 网络异常：
-    ```bash
-    sudo systemctl restart docker
-    ```
+查看容器日志：
+
+```bash
+sudo bash ./udplex-wg-manager.sh logs
+```
+
+查看 WireGuard 状态：
+
+```bash
+sudo wg show
+ip addr show wg_udplex
+```
+
+查看外层线路端口：
+
+```bash
+ss -lunpt | grep -E ":(9000|9001)\b" || true
+ss -lntp | grep -E ":(9000|9001)\b" || true
+```
+
+如果外层“能收到但回不去”，优先检查：
+
+- `reuse_incoming_detour: true`
+- 外层 `listen` 是否为 `broadcast_mode: false`
+- 两条外层线是否都已完成认证并处于可用状态
+- 防火墙是否放通了正确端口
+
+## 卸载
+
+```bash
+sudo bash ./udplex-wg-manager.sh uninstall
+```
+
+如果你选择“不删除密钥”，脚本会先把密钥备份，再删除 `/opt/udplex`。
 
 ## 安全建议
 
-- 安装时为 UDPlex 鉴权自动生成强随机密钥（两端需一致），可在 /opt/udplex/secret 查看与同步
-- 定期执行 `update` 获取最新镜像
-- 仅放通必要 UDP 端口，限制来源 IP
-- 定期审查日志
+- UDPlex 共享密钥两端必须一致
+- 只开放必要的外层端口
+- 按需轮换 WireGuard 密钥与共享密钥
+- 定期更新镜像
