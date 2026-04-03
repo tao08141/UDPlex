@@ -562,7 +562,6 @@ render_server_outer_service() {
     listen_addr: 0.0.0.0:${LISTEN_PORT}
     timeout: 120
     replace_old_mapping: false
-    broadcast_mode: false
     no_delay: true
     detour: [wg_component]
     auth:
@@ -578,7 +577,6 @@ YAML
     listen_addr: 0.0.0.0:${LISTEN_PORT}
     timeout: 120
     replace_old_mapping: false
-    broadcast_mode: false
     detour: [wg_component]
     auth:
       secret: ${SECRET}
@@ -669,7 +667,7 @@ services:
     mtu: 1420
     addresses: [${LOCAL_ADDR}]
     private_key: ${PRIV}
-    reuse_incoming_detour: true
+    reuse_incoming_detour: false
     detour: [load_balancer]
     peers:
       - public_key: ${PEER_PUBKEY}
