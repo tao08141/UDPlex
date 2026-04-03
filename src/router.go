@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // NewRouter creates a new router
@@ -33,23 +34,14 @@ func NewRouter(config Config) *Router {
 				return &buf // Return pointer to slice
 			},
 		},
-		routeTasks: make(chan routeTask, config.QueueSize),
-		sendTasks:  make(chan sendTask, config.QueueSize),
 	}
+	initialConnPool := make(connDataSnapshot)
+	r.connPool.Store(&initialConnPool)
 
 	return r
 }
 
-type sendTask struct {
-	component Component
-	packet    *Packet
-	metadata  any
-}
-
-type routeTask struct {
-	packet   *Packet
-	destTags []string
-}
+type connDataSnapshot map[ConnID]map[string]any
 
 // Router manages all components and routes packets between them
 type Router struct {
@@ -57,67 +49,82 @@ type Router struct {
 	bufferPool     sync.Pool
 	bufferRefCount int32
 	config         Config
-	routeTasks     chan routeTask
-	sendTasks      chan sendTask
-	wg             sync.WaitGroup
-	connPool       map[ConnID]map[string]any // connPoll[connId][tag] = any
-	concurrencyChs map[string]chan struct{}
+	connPool       atomic.Pointer[connDataSnapshot]
 }
 
 func (r *Router) GetConnData(connID ConnID, tag string) any {
-	if _, exists := r.connPool[connID]; !exists {
-		r.connPool[connID] = make(map[string]any)
+	current := r.connPool.Load()
+	if current == nil {
+		return nil
 	}
-	return r.connPool[connID][tag]
+	connData, exists := (*current)[connID]
+	if !exists {
+		return nil
+	}
+	return connData[tag]
 }
 
 func (r *Router) SetConnData(connID ConnID, tag string, data any) {
-	if _, exists := r.connPool[connID]; !exists {
-		r.connPool[connID] = make(map[string]any)
-	}
-	r.connPool[connID][tag] = data
-}
-
-func (r *Router) RemoveConnData(connID ConnID, tag string) {
-	if _, exists := r.connPool[connID]; exists {
-		delete(r.connPool[connID], tag)
-		if len(r.connPool[connID]) == 0 {
-			delete(r.connPool, connID) // Remove empty connection data
+	for {
+		currentPtr := r.connPool.Load()
+		current := *currentPtr
+		next := cloneConnDataSnapshot(current)
+		connData := cloneConnDataEntry(next[connID])
+		connData[tag] = data
+		next[connID] = connData
+		if r.connPool.CompareAndSwap(currentPtr, &next) {
+			return
 		}
 	}
 }
 
-// startWorkers initializes the worker goroutines for packet routing
-func (r *Router) startWorkers() {
-	r.concurrencyChs = make(map[string]chan struct{})
-	capacity := max(int(float64(r.config.WorkerCount)/float64(len(r.components))*1.3), 1)
-	for tag := range r.components {
-		r.concurrencyChs[tag] = make(chan struct{}, capacity)
-	}
+func (r *Router) RemoveConnData(connID ConnID, tag string) {
+	for {
+		currentPtr := r.connPool.Load()
+		current := *currentPtr
+		connData, exists := current[connID]
+		if !exists {
+			return
+		}
 
-	logger.Infof("Starting %d router workers with concurrency capacity %d", r.config.WorkerCount, capacity)
+		next := cloneConnDataSnapshot(current)
+		nextConnData := cloneConnDataEntry(connData)
+		delete(nextConnData, tag)
+		if len(nextConnData) == 0 {
+			delete(next, connID)
+		} else {
+			next[connID] = nextConnData
+		}
 
-	for i := range r.config.WorkerCount {
-		r.wg.Add(1)
-		go func(workerID int) {
-			defer r.wg.Done()
-			logger.Infof("Starting router worker %d", workerID)
-
-			for task := range r.routeTasks {
-				r.processRouteTaskConcurrent(task)
-			}
-			logger.Warnf("Router worker %d: route tasks channel closed", workerID)
-		}(i)
+		if r.connPool.CompareAndSwap(currentPtr, &next) {
+			return
+		}
 	}
 }
 
-// processRouteTask handles the actual routing of packets
-func (r *Router) processRouteTaskConcurrent(task routeTask) {
-	packet := task.packet
-	defer packet.Release(1)
+func cloneConnDataSnapshot(current connDataSnapshot) connDataSnapshot {
+	next := make(connDataSnapshot, len(current))
+	for connID, connData := range current {
+		next[connID] = connData
+	}
+	return next
+}
 
-	if len(task.destTags) == 1 {
-		tag := task.destTags[0]
+func cloneConnDataEntry(current map[string]any) map[string]any {
+	if len(current) == 0 {
+		return make(map[string]any)
+	}
+	next := make(map[string]any, len(current))
+	for tag, data := range current {
+		next[tag] = data
+	}
+	return next
+}
+
+// routePacket handles the actual routing of packets in the caller goroutine.
+func (r *Router) routePacket(packet *Packet, destTags []string) {
+	if len(destTags) == 1 {
+		tag := destTags[0]
 		if tag == packet.srcTag {
 			return
 		}
@@ -134,7 +141,7 @@ func (r *Router) processRouteTaskConcurrent(task routeTask) {
 	}
 
 	lastTargetIndex := -1
-	for i, tag := range task.destTags {
+	for i, tag := range destTags {
 		if tag == packet.srcTag {
 			continue
 		}
@@ -149,7 +156,7 @@ func (r *Router) processRouteTaskConcurrent(task routeTask) {
 		return
 	}
 
-	for i, tag := range task.destTags {
+	for i, tag := range destTags {
 		if tag == packet.srcTag {
 			continue
 		}
@@ -236,17 +243,9 @@ func (r *Router) GetComponent(tag string) (Component, bool) {
 	return c, exists
 }
 
-// Route asynchronously sends a packet to components specified by their tags
+// Route sends a packet to components specified by their tags in the caller goroutine.
 func (r *Router) Route(packet *Packet, destTags []string) error {
-	packet.AddRef(1) // Add reference for the worker
-
-	select {
-	case r.routeTasks <- routeTask{packet: packet, destTags: destTags}:
-		// Task successfully queued
-	default:
-		packet.Release(1) // Release reference if queue is full
-		return fmt.Errorf("routing queue is full, packet dropped")
-	}
+	r.routePacket(packet, destTags)
 	return nil
 }
 
@@ -258,10 +257,6 @@ func (r *Router) StartAll() error {
 			return fmt.Errorf("failed to start component %s: %w", tag, err)
 		}
 	}
-
-	// Post-start hooks may emit warmup traffic through the router, so workers
-	// must already be available before they run.
-	r.startWorkers()
 
 	for tag, component := range r.components {
 		postStarter, ok := component.(PostStarter)
@@ -287,12 +282,7 @@ func (r *Router) StopAll() {
 		}
 	}
 
-	// Close task channel and wait for workers to complete
-	close(r.routeTasks)
-	close(r.sendTasks)
-
-	r.wg.Wait()
-	logger.Infof("All router workers stopped")
+	logger.Infof("All router components stopped")
 }
 
 // GetComponentByTag returns a component by its tag or nil if not found

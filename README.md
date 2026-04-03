@@ -91,7 +91,7 @@ docker-compose down
 |-----------|-------------|
 | `buffer_size` | UDP packet buffer size (bytes), recommended to set to MTU size, usually 1500 |
 | `queue_size` | Inter-component packet queue size, increase for high traffic scenarios |
-| `worker_count` | Number of worker threads, affects concurrent processing capability |
+| `worker_count` | Reserved for compatibility; the current router routes packets in the caller goroutine |
 | `services` | Component configuration array, defines all processing components in the system |
 | `protocol_detectors` | Protocol detector configuration for identifying and filtering packets of specific protocols |
 

@@ -92,7 +92,7 @@ docker-compose down
 |------|------|
 | `buffer_size` | UDP数据包缓冲区大小（字节），建议设置为MTU大小，通常为1500 |
 | `queue_size` | 组件间数据包队列大小，高流量场景建议增大此值 |
-| `worker_count` | 工作线程数量，影响并发处理能力 |
+| `worker_count` | 为兼容性保留；当前路由器在调用方 goroutine 内直接完成路由 |
 | `services` | 组件配置数组，定义系统中所有的处理组件 |
 | `protocol_detectors` | 协议检测器配置，用于识别和过滤特定协议的数据包 |
 
