@@ -127,28 +127,6 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		return
 	}
 
-	var lastWriteDeadlineUpdate time.Time
-	batch := make([]*Packet, 0, udpSendBatchSize)
-
-	refreshWriteDeadline := func() {
-		if f.sendTimeout <= 0 {
-			return
-		}
-		now := time.Now()
-		refreshInterval := f.sendTimeout / 4
-		if refreshInterval <= 0 {
-			refreshInterval = f.sendTimeout
-		}
-		if !lastWriteDeadlineUpdate.IsZero() && now.Sub(lastWriteDeadlineUpdate) < refreshInterval {
-			return
-		}
-		if err := conn.conn.SetWriteDeadline(now.Add(f.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
-			return
-		}
-		lastWriteDeadlineUpdate = now
-	}
-
 	sendPkt := func(pkt *Packet) bool {
 		if pkt == nil {
 			return true
@@ -156,6 +134,11 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		if !conn.IsConnected() || conn.conn == nil {
 			pkt.Release(1)
 			return true
+		}
+		if f.sendTimeout > 0 {
+			if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
+				logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+			}
 		}
 		if _, err := conn.conn.Write(pkt.GetData()); err != nil {
 			logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
@@ -167,85 +150,28 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		return true
 	}
 
-	sendBatch := func() bool {
-		if len(batch) == 0 {
-			return true
-		}
-		if !conn.IsConnected() || conn.conn == nil {
-			for i := range batch {
-				if batch[i] != nil {
-					batch[i].Release(1)
-					batch[i] = nil
-				}
-			}
-			batch = batch[:0]
-			return true
-		}
-		refreshWriteDeadline()
-		for i := range batch {
-			if !sendPkt(batch[i]) {
-				batch[i] = nil
-				for j := i + 1; j < len(batch); j++ {
-					if batch[j] != nil {
-						batch[j].Release(1)
-						batch[j] = nil
-					}
-				}
-				batch = batch[:0]
-				return false
-			}
-			batch[i] = nil
-		}
-		batch = batch[:0]
-		return true
-	}
-
-	drain := func(ch <-chan *Packet) {
-		for len(batch) < udpSendBatchSize {
-			select {
-			case pkt, ok := <-ch:
-				if !ok {
-					return
-				}
-				batch = append(batch, pkt)
-			default:
-				return
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-f.GetStopChannel():
-			_ = sendBatch()
 			f.drainForwardQueue(conn)
 			return
 		case <-conn.closeCh:
-			_ = sendBatch()
 			f.drainForwardQueue(conn)
 			return
 		case pkt, ok := <-conn.sendQueuePrio:
 			if !ok {
-				_ = sendBatch()
 				f.drainForwardQueue(conn)
 				return
 			}
-			batch = append(batch[:0], pkt)
-			drain(conn.sendQueuePrio)
-			drain(conn.sendQueue)
-			if !sendBatch() {
+			if !sendPkt(pkt) {
 				return
 			}
 		case pkt, ok := <-conn.sendQueue:
 			if !ok {
-				_ = sendBatch()
 				f.drainForwardQueue(conn)
 				return
 			}
-			batch = append(batch[:0], pkt)
-			drain(conn.sendQueue)
-			drain(conn.sendQueuePrio)
-			if !sendBatch() {
+			if !sendPkt(pkt) {
 				return
 			}
 		}
@@ -691,25 +617,15 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 
 // readFromForwarder handles receiving packets from a forwarder
 func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
-	var lastReadDeadlineUpdate time.Time
-
 	for conn.IsConnected() {
 		select {
 		case <-f.GetStopChannel():
 			return
 		default:
-			now := time.Now()
-			refreshInterval := f.connectionCheckTime / 4
-			if refreshInterval <= 0 {
-				refreshInterval = f.connectionCheckTime
-			}
-			if lastReadDeadlineUpdate.IsZero() || now.Sub(lastReadDeadlineUpdate) >= refreshInterval {
-				err := conn.conn.SetReadDeadline(now.Add(f.connectionCheckTime))
-				if err != nil {
-					logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.remoteAddr, err)
-					return
-				}
-				lastReadDeadlineUpdate = now
+			err := conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
+			if err != nil {
+				logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.remoteAddr, err)
+				return
 			}
 
 			func() {

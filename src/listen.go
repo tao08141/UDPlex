@@ -14,8 +14,6 @@ type listenSendJob struct {
 	addr   net.Addr
 }
 
-const udpSendBatchSize = 64
-
 // ListenConn represents a logical UDP "connection" from a remote address
 // It encapsulates per-peer state like authentication and activity timestamps.
 type ListenConn struct {
@@ -102,94 +100,23 @@ type ListenComponent struct {
 }
 
 func (l *ListenComponent) runSendLoop() {
-	var lastWriteDeadlineUpdate time.Time
-	batch := make([]listenSendJob, 0, udpSendBatchSize)
-
-	refreshWriteDeadline := func() {
-		if l.sendTimeout <= 0 {
-			return
-		}
-		now := time.Now()
-		refreshInterval := l.sendTimeout / 4
-		if refreshInterval <= 0 {
-			refreshInterval = l.sendTimeout
-		}
-		if !lastWriteDeadlineUpdate.IsZero() && now.Sub(lastWriteDeadlineUpdate) < refreshInterval {
-			return
-		}
-		if err := l.conn.SetWriteDeadline(now.Add(l.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
-			return
-		}
-		lastWriteDeadlineUpdate = now
-	}
-
-	sendJob := func(job listenSendJob) {
-		if job.packet == nil {
-			return
-		}
-		if job.addr == nil {
-			job.packet.Release(1)
-			return
-		}
-		if _, err := l.conn.WriteTo(job.packet.GetData(), job.addr); err != nil {
-			logger.Infof("%s: Failed to send packet: %v", l.tag, err)
-		}
-		job.packet.Release(1)
-	}
-
-	sendBatch := func() {
-		if len(batch) == 0 {
-			return
-		}
-		refreshWriteDeadline()
-		for i := range batch {
-			sendJob(batch[i])
-			batch[i] = listenSendJob{}
-		}
-		batch = batch[:0]
-	}
-
-	drain := func(ch <-chan listenSendJob) {
-		for len(batch) < udpSendBatchSize {
-			select {
-			case job, ok := <-ch:
-				if !ok {
-					return
-				}
-				batch = append(batch, job)
-			default:
-				return
-			}
-		}
-	}
-
 	for {
 		select {
 		case <-l.GetStopChannel():
-			sendBatch()
 			l.drainSendQueue()
 			return
 		case job, ok := <-l.sendQueuePrio:
 			if !ok {
-				sendBatch()
 				l.drainSendQueue()
 				return
 			}
-			batch = append(batch[:0], job)
-			drain(l.sendQueuePrio)
-			drain(l.sendQueue)
-			sendBatch()
+			l.processSendJob(job)
 		case job, ok := <-l.sendQueue:
 			if !ok {
-				sendBatch()
 				l.drainSendQueue()
 				return
 			}
-			batch = append(batch[:0], job)
-			drain(l.sendQueue)
-			drain(l.sendQueuePrio)
-			sendBatch()
+			l.processSendJob(job)
 		}
 	}
 }
@@ -500,7 +427,6 @@ func (l *ListenComponent) handlePackets() {
 	cleanupInterval := l.timeout / 2
 	lastCleanupTime := time.Now()
 	shortDeadline := min(time.Second*1, cleanupInterval)
-	var lastReadDeadlineUpdate time.Time
 
 	for {
 		select {
@@ -514,18 +440,9 @@ func (l *ListenComponent) handlePackets() {
 					lastCleanupTime = now
 				}
 
-				// Avoid an extra deadline syscall on every packet read.
-				now = time.Now()
-				refreshInterval := shortDeadline / 4
-				if refreshInterval <= 0 {
-					refreshInterval = shortDeadline
-				}
-				if lastReadDeadlineUpdate.IsZero() || now.Sub(lastReadDeadlineUpdate) >= refreshInterval {
-					if err := l.conn.SetReadDeadline(now.Add(shortDeadline)); err != nil {
-						logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
-					} else {
-						lastReadDeadlineUpdate = now
-					}
+				// Set read deadline
+				if err := l.conn.SetReadDeadline(time.Now().Add(shortDeadline)); err != nil {
+					logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
 				}
 
 				packet := l.router.GetPacket(l.tag)
