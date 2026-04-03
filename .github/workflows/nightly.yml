@@ -72,6 +72,11 @@ jobs:
           cd src
           go test ./...
 
+      - name: Install Integration Test Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y iperf3
+
       - name: Run Integration Tests
         env:
           GITHUB_SHA: ${{ steps.target.outputs.sha }}
