@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	wgconn "golang.zx2c4.com/wireguard/conn"
@@ -41,19 +41,19 @@ type WireGuardComponent struct {
 }
 
 type WireGuardBind struct {
-	component  *WireGuardComponent
-	port       uint16
-	rxQueue    chan wireGuardInboundPacket
-	bufferPool sync.Pool
-	bufferSize int
-	mu         sync.RWMutex
-	closeCh    chan struct{}
-	isOpen     bool
+	component *WireGuardComponent
+	port      uint16
+	rxQueue   chan wireGuardInboundPacket
+	state     atomic.Pointer[wireGuardBindState]
 }
 
 type wireGuardInboundPacket struct {
-	data     []byte
+	packet   *Packet
 	endpoint *WireGuardEndpoint
+}
+
+type wireGuardBindState struct {
+	closeCh chan struct{}
 }
 
 type WireGuardEndpoint struct {
@@ -115,24 +115,10 @@ func NewWireGuardBind(component *WireGuardComponent) *WireGuardBind {
 		queueSize = 1024
 	}
 
-	bufferSize := component.router.config.BufferSize
-	if bufferSize <= 0 {
-		bufferSize = component.mtu + 256
-	}
-	if bufferSize < component.mtu+256 {
-		bufferSize = component.mtu + 256
-	}
-
 	bind := &WireGuardBind{
-		component:  component,
-		port:       component.listenPort,
-		rxQueue:    make(chan wireGuardInboundPacket, queueSize),
-		bufferSize: bufferSize,
-		closeCh:    make(chan struct{}),
-	}
-	bind.bufferPool.New = func() any {
-		buf := make([]byte, bind.bufferSize)
-		return &buf
+		component: component,
+		port:      component.listenPort,
+		rxQueue:   make(chan wireGuardInboundPacket, queueSize),
 	}
 	return bind
 }
@@ -226,9 +212,10 @@ func (w *WireGuardComponent) HandlePacket(packet *Packet) error {
 }
 
 func (w *WireGuardComponent) endpointFromPacket(packet *Packet) *WireGuardEndpoint {
+	srcAddr := packet.SrcAddr()
 	raw := ""
-	if packet.SrcAddr() != nil {
-		raw = packet.SrcAddr().String()
+	if srcAddr != nil {
+		raw = srcAddr.String()
 	}
 	if raw == "" {
 		raw = fmt.Sprintf("conn:%x", packet.ConnID())
@@ -239,7 +226,7 @@ func (w *WireGuardComponent) endpointFromPacket(packet *Packet) *WireGuardEndpoi
 		srcTag = packet.SrcTag()
 	}
 
-	return newWireGuardEndpoint(raw, packet.ConnID(), srcTag)
+	return newWireGuardEndpoint(raw, packet.ConnID(), srcTag, srcAddr)
 }
 
 func (w *WireGuardComponent) buildIPCConfig() string {
@@ -491,30 +478,35 @@ func (w *WireGuardComponent) hasEstablishedHandshakes(targets []wireGuardWarmupT
 }
 
 func (b *WireGuardBind) Open(port uint16) ([]wgconn.ReceiveFunc, uint16, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.isOpen {
+	if b.state.Load() != nil {
 		return nil, 0, wgconn.ErrBindAlreadyOpen
 	}
 	if port != 0 {
 		b.port = port
 	}
-	b.closeCh = make(chan struct{})
-	b.isOpen = true
-	return []wgconn.ReceiveFunc{b.makeReceiveFunc(b.closeCh)}, b.port, nil
+	state := &wireGuardBindState{closeCh: make(chan struct{})}
+	if !b.state.CompareAndSwap(nil, state) {
+		return nil, 0, wgconn.ErrBindAlreadyOpen
+	}
+	return []wgconn.ReceiveFunc{b.makeReceiveFunc(state.closeCh)}, b.port, nil
 }
 
 func (b *WireGuardBind) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if !b.isOpen {
+	state := b.state.Swap(nil)
+	if state == nil {
 		return nil
 	}
-	close(b.closeCh)
-	b.isOpen = false
-	return nil
+	close(state.closeCh)
+	for {
+		select {
+		case msg := <-b.rxQueue:
+			if msg.packet != nil {
+				msg.packet.Release(1)
+			}
+		default:
+			return nil
+		}
+	}
 }
 
 func (b *WireGuardBind) SetMark(mark uint32) error {
@@ -556,7 +548,7 @@ func (b *WireGuardBind) ParseEndpoint(s string) (wgconn.Endpoint, error) {
 	if s == "" {
 		return nil, fmt.Errorf("wireguard endpoint is empty")
 	}
-	return newWireGuardEndpoint(s, ConnID{}, ""), nil
+	return newWireGuardEndpoint(s, ConnID{}, "", nil), nil
 }
 
 func (b *WireGuardBind) BatchSize() int {
@@ -575,22 +567,21 @@ func (b *WireGuardBind) Enqueue(packet *Packet, endpoint *WireGuardEndpoint) err
 	default:
 	}
 
-	data := b.getInboundBuffer(packet.Length())
-	copy(data, packet.GetData())
+	packet.AddRef(1)
 
 	msg := wireGuardInboundPacket{
-		data:     data,
+		packet:   packet,
 		endpoint: endpoint,
 	}
 
 	select {
 	case <-closeCh:
-		b.putInboundBuffer(msg.data)
+		packet.Release(1)
 		return net.ErrClosed
 	case b.rxQueue <- msg:
 		return nil
 	default:
-		b.putInboundBuffer(msg.data)
+		packet.Release(1)
 		return fmt.Errorf("%s: wireguard receive queue is full", b.component.tag)
 	}
 }
@@ -598,9 +589,14 @@ func (b *WireGuardBind) Enqueue(packet *Packet, endpoint *WireGuardEndpoint) err
 func (b *WireGuardBind) makeReceiveFunc(closeCh chan struct{}) wgconn.ReceiveFunc {
 	return func(packets [][]byte, sizes []int, eps []wgconn.Endpoint) (int, error) {
 		readOne := func(index int, msg wireGuardInboundPacket) {
-			sizes[index] = copy(packets[index], msg.data)
+			if msg.packet == nil {
+				sizes[index] = 0
+				eps[index] = msg.endpoint
+				return
+			}
+			sizes[index] = copy(packets[index], msg.packet.GetData())
 			eps[index] = msg.endpoint
-			b.putInboundBuffer(msg.data)
+			msg.packet.Release(1)
 		}
 
 		select {
@@ -626,34 +622,14 @@ func (b *WireGuardBind) makeReceiveFunc(closeCh chan struct{}) wgconn.ReceiveFun
 }
 
 func (b *WireGuardBind) currentCloseCh() (chan struct{}, bool) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if !b.isOpen || b.closeCh == nil {
+	state := b.state.Load()
+	if state == nil || state.closeCh == nil {
 		return nil, false
 	}
-	return b.closeCh, true
+	return state.closeCh, true
 }
 
-func (b *WireGuardBind) getInboundBuffer(length int) []byte {
-	if length <= 0 {
-		return nil
-	}
-	if length > b.bufferSize {
-		return make([]byte, length)
-	}
-	buf := *(b.bufferPool.Get().(*[]byte))
-	return buf[:length]
-}
-
-func (b *WireGuardBind) putInboundBuffer(buf []byte) {
-	if cap(buf) != b.bufferSize {
-		return
-	}
-	buf = buf[:b.bufferSize]
-	b.bufferPool.Put(&buf)
-}
-
-func newWireGuardEndpoint(raw string, connID ConnID, srcTag string) *WireGuardEndpoint {
+func newWireGuardEndpoint(raw string, connID ConnID, srcTag string, srcAddr net.Addr) *WireGuardEndpoint {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		raw = "wireguard-peer"
@@ -664,10 +640,18 @@ func newWireGuardEndpoint(raw string, connID ConnID, srcTag string) *WireGuardEn
 		routeTags = []string{srcTag}
 	}
 
-	addr := parsedEndpointAddr(raw)
+	addr := addrToIP(srcAddr)
+	if !addr.IsValid() {
+		addr = parsedEndpointAddr(raw)
+	}
 	dstIP := addr
 	if !dstIP.IsValid() {
 		dstIP = endpointIP(raw, connID)
+	}
+
+	dstBytes := endpointBytesFromAddr(srcAddr)
+	if len(dstBytes) == 0 {
+		dstBytes = endpointBytes(raw, connID)
 	}
 
 	return &WireGuardEndpoint{
@@ -676,7 +660,7 @@ func newWireGuardEndpoint(raw string, connID ConnID, srcTag string) *WireGuardEn
 		routeTags: routeTags,
 		dstIP:     dstIP,
 		srcIP:     addr,
-		dstBytes:  endpointBytes(raw, connID),
+		dstBytes:  dstBytes,
 	}
 }
 
@@ -717,6 +701,32 @@ func endpointBytes(raw string, connID ConnID) []byte {
 	copy(buf[len(raw)+1:], connID[:])
 	hash := sha256.Sum256(buf)
 	return hash[:]
+}
+
+func endpointBytesFromAddr(addr net.Addr) []byte {
+	switch value := addr.(type) {
+	case *net.UDPAddr:
+		if value == nil {
+			return nil
+		}
+		if ip, ok := netip.AddrFromSlice(value.IP); ok {
+			bytes, err := netip.AddrPortFrom(ip.Unmap(), uint16(value.Port)).MarshalBinary()
+			if err == nil {
+				return bytes
+			}
+		}
+	case *net.TCPAddr:
+		if value == nil {
+			return nil
+		}
+		if ip, ok := netip.AddrFromSlice(value.IP); ok {
+			bytes, err := netip.AddrPortFrom(ip.Unmap(), uint16(value.Port)).MarshalBinary()
+			if err == nil {
+				return bytes
+			}
+		}
+	}
+	return nil
 }
 
 func parsedEndpointAddr(raw string) netip.Addr {

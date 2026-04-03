@@ -14,7 +14,7 @@ services:
       - 10.66.0.2/24
     private_key: 787bec983d533e31e64a71c5c079006860cd9e2c6a93b6da69ab4465e8d58179
     listen_port: 51820
-    reuse_incoming_detour: true
+    reuse_incoming_detour: false
     detour: [load_balancer]
     peers:
       - public_key: 4e126dd08dc1e79c7417e71198861dd57694d68f34cbb6a8b3777697e9c3654c

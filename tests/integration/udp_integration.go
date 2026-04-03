@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -31,6 +33,7 @@ type TestConfig struct {
 	TargetPort  int
 	Duration    time.Duration
 	Runner      func(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult
+	IperfRunner func(projectRoot, examplesDir string, config TestConfig, label string) TestResult
 }
 
 type TestResult struct {
@@ -137,6 +140,46 @@ type WGEchoMetrics struct {
 	MaxLatencyMs    float64 `json:"max_latency_ms"`
 }
 
+type WGIperfMetrics struct {
+	Sent            int64
+	Received        int64
+	Lost            int64
+	BytesSent       int64
+	BytesReceived   int64
+	PacketSizeBytes int
+	JitterMs        float64
+	ReceiverMbps    float64
+}
+
+type iperf3JSON struct {
+	Start struct {
+		TestStart struct {
+			Protocol string `json:"protocol"`
+			Blksize  int    `json:"blksize"`
+			Duration int    `json:"duration"`
+		} `json:"test_start"`
+	} `json:"start"`
+	Intervals []struct {
+		Sum iperf3UDPStats `json:"sum"`
+	} `json:"intervals"`
+	End struct {
+		Sum iperf3UDPStats `json:"sum"`
+	} `json:"end"`
+	Error string `json:"error"`
+}
+
+type iperf3UDPStats struct {
+	Seconds       float64 `json:"seconds"`
+	Bytes         int64   `json:"bytes"`
+	BitsPerSecond float64 `json:"bits_per_second"`
+	JitterMs      float64 `json:"jitter_ms"`
+	LostPackets   int64   `json:"lost_packets"`
+	Packets       int64   `json:"packets"`
+	LostPercent   float64 `json:"lost_percent"`
+	OutOfOrder    int64   `json:"out_of_order"`
+	Sender        bool    `json:"sender"`
+}
+
 type IntegrationSelection struct {
 	Suite         string
 	SelectedTests map[string]struct{}
@@ -179,11 +222,12 @@ func (b *Bitset) Set(bit uint32) {
 const (
 	LISTEN_PORT     = 5201
 	SEND_PORT       = 5202
-	TEST_DURATION   = 10 * time.Second
+	TEST_DURATION   = 5 * time.Second
 	MAX_PACKET_LOSS = 0.05 // 5% acceptable packet loss
 
 	wgOuterClientIP   = "172.31.0.1"
 	wgOuterServerIP   = "172.31.0.2"
+	wgInnerClientIP   = "10.66.0.2"
 	wgForwardPortA    = 5900
 	wgForwardPortB    = 5901
 	wgTCPTunnelPort   = 5910
@@ -201,6 +245,14 @@ const (
 	wgExampleClientPublicKey  = "edfbbb2364ea4d1f8c85034c3358172f6154055e4c9d0bbf86825b03d10ed25c"
 	wgExampleServerPrivateKey = "28e0153a3f10376886d3a1de6153cc1c6026ca301ac854104861eafa41b9a067"
 	wgExampleServerPublicKey  = "4e126dd08dc1e79c7417e71198861dd57694d68f34cbb6a8b3777697e9c3654c"
+)
+
+const (
+	wgIperfPacketSize   = 1200
+	wgIperfLossBitrate  = "200M"
+	wgIperfPerfBitrate  = "0"
+	wgIperfReadyTimeout = 5 * time.Second
+	iperfRunTimeoutPad  = 10 * time.Second
 )
 
 func main() {
@@ -241,6 +293,7 @@ func main() {
 			TestPort:    LISTEN_PORT,
 			TargetPort:  SEND_PORT,
 			Duration:    TEST_DURATION,
+			IperfRunner: runLocalIperfIntegration,
 		},
 		{
 			Name:        "Auth Client-Server",
@@ -248,6 +301,7 @@ func main() {
 			TestPort:    LISTEN_PORT,
 			TargetPort:  SEND_PORT,
 			Duration:    TEST_DURATION,
+			IperfRunner: runLocalIperfIntegration,
 		},
 		{
 			Name:        "Filter",
@@ -255,6 +309,7 @@ func main() {
 			TestPort:    LISTEN_PORT,
 			TargetPort:  SEND_PORT,
 			Duration:    TEST_DURATION,
+			IperfRunner: runLocalIperfIntegration,
 		},
 		{
 			Name:        "Load Balancer",
@@ -262,6 +317,7 @@ func main() {
 			TestPort:    LISTEN_PORT,
 			TargetPort:  SEND_PORT,
 			Duration:    TEST_DURATION,
+			IperfRunner: runLocalIperfIntegration,
 		},
 		{
 			Name:        "TCP Tunnel",
@@ -269,6 +325,7 @@ func main() {
 			TestPort:    LISTEN_PORT,
 			TargetPort:  SEND_PORT,
 			Duration:    TEST_DURATION,
+			IperfRunner: runLocalIperfIntegration,
 		},
 		{
 			Name:        "IP Router",
@@ -276,6 +333,7 @@ func main() {
 			TestPort:    LISTEN_PORT,
 			TargetPort:  SEND_PORT,
 			Duration:    TEST_DURATION,
+			IperfRunner: runLocalIperfIntegration,
 		},
 	}
 
@@ -287,21 +345,24 @@ func main() {
 	if ok, reason := supportsWGIntegration(); ok {
 		testConfigs = append(testConfigs,
 			TestConfig{
-				Name:     "WireGuard Forward",
-				Duration: TEST_DURATION,
-				Runner:   runWireGuardForwardIntegration,
+				Name:        "WireGuard Forward",
+				Duration:    TEST_DURATION,
+				Runner:      runWireGuardForwardIntegration,
+				IperfRunner: runWireGuardForwardIperfIntegration,
 			},
 			TestConfig{
-				Name:     "WireGuard TCP Tunnel",
-				Duration: TEST_DURATION,
-				Runner:   runWireGuardTCPTunnelIntegration,
+				Name:        "WireGuard TCP Tunnel",
+				Duration:    TEST_DURATION,
+				Runner:      runWireGuardTCPTunnelIntegration,
+				IperfRunner: runWireGuardTCPTunnelIperfIntegration,
 			},
 		)
 		if integrationModeExplicitlySelected("WireGuard Load Balancer", selection.SelectedTests) {
 			testConfigs = append(testConfigs, TestConfig{
-				Name:     "WireGuard Load Balancer",
-				Duration: TEST_DURATION,
-				Runner:   runWireGuardLoadBalancerIntegration,
+				Name:        "WireGuard Load Balancer",
+				Duration:    TEST_DURATION,
+				Runner:      runWireGuardLoadBalancerIntegration,
+				IperfRunner: runWireGuardLoadBalancerIperfIntegration,
 			})
 		}
 	} else {
@@ -336,6 +397,17 @@ func main() {
 			fmt.Printf("✓ %s - Performance Test: PASSED\n", config.Name)
 		} else {
 			fmt.Printf("✗ %s - Performance Test: FAILED - %s\n", config.Name, resultAdaptive.Error)
+		}
+
+		if config.IperfRunner != nil {
+			fmt.Printf("\n=== %s - iperf3 Test ===\n", config.Name)
+			resultIperf := config.IperfRunner(projectRoot, examplesDir, config, "iperf3 Test")
+			results = append(results, resultIperf)
+			if resultIperf.Success {
+				fmt.Printf("✓ %s - iperf3 Test: PASSED\n", config.Name)
+			} else {
+				fmt.Printf("✗ %s - iperf3 Test: FAILED - %s\n", config.Name, resultIperf.Error)
+			}
 		}
 	}
 
@@ -609,7 +681,7 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 		}
 	}()
 
-	profileWait, err := maybeStartProfiles(projectRoot, config.Name, withSleep, profileTargets)
+	profileWait, err := maybeStartProfiles(projectRoot, config.Name, result.ConfigName, withSleep, profileTargets)
 	if err != nil {
 		result.Error = fmt.Sprintf("Failed to start profiles: %v", err)
 		return result
@@ -679,6 +751,79 @@ func runTest(projectRoot, examplesDir string, config TestConfig, label string, w
 		}
 	}
 
+	return result
+}
+
+func runLocalIperfIntegration(projectRoot, examplesDir string, config TestConfig, label string) TestResult {
+	result := TestResult{
+		ConfigName:    fmt.Sprintf("%s %s", config.Name, label),
+		TotalDuration: config.Duration,
+	}
+
+	var processes []*exec.Cmd
+	var profileTargets []IntegrationProfileTarget
+
+	for index, configFile := range config.ConfigFiles {
+		configPath := filepath.Join(examplesDir, configFile)
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			result.Error = fmt.Sprintf("Config file not found: %s", configPath)
+			return result
+		}
+
+		profileTarget, err := newLocalProfileTarget(config.Name, configFile, index)
+		if err != nil {
+			result.Error = fmt.Sprintf("Failed to allocate profile target: %v", err)
+			return result
+		}
+
+		process := startUDPlexProcess(projectRoot, configPath, profileTarget)
+		if process == nil {
+			result.Error = "Failed to start UDPlex process"
+			return result
+		}
+		processes = append(processes, process)
+		profileTargets = append(profileTargets, profileTarget)
+	}
+
+	defer func() {
+		for _, process := range processes {
+			if process != nil && process.Process != nil {
+				process.Process.Kill()
+				process.Wait()
+			}
+		}
+	}()
+
+	time.Sleep(2 * time.Second)
+
+	controlForwarder, err := startTCPPortForward(
+		fmt.Sprintf("127.0.0.1:%d", config.TargetPort),
+		fmt.Sprintf("127.0.0.1:%d", config.TestPort),
+	)
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to start iperf3 tcp control forwarder: %v", err)
+		return result
+	}
+	defer controlForwarder.Close()
+
+	profileWait, err := maybeStartProfiles(projectRoot, config.Name, result.ConfigName, false, profileTargets)
+	if err != nil {
+		result.Error = fmt.Sprintf("Failed to start profiles: %v", err)
+		return result
+	}
+
+	metrics, err := runIperf("", "", fmt.Sprintf("127.0.0.1:%d", config.TargetPort), fmt.Sprintf("127.0.0.1:%d", config.TestPort), "127.0.0.1", config.Duration, false)
+	if profileWait != nil {
+		if waitErr := profileWait(); waitErr != nil && err == nil {
+			err = fmt.Errorf("profile capture failed: %w", waitErr)
+		}
+	}
+	if err != nil {
+		result.Error = fmt.Sprintf("iperf3 run failed: %v", err)
+		return result
+	}
+
+	populateResultFromWGIperfMetrics(&result, metrics, config.Duration, false)
 	return result
 }
 
@@ -790,6 +935,70 @@ func startManagedProcess(cmd *exec.Cmd, label, readyNeedle string, timeout time.
 	}
 }
 
+type tcpPortForwarder struct {
+	listener net.Listener
+	closed   chan struct{}
+}
+
+func startTCPPortForward(listenAddr, targetAddr string) (*tcpPortForwarder, error) {
+	listener, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	forwarder := &tcpPortForwarder{
+		listener: listener,
+		closed:   make(chan struct{}),
+	}
+
+	go forwarder.serve(targetAddr)
+	return forwarder, nil
+}
+
+func (f *tcpPortForwarder) serve(targetAddr string) {
+	for {
+		conn, err := f.listener.Accept()
+		if err != nil {
+			select {
+			case <-f.closed:
+				return
+			default:
+				continue
+			}
+		}
+		go f.handleConn(conn, targetAddr)
+	}
+}
+
+func (f *tcpPortForwarder) handleConn(src net.Conn, targetAddr string) {
+	dst, err := net.Dial("tcp", targetAddr)
+	if err != nil {
+		_ = src.Close()
+		return
+	}
+
+	copyAndClose := func(writer net.Conn, reader net.Conn) {
+		_, _ = io.Copy(writer, reader)
+		_ = writer.Close()
+		_ = reader.Close()
+	}
+
+	go copyAndClose(dst, src)
+	go copyAndClose(src, dst)
+}
+
+func (f *tcpPortForwarder) Close() error {
+	select {
+	case <-f.closed:
+	default:
+		close(f.closed)
+	}
+	if f.listener != nil {
+		return f.listener.Close()
+	}
+	return nil
+}
+
 func handleWGHelperCommand() bool {
 	if len(os.Args) < 2 {
 		return false
@@ -861,6 +1070,9 @@ func supportsWGIntegration() (bool, string) {
 	if _, err := exec.LookPath("ip"); err != nil {
 		return false, "requires iproute2 (`ip` command)"
 	}
+	if _, err := exec.LookPath("iperf3"); err != nil {
+		return false, "requires iperf3"
+	}
 	if _, err := os.Stat("/dev/net/tun"); err != nil {
 		return false, "requires /dev/net/tun"
 	}
@@ -877,18 +1089,30 @@ func isRootUser() bool {
 }
 
 func runWireGuardForwardIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {
-	return runWireGuardIntegration(projectRoot, config, label, withSleep, wgModeForward)
+	return runWireGuardEchoIntegration(projectRoot, config, label, withSleep, wgModeForward)
 }
 
 func runWireGuardLoadBalancerIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {
-	return runWireGuardIntegration(projectRoot, config, label, withSleep, wgModeLoadBalancer)
+	return runWireGuardEchoIntegration(projectRoot, config, label, withSleep, wgModeLoadBalancer)
 }
 
 func runWireGuardTCPTunnelIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool) TestResult {
-	return runWireGuardIntegration(projectRoot, config, label, withSleep, wgModeTCPTunnel)
+	return runWireGuardEchoIntegration(projectRoot, config, label, withSleep, wgModeTCPTunnel)
 }
 
-func runWireGuardIntegration(projectRoot string, config TestConfig, label string, withSleep bool, mode string) TestResult {
+func runWireGuardForwardIperfIntegration(projectRoot, examplesDir string, config TestConfig, label string) TestResult {
+	return runWireGuardIperfIntegration(projectRoot, config, label, wgModeForward)
+}
+
+func runWireGuardLoadBalancerIperfIntegration(projectRoot, examplesDir string, config TestConfig, label string) TestResult {
+	return runWireGuardIperfIntegration(projectRoot, config, label, wgModeLoadBalancer)
+}
+
+func runWireGuardTCPTunnelIperfIntegration(projectRoot, examplesDir string, config TestConfig, label string) TestResult {
+	return runWireGuardIperfIntegration(projectRoot, config, label, wgModeTCPTunnel)
+}
+
+func runWireGuardEchoIntegration(projectRoot string, config TestConfig, label string, withSleep bool, mode string) TestResult {
 	result := TestResult{
 		ConfigName:    fmt.Sprintf("%s %s", config.Name, label),
 		TotalDuration: config.Duration,
@@ -940,7 +1164,7 @@ func runWireGuardIntegration(projectRoot string, config TestConfig, label string
 
 	time.Sleep(1500 * time.Millisecond)
 
-	profileWait, err := maybeStartProfiles(projectRoot, config.Name, withSleep, []IntegrationProfileTarget{
+	profileWait, err := maybeStartProfiles(projectRoot, config.Name, result.ConfigName, withSleep, []IntegrationProfileTarget{
 		clientProfileTarget,
 		serverProfileTarget,
 	})
@@ -964,11 +1188,80 @@ func runWireGuardIntegration(projectRoot string, config TestConfig, label string
 	return result
 }
 
-func maybeStartProfiles(projectRoot, configName string, withSleep bool, targets []IntegrationProfileTarget) (func() error, error) {
+func runWireGuardIperfIntegration(projectRoot string, config TestConfig, label string, mode string) TestResult {
+	result := TestResult{
+		ConfigName:    fmt.Sprintf("%s %s", config.Name, label),
+		TotalDuration: config.Duration,
+	}
+
+	env, err := setupWGNamespaces()
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to prepare network namespaces: %v", err)
+		return result
+	}
+	defer env.cleanup()
+
+	tempDir, err := os.MkdirTemp("", "udplex-wg-integration-*")
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to create temp dir: %v", err)
+		return result
+	}
+	defer os.RemoveAll(tempDir)
+
+	clientConfigPath, serverConfigPath, err := writeWGConfigs(projectRoot, tempDir, mode)
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to write WireGuard configs: %v", err)
+		return result
+	}
+
+	serverProfileTarget := newNamespaceProfileTarget("server", env.serverNS)
+	clientProfileTarget := newNamespaceProfileTarget("client", env.clientNS)
+
+	serverProcess := startUDPlexProcessInNamespace(projectRoot, serverConfigPath, env.serverNS, serverProfileTarget)
+	if serverProcess == nil {
+		result.Error = "failed to start WireGuard server UDPlex process"
+		return result
+	}
+	defer stopProcess(serverProcess)
+
+	clientProcess := startUDPlexProcessInNamespace(projectRoot, clientConfigPath, env.clientNS, clientProfileTarget)
+	if clientProcess == nil {
+		result.Error = "failed to start WireGuard client UDPlex process"
+		return result
+	}
+	defer stopProcess(clientProcess)
+
+	time.Sleep(1500 * time.Millisecond)
+
+	profileWait, err := maybeStartProfiles(projectRoot, config.Name, result.ConfigName, false, []IntegrationProfileTarget{
+		clientProfileTarget,
+		serverProfileTarget,
+	})
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to start profiles: %v", err)
+		return result
+	}
+
+	metrics, err := runWGIperfInNamespaces(env.clientNS, env.serverNS, wgInnerServerAddr, config.Duration, false)
+	if profileWait != nil {
+		if waitErr := profileWait(); waitErr != nil && err == nil {
+			err = fmt.Errorf("profile capture failed: %w", waitErr)
+		}
+	}
+	if err != nil {
+		result.Error = fmt.Sprintf("WireGuard iperf3 run failed: %v", err)
+		return result
+	}
+
+	populateResultFromWGIperfMetrics(&result, metrics, config.Duration, false)
+	return result
+}
+
+func maybeStartProfiles(projectRoot, selectionName, artifactName string, withSleep bool, targets []IntegrationProfileTarget) (func() error, error) {
 	if withSleep || integrationSelection.ProfileDir == "" || len(targets) == 0 {
 		return nil, nil
 	}
-	if len(integrationSelection.ProfileTests) > 0 && !integrationConfigSelected(configName, integrationSelection.ProfileTests) {
+	if len(integrationSelection.ProfileTests) > 0 && !integrationConfigSelected(selectionName, integrationSelection.ProfileTests) {
 		return nil, nil
 	}
 
@@ -995,7 +1288,7 @@ func maybeStartProfiles(projectRoot, configName string, withSleep bool, targets 
 
 	tasks := make([]profileTask, 0, len(targets))
 	for _, target := range targets {
-		artifactID := profileArtifactBaseName(configName, target.Name)
+		artifactID := profileArtifactBaseName(artifactName, target.Name)
 		rawPath := filepath.Join(profileDir, artifactID+".prof")
 		profileURL := fmt.Sprintf("http://%s/debug/pprof/profile?seconds=%d", target.PprofAddr, profileSecs)
 
@@ -1031,7 +1324,7 @@ func maybeStartProfiles(projectRoot, configName string, withSleep bool, targets 
 			if err := writePprofArtifacts(binaryPath, task.raw); err != nil {
 				return fmt.Errorf("%s profile post-processing failed: %w", task.name, err)
 			}
-			indexEntries = append(indexEntries, buildProfileArtifactIndexItem(configName, task))
+			indexEntries = append(indexEntries, buildProfileArtifactIndexItem(artifactName, task))
 		}
 		if err := upsertProfileArtifactIndex(profileDir, indexEntries); err != nil {
 			return fmt.Errorf("write profile index: %w", err)
@@ -1421,6 +1714,259 @@ func renderWGConfigFromExample(path string, replacer *strings.Replacer) (string,
 	return replacer.Replace(string(content)), nil
 }
 
+func runWGIperfInNamespaces(clientNS, serverNS, target string, duration time.Duration, withSleep bool) (*WGIperfMetrics, error) {
+	return runIperf(clientNS, serverNS, target, target, wgInnerClientIP, duration, withSleep)
+}
+
+func runIperf(clientNS, serverNS, target, listenAddr, bindHost string, duration time.Duration, withSleep bool) (*WGIperfMetrics, error) {
+	serverCmd, serverStdout, serverStderr, err := startIperfServer(serverNS, listenAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer stopProcess(serverCmd)
+
+	clientResult, err := runIperfClient(clientNS, target, bindHost, duration, withSleep)
+	serverResult, waitErr := waitForIperfServerResult(serverCmd, serverStdout, serverStderr, duration+iperfRunTimeoutPad)
+	if err != nil {
+		if waitErr != nil {
+			return nil, fmt.Errorf("%w (server: %v)", err, waitErr)
+		}
+		return nil, err
+	}
+	if waitErr != nil {
+		return nil, waitErr
+	}
+
+	metrics, err := buildWGIperfMetrics(clientResult, serverResult)
+	if err != nil {
+		return nil, err
+	}
+	return metrics, nil
+}
+
+func startIperfServer(netns, listenAddr string) (*exec.Cmd, *bytes.Buffer, *bytes.Buffer, error) {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("invalid iperf3 listen address %q: %w", listenAddr, err)
+	}
+
+	args := []string{
+		"iperf3",
+		"-s",
+		"-1",
+		"-J",
+		"-4",
+		"-B", host,
+		"-p", port,
+	}
+	var cmd *exec.Cmd
+	if netns != "" {
+		cmd = exec.Command("ip", append([]string{"netns", "exec", netns}, args...)...)
+	} else {
+		cmd = exec.Command(args[0], args[1:]...)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, nil, nil, fmt.Errorf("start iperf3 server: %w", err)
+	}
+	if err := waitForIperfListen(netns, port, wgIperfReadyTimeout); err != nil {
+		stopProcess(cmd)
+		return nil, nil, nil, err
+	}
+	return cmd, &stdout, &stderr, nil
+}
+
+func waitForIperfListen(netns, port string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var cmd *exec.Cmd
+		if netns != "" {
+			cmd = exec.Command("ip", "netns", "exec", netns, "ss", "-ltnH", "sport", "=", ":"+port)
+		} else {
+			cmd = exec.Command("ss", "-ltnH", "sport", "=", ":"+port)
+		}
+		output, err := cmd.Output()
+		if err == nil && strings.TrimSpace(string(output)) != "" {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if netns != "" {
+		return fmt.Errorf("timed out waiting for iperf3 server in namespace %s to listen on tcp/%s", netns, port)
+	}
+	return fmt.Errorf("timed out waiting for iperf3 server to listen on tcp/%s", port)
+}
+
+func runIperfClient(netns, target, bindHost string, duration time.Duration, withSleep bool) (*iperf3JSON, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return nil, fmt.Errorf("invalid iperf3 target %q: %w", target, err)
+	}
+
+	args := []string{
+		"iperf3",
+		"-c", host,
+		"-p", port,
+		"-u",
+		"-4",
+		"-J",
+		"-b", wgIperfBitrate(withSleep),
+		"-l", strconv.Itoa(wgIperfPacketSize),
+		"-t", strconv.Itoa(durationSecondsArg(duration)),
+		"--connect-timeout", "3000",
+		"--udp-counters-64bit",
+	}
+	if bindHost != "" {
+		args = append(args, "-B", bindHost)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), duration+iperfRunTimeoutPad)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if netns != "" {
+		cmd = exec.CommandContext(ctx, "ip", append([]string{"netns", "exec", netns}, args...)...)
+	} else {
+		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("iperf3 client timed out after %s: %s", duration+iperfRunTimeoutPad, strings.TrimSpace(string(output)))
+		}
+		return nil, fmt.Errorf("iperf3 client failed: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	result, err := parseIperf3JSON(output)
+	if err != nil {
+		return nil, fmt.Errorf("parse iperf3 client output: %w", err)
+	}
+	return result, nil
+}
+
+func waitForIperfServerResult(cmd *exec.Cmd, stdout, stderr *bytes.Buffer, timeout time.Duration) (*iperf3JSON, error) {
+	if err := waitForProcessWithTimeout(cmd, timeout); err != nil {
+		return nil, fmt.Errorf("iperf3 server failed: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	result, err := parseIperf3JSON(stdout.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("parse iperf3 server output: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+	return result, nil
+}
+
+func waitForProcessWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
+	if cmd == nil {
+		return fmt.Errorf("process is nil")
+	}
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-waitCh:
+		return err
+	case <-time.After(timeout):
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		err := <-waitCh
+		if err == nil {
+			return fmt.Errorf("process timed out after %s", timeout)
+		}
+		return fmt.Errorf("%w (timeout after %s)", err, timeout)
+	}
+}
+
+func parseIperf3JSON(data []byte) (*iperf3JSON, error) {
+	var result iperf3JSON
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("%w, output=%s", err, strings.TrimSpace(string(data)))
+	}
+	if strings.TrimSpace(result.Error) != "" {
+		return nil, fmt.Errorf(result.Error)
+	}
+	if !strings.EqualFold(result.Start.TestStart.Protocol, "UDP") {
+		return nil, fmt.Errorf("unexpected iperf3 protocol %q", result.Start.TestStart.Protocol)
+	}
+	return &result, nil
+}
+
+func buildWGIperfMetrics(clientResult, serverResult *iperf3JSON) (*WGIperfMetrics, error) {
+	if clientResult == nil || serverResult == nil {
+		return nil, fmt.Errorf("missing iperf3 client/server results")
+	}
+
+	sentPackets := clientResult.End.Sum.Packets
+	if sentPackets <= 0 {
+		sentPackets = serverResult.End.Sum.Packets + serverResult.End.Sum.LostPackets
+	}
+	receivedPackets := serverResult.End.Sum.Packets
+	if receivedPackets <= 0 && sentPackets > 0 {
+		receivedPackets = sentPackets - clientResult.End.Sum.LostPackets
+	}
+
+	bytesSent := clientResult.End.Sum.Bytes
+	bytesReceived := iperf3IntervalBytes(serverResult)
+	packetSize := clientResult.Start.TestStart.Blksize
+	if packetSize <= 0 {
+		packetSize = wgIperfPacketSize
+	}
+	if bytesReceived <= 0 && receivedPackets > 0 {
+		bytesReceived = receivedPackets * int64(packetSize)
+	}
+
+	receiverMbps := serverResult.End.Sum.BitsPerSecond / 1e6
+	if receiverMbps <= 0 && bytesReceived > 0 && serverResult.End.Sum.Seconds > 0 {
+		receiverMbps = (float64(bytesReceived) * 8) / serverResult.End.Sum.Seconds / 1e6
+	}
+	if receiverMbps <= 0 {
+		receiverMbps = clientResult.End.Sum.BitsPerSecond / 1e6
+	}
+
+	return &WGIperfMetrics{
+		Sent:            sentPackets,
+		Received:        receivedPackets,
+		Lost:            clientResult.End.Sum.LostPackets,
+		BytesSent:       bytesSent,
+		BytesReceived:   bytesReceived,
+		PacketSizeBytes: packetSize,
+		JitterMs:        serverResult.End.Sum.JitterMs,
+		ReceiverMbps:    receiverMbps,
+	}, nil
+}
+
+func iperf3IntervalBytes(result *iperf3JSON) int64 {
+	var total int64
+	for _, interval := range result.Intervals {
+		total += interval.Sum.Bytes
+	}
+	return total
+}
+
+func wgIperfBitrate(withSleep bool) string {
+	if withSleep {
+		return wgIperfLossBitrate
+	}
+	return wgIperfPerfBitrate
+}
+
+func durationSecondsArg(duration time.Duration) int {
+	seconds := int(duration / time.Second)
+	if duration%time.Second != 0 {
+		seconds++
+	}
+	if seconds <= 0 {
+		return 1
+	}
+	return seconds
+}
+
 func startWGEchoServerInNamespace(netns, listenAddr string) *exec.Cmd {
 	executable, err := os.Executable()
 	if err != nil {
@@ -1488,6 +2034,48 @@ func populateResultFromWGEchoMetrics(result *TestResult, metrics *WGEchoMetrics,
 	}
 	if result.ErrorPackets > 0 {
 		result.Error = fmt.Sprintf("Error packets detected: %d", result.ErrorPackets)
+		return
+	}
+	if result.Received == 0 {
+		result.Error = "No packets received"
+		return
+	}
+	if withSleep && result.LossRate > MAX_PACKET_LOSS {
+		result.Error = fmt.Sprintf("High packet loss: %.2f%%", result.LossRate*100)
+		return
+	}
+	result.Success = true
+}
+
+func populateResultFromWGIperfMetrics(result *TestResult, metrics *WGIperfMetrics, duration time.Duration, withSleep bool) {
+	result.Sent = metrics.Sent
+	result.Received = metrics.Received
+	result.ErrorPackets = 0
+	result.BytesSent = metrics.BytesSent
+	result.BytesReceived = metrics.BytesReceived
+	result.PacketSizeBytes = metrics.PacketSizeBytes
+	result.AvgLatencyMs = metrics.JitterMs
+	result.P50LatencyMs = 0
+	result.P95LatencyMs = 0
+	result.P99LatencyMs = 0
+	result.MinLatencyMs = 0
+	result.MaxLatencyMs = 0
+
+	if result.Sent > 0 {
+		result.LossRate = float64(result.Sent-result.Received) / float64(result.Sent)
+		result.Throughput = float64(result.Received) / duration.Seconds()
+	}
+	if metrics.ReceiverMbps > 0 {
+		result.Mbps = metrics.ReceiverMbps
+	} else if result.BytesReceived > 0 {
+		result.Mbps = (float64(result.BytesReceived) * 8.0) / duration.Seconds() / 1e6
+	}
+	if result.BytesReceived > 0 {
+		result.TotalMBytes = float64(result.BytesReceived) / 1e6
+	}
+
+	if result.Sent == 0 {
+		result.Error = "No packets sent"
 		return
 	}
 	if result.Received == 0 {

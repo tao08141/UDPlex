@@ -10,7 +10,6 @@ services:
     tag: tcp_server
     listen_addr: 0.0.0.0:5910
     timeout: 120
-    broadcast_mode: false
     detour: [wg_server]
     auth:
       enabled: true
@@ -21,6 +20,8 @@ services:
     tag: wg_server
     interface_name: wgtests0
     mtu: 1420
+    reuse_incoming_detour: false
+    detour: [tcp_server]
     addresses:
       - 10.66.0.1/24
     private_key: 28e0153a3f10376886d3a1de6153cc1c6026ca301ac854104861eafa41b9a067

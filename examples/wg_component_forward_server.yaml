@@ -10,7 +10,7 @@ services:
     tag: line_a
     listen_addr: 0.0.0.0:5900
     timeout: 120
-    broadcast_mode: false
+    reuse_incoming_detour: false
     detour: [wg_server]
     auth:
       enabled: true
@@ -21,7 +21,6 @@ services:
     tag: line_b
     listen_addr: 0.0.0.0:5901
     timeout: 120
-    broadcast_mode: false
     detour: [wg_server]
     auth:
       enabled: true

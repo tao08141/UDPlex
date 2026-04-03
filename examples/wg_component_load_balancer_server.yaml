@@ -14,7 +14,7 @@ services:
       - 10.66.0.1/24
     private_key: 28e0153a3f10376886d3a1de6153cc1c6026ca301ac854104861eafa41b9a067
     listen_port: 51820
-    reuse_incoming_detour: true
+    reuse_incoming_detour: false
     detour: [load_balancer]
     peers:
       - public_key: edfbbb2364ea4d1f8c85034c3358172f6154055e4c9d0bbf86825b03d10ed25c
@@ -25,7 +25,6 @@ services:
     tag: server_listen1
     listen_addr: 0.0.0.0:5900
     timeout: 120
-    broadcast_mode: false
     detour: [wg_server]
     auth:
       enabled: true
@@ -36,7 +35,6 @@ services:
     tag: server_listen2
     listen_addr: 0.0.0.0:5901
     timeout: 120
-    broadcast_mode: false
     detour: [wg_server]
     auth:
       enabled: true

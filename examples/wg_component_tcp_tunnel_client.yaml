@@ -10,6 +10,7 @@ services:
     tag: wg_client
     interface_name: wgtestc0
     mtu: 1420
+    reuse_incoming_detour: false
     addresses:
       - 10.66.0.2/24
     private_key: 787bec983d533e31e64a71c5c079006860cd9e2c6a93b6da69ab4465e8d58179
@@ -26,7 +27,6 @@ services:
     tag: tcp_client
     forwarders:
       - SERVER_IP:5910:2
-    broadcast_mode: false
     detour: [wg_client]
     connection_check_time: 2
     auth:
