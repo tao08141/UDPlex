@@ -127,6 +127,12 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		return
 	}
 
+	var lastDeadlineUpdate time.Time
+	refreshInterval := f.sendTimeout / 4
+	if refreshInterval <= 0 {
+		refreshInterval = f.sendTimeout
+	}
+
 	sendPkt := func(pkt *Packet) bool {
 		if pkt == nil {
 			return true
@@ -136,8 +142,12 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 			return true
 		}
 		if f.sendTimeout > 0 {
-			if err := conn.conn.SetWriteDeadline(time.Now().Add(f.sendTimeout)); err != nil {
-				logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+			now := time.Now()
+			if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= refreshInterval {
+				if err := conn.conn.SetWriteDeadline(now.Add(f.sendTimeout)); err != nil {
+					logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+				}
+				lastDeadlineUpdate = now
 			}
 		}
 		if _, err := conn.conn.Write(pkt.GetData()); err != nil {
@@ -151,6 +161,27 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 	}
 
 	for {
+		// Always drain priority queue first for true priority semantics.
+		select {
+		case <-f.GetStopChannel():
+			f.drainForwardQueue(conn)
+			return
+		case <-conn.closeCh:
+			f.drainForwardQueue(conn)
+			return
+		case pkt, ok := <-conn.sendQueuePrio:
+			if !ok {
+				f.drainForwardQueue(conn)
+				return
+			}
+			if !sendPkt(pkt) {
+				return
+			}
+			continue
+		default:
+		}
+
+		// No priority packets pending, wait on both channels.
 		select {
 		case <-f.GetStopChannel():
 			f.drainForwardQueue(conn)
@@ -617,15 +648,24 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 
 // readFromForwarder handles receiving packets from a forwarder
 func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
+	var lastDeadlineUpdate time.Time
+	deadlineRefresh := f.connectionCheckTime / 4
+	if deadlineRefresh <= 0 {
+		deadlineRefresh = f.connectionCheckTime
+	}
+
 	for conn.IsConnected() {
 		select {
 		case <-f.GetStopChannel():
 			return
 		default:
-			err := conn.conn.SetReadDeadline(time.Now().Add(f.connectionCheckTime))
-			if err != nil {
-				logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.remoteAddr, err)
-				return
+			now := time.Now()
+			if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= deadlineRefresh {
+				if err := conn.conn.SetReadDeadline(now.Add(f.connectionCheckTime)); err != nil {
+					logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.remoteAddr, err)
+					return
+				}
+				lastDeadlineUpdate = now
 			}
 
 			func() {
@@ -637,6 +677,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 				if err != nil {
 					var netErr net.Error
 					if errors.As(err, &netErr) && netErr.Timeout() {
+						lastDeadlineUpdate = time.Time{} // Force refresh on next iteration
 						return
 					}
 

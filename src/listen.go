@@ -75,6 +75,9 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	// Initialize an atomic value with an empty map
 	initialMap := make(map[string]*ListenConn)
 	component.mappingsAtomic.Store(initialMap)
+	if !broadcastMode {
+		component.connIDIndex.Store(make(map[ConnID]*ListenConn))
+	}
 
 	return component
 }
@@ -91,6 +94,7 @@ type ListenComponent struct {
 	conn              net.PacketConn
 	mappings          map[string]*ListenConn
 	mappingsAtomic    atomic.Value
+	connIDIndex       atomic.Value // map[ConnID]*ListenConn for O(1) lookup in non-broadcast mode
 	authManager       *AuthManager
 	sendTimeout       time.Duration
 	recvBufferSize    int
@@ -100,7 +104,37 @@ type ListenComponent struct {
 }
 
 func (l *ListenComponent) runSendLoop() {
+	var lastDeadlineUpdate time.Time
+	refreshInterval := l.sendTimeout / 4
+	if refreshInterval <= 0 {
+		refreshInterval = l.sendTimeout
+	}
+
+	processJob := func(job listenSendJob) {
+		if job.packet == nil {
+			return
+		}
+		if job.addr == nil {
+			job.packet.Release(1)
+			return
+		}
+		if l.sendTimeout > 0 {
+			now := time.Now()
+			if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= refreshInterval {
+				if err := l.conn.SetWriteDeadline(now.Add(l.sendTimeout)); err != nil {
+					logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+				}
+				lastDeadlineUpdate = now
+			}
+		}
+		if _, err := l.conn.WriteTo(job.packet.GetData(), job.addr); err != nil {
+			logger.Infof("%s: Failed to send packet: %v", l.tag, err)
+		}
+		job.packet.Release(1)
+	}
+
 	for {
+		// Drain priority queue first.
 		select {
 		case <-l.GetStopChannel():
 			l.drainSendQueue()
@@ -110,13 +144,28 @@ func (l *ListenComponent) runSendLoop() {
 				l.drainSendQueue()
 				return
 			}
-			l.processSendJob(job)
+			processJob(job)
+			continue
+		default:
+		}
+
+		// No priority packets pending, wait on both.
+		select {
+		case <-l.GetStopChannel():
+			l.drainSendQueue()
+			return
+		case job, ok := <-l.sendQueuePrio:
+			if !ok {
+				l.drainSendQueue()
+				return
+			}
+			processJob(job)
 		case job, ok := <-l.sendQueue:
 			if !ok {
 				l.drainSendQueue()
 				return
 			}
-			l.processSendJob(job)
+			processJob(job)
 		}
 	}
 }
@@ -138,24 +187,6 @@ func (l *ListenComponent) drainSendQueue() {
 	}
 }
 
-func (l *ListenComponent) processSendJob(job listenSendJob) {
-	if job.packet == nil {
-		return
-	}
-	if job.addr == nil {
-		job.packet.Release(1)
-		return
-	}
-	if l.sendTimeout > 0 {
-		if err := l.conn.SetWriteDeadline(time.Now().Add(l.sendTimeout)); err != nil {
-			logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
-		}
-	}
-	if _, err := l.conn.WriteTo(job.packet.GetData(), job.addr); err != nil {
-		logger.Infof("%s: Failed to send packet: %v", l.tag, err)
-	}
-	job.packet.Release(1)
-}
 
 func (l *ListenComponent) queueSend(addr net.Addr, packet *Packet) {
 	l.queueSendWithPriority(addr, packet, false)
@@ -290,9 +321,18 @@ func (l *ListenComponent) performCleanup() {
 }
 
 func (l *ListenComponent) syncMapping() {
-	mappingsTemp := make(map[string]*ListenConn)
+	mappingsTemp := make(map[string]*ListenConn, len(l.mappings))
 	maps.Copy(mappingsTemp, l.mappings)
 	l.mappingsAtomic.Store(mappingsTemp)
+
+	// Rebuild ConnID index for O(1) lookup in non-broadcast mode.
+	if !l.broadcastMode {
+		idx := make(map[ConnID]*ListenConn, len(l.mappings))
+		for _, m := range l.mappings {
+			idx[m.connID] = m
+		}
+		l.connIDIndex.Store(idx)
+	}
 }
 
 func (l *ListenComponent) removeMapping(addrKey string) bool {
@@ -427,6 +467,11 @@ func (l *ListenComponent) handlePackets() {
 	cleanupInterval := l.timeout / 2
 	lastCleanupTime := time.Now()
 	shortDeadline := min(time.Second*1, cleanupInterval)
+	deadlineRefresh := shortDeadline / 4
+	if deadlineRefresh <= 0 {
+		deadlineRefresh = shortDeadline
+	}
+	var lastDeadlineUpdate time.Time
 
 	for {
 		select {
@@ -440,9 +485,12 @@ func (l *ListenComponent) handlePackets() {
 					lastCleanupTime = now
 				}
 
-				// Set read deadline
-				if err := l.conn.SetReadDeadline(time.Now().Add(shortDeadline)); err != nil {
-					logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
+				// Batch read deadline refresh
+				if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= deadlineRefresh {
+					if err := l.conn.SetReadDeadline(now.Add(shortDeadline)); err != nil {
+						logger.Warnf("%s: Error setting read deadline: %v", l.tag, err)
+					}
+					lastDeadlineUpdate = now
 				}
 
 				packet := l.router.GetPacket(l.tag)
@@ -452,6 +500,7 @@ func (l *ListenComponent) handlePackets() {
 
 				var netErr net.Error
 				if errors.As(err, &netErr) && netErr.Timeout() {
+					lastDeadlineUpdate = time.Time{} // Force refresh on next iteration
 					return
 				} else if err != nil {
 					logger.Warnf("%s: Read error: %v", l.tag, err)
@@ -550,10 +599,8 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 		}
 	}
 
-	mappingsSnapshot := l.mappingsAtomic.Load().(map[string]*ListenConn)
-
 	if l.broadcastMode {
-
+		mappingsSnapshot := l.mappingsAtomic.Load().(map[string]*ListenConn)
 		for _, mapping := range mappingsSnapshot {
 			if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
 				continue
@@ -561,20 +608,20 @@ func (l *ListenComponent) HandlePacket(packet *Packet) error {
 
 			l.queueSend(mapping.addr, packet)
 		}
-
 	} else {
 		if packet.ConnID() == (ConnID{}) {
 			logger.Infof("%s: Packet has no connection ID, dropping", l.tag)
 			return nil
 		}
-		for _, mapping := range mappingsSnapshot {
-			if mapping.connID == packet.ConnID() {
-				// Check authentication if required
+
+		// O(1) lookup via ConnID index.
+		idx, _ := l.connIDIndex.Load().(map[ConnID]*ListenConn)
+		if idx != nil {
+			if mapping, ok := idx[packet.ConnID()]; ok {
 				if l.authManager != nil && (mapping.authState == nil || !mapping.authState.IsAuthenticated()) {
 					logger.Debugf("%s: Connection not authenticated, dropping packet", l.tag)
 					return nil
 				}
-
 				l.queueSend(mapping.addr, packet)
 				return nil
 			}

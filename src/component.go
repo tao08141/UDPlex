@@ -1,8 +1,8 @@
 package main
 
 import (
-	"crypto/rand"
 	"encoding/binary"
+	"math/rand/v2"
 	"sync/atomic"
 	"time"
 )
@@ -140,12 +140,8 @@ func (bc *BaseComponent) RemoveConnData(connID ConnID) {
 }
 
 func (l *BaseComponent) generateConnID() ConnID {
-	connID := ConnID{}
-	if _, err := rand.Read(connID[:]); err != nil {
-		logger.Errorf("Failed to generate connection ID: %v", err)
-		return ConnID{}
-	}
-
+	var connID ConnID
+	binary.NativeEndian.PutUint64(connID[:], rand.Uint64())
 	return connID
 }
 

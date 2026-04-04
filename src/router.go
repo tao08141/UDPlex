@@ -140,44 +140,42 @@ func (r *Router) routePacket(packet *Packet, destTags []string) {
 		return
 	}
 
-	lastTargetIndex := -1
-	for i, tag := range destTags {
-		if tag == packet.srcTag {
-			continue
-		}
-		if _, exists := r.components[tag]; !exists {
-			logger.Warnf("Warning: trying to route to non-existing component: %s", tag)
-			continue
-		}
-		lastTargetIndex = i
+	// Single-pass: collect valid targets, then dispatch.
+	// Use a small stack-allocated array to avoid heap allocation for common cases.
+	type dest struct {
+		component Component
+		tag       string
 	}
+	var stackBuf [8]dest
+	targets := stackBuf[:0]
 
-	if lastTargetIndex == -1 {
-		return
-	}
-
-	for i, tag := range destTags {
+	for _, tag := range destTags {
 		if tag == packet.srcTag {
 			continue
 		}
 		c, exists := r.components[tag]
 		if !exists {
+			logger.Warnf("Warning: trying to route to non-existing component: %s", tag)
 			continue
 		}
+		targets = append(targets, dest{component: c, tag: tag})
+	}
 
-		if i != lastTargetIndex {
-			// Create a copy for all but the last destination
-			newPacket := packet.Copy()
-			if err := c.HandlePacket(&newPacket); err != nil {
-				logger.Warnf("Error routing to %s: %v", tag, err)
-			}
-		} else {
-			// Use original packet for the last destination or if only one destination
-			packet.AddRef(1)
-			if err := c.HandlePacket(packet); err != nil {
-				logger.Warnf("Error routing to %s: %v", tag, err)
-			}
+	if len(targets) == 0 {
+		return
+	}
+
+	// Send copies to all but the last target; reuse original for the last.
+	last := len(targets) - 1
+	for i := 0; i < last; i++ {
+		newPacket := packet.Copy()
+		if err := targets[i].component.HandlePacket(&newPacket); err != nil {
+			logger.Warnf("Error routing to %s: %v", targets[i].tag, err)
 		}
+	}
+	packet.AddRef(1)
+	if err := targets[last].component.HandlePacket(packet); err != nil {
+		logger.Warnf("Error routing to %s: %v", targets[last].tag, err)
 	}
 }
 
