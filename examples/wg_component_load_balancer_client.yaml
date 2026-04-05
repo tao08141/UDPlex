@@ -59,3 +59,8 @@ services:
         targets: [redundant_forward1]
       - rule: "(bps > 50000000) && (seq % 2 == 1) && available_redundant_forward2 && available_redundant_forward1"
         targets: [redundant_forward2]
+api:
+  enabled: true
+  port: 8080
+  host: 0.0.0.0
+  h5_files_path: ./h5

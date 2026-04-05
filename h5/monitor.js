@@ -25,9 +25,9 @@ class UDPlexMonitor {
             this.clearHighlights();
         });
 
-        document.getElementById('intervalSelect').addEventListener('change', (e) => {
-            this.refreshInterval = parseInt(e.target.value, 10);
-            document.getElementById('refreshInterval').textContent = `${this.refreshInterval / 1000}秒`;
+        document.getElementById('intervalSelect').addEventListener('change', (event) => {
+            this.refreshInterval = parseInt(event.target.value, 10);
+            document.getElementById('refreshInterval').textContent = `${this.refreshInterval / 1000} 秒`;
             if (this.autoRefresh) {
                 this.startRefreshTimer();
             }
@@ -36,9 +36,9 @@ class UDPlexMonitor {
 
     toggleAutoRefresh() {
         this.autoRefresh = !this.autoRefresh;
-        const btn = document.getElementById('autoRefreshBtn');
-        btn.textContent = this.autoRefresh ? '自动刷新' : '手动刷新';
-        btn.classList.toggle('active', this.autoRefresh);
+        const button = document.getElementById('autoRefreshBtn');
+        button.textContent = this.autoRefresh ? '自动刷新' : '手动刷新';
+        button.classList.toggle('active', this.autoRefresh);
 
         if (this.autoRefresh) {
             this.startRefreshTimer();
@@ -70,18 +70,22 @@ class UDPlexMonitor {
 
     async loadComponentsOnce() {
         try {
-            document.getElementById('connectionStatus').textContent = '加载组件...';
-            // 只加载一次组件列表
+            document.getElementById('connectionStatus').textContent = '加载组件中...';
             const response = await fetch(`${this.baseUrl}/api/components`);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
+
             const components = await response.json();
             this.components.clear();
+            this.detailedData.clear();
+
             for (const component of components) {
                 this.components.set(component.tag, component);
-                await this.fetchComponentDetails(component);
             }
+
+            await this.refreshAllComponentDetails();
+
             this.componentsLoaded = true;
             this.renderComponents();
             this.updateStatus('在线', true);
@@ -98,64 +102,76 @@ class UDPlexMonitor {
             await this.loadComponentsOnce();
             return;
         }
+
         try {
-            document.getElementById('connectionStatus').textContent = '更新中...';
-            // 只刷新详细信息
-            for (const component of this.components.values()) {
-                await this.fetchComponentDetails(component);
-            }
-            // 记录当前高亮tag
-            const highlighted = Array.from(document.querySelectorAll('.component-card.highlight'))
-                .map(card => card.dataset.tag);
+            document.getElementById('connectionStatus').textContent = '刷新中...';
+            const highlightedTags = Array.from(document.querySelectorAll('.component-card.highlight'))
+                .map((card) => card.dataset.tag);
+
+            await this.refreshAllComponentDetails();
             this.renderComponents();
-            // 恢复高亮
-            highlighted.forEach(tag => {
+
+            highlightedTags.forEach((tag) => {
                 const card = document.querySelector(`[data-tag="${tag}"]`);
-                if (card) card.classList.add('highlight');
+                if (card) {
+                    card.classList.add('highlight');
+                }
             });
+
             this.updateStatus('在线', true);
             document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
         } catch (error) {
-            console.error('Error fetching data:', error);
-            this.showError(`连接失败: ${error.message}`);
+            console.error('Error refreshing data:', error);
+            this.showError(`刷新失败: ${error.message}`);
             this.updateStatus('离线', false);
         }
     }
 
+    async refreshAllComponentDetails() {
+        const tasks = [];
+        for (const component of this.components.values()) {
+            tasks.push(this.fetchComponentDetails(component));
+        }
+        await Promise.all(tasks);
+    }
+
+    getDetailEndpoint(component) {
+        switch (component.type) {
+            case 'listen':
+                return `/api/listen/${component.tag}`;
+            case 'forward':
+                return `/api/forward/${component.tag}`;
+            case 'tcp_tunnel_listen':
+                return `/api/tcp_tunnel_listen/${component.tag}`;
+            case 'tcp_tunnel_forward':
+                return `/api/tcp_tunnel_forward/${component.tag}`;
+            case 'load_balancer':
+                return `/api/load_balancer/${component.tag}`;
+            case 'filter':
+                return `/api/filter/${component.tag}`;
+            case 'ip_router':
+                return `/api/ip_router/${component.tag}`;
+            case 'wg':
+                return `/api/wg/${component.tag}`;
+            default:
+                return '';
+        }
+    }
+
     async fetchComponentDetails(component) {
+        const endpoint = this.getDetailEndpoint(component);
+        if (!endpoint) {
+            return;
+        }
+
         try {
-            let endpoint = '';
-            switch (component.type) {
-                case 'listen':
-                    endpoint = `/api/listen/${component.tag}`;
-                    break;
-                case 'forward':
-                    endpoint = `/api/forward/${component.tag}`;
-                    break;
-                case 'tcp_tunnel_listen':
-                    endpoint = `/api/tcp_tunnel_listen/${component.tag}`;
-                    break;
-                case 'tcp_tunnel_forward':
-                    endpoint = `/api/tcp_tunnel_forward/${component.tag}`;
-                    break;
-                case 'load_balancer':
-                    endpoint = `/api/load_balancer/${component.tag}`;
-                    break;
-                case 'filter':
-                    endpoint = `/api/filter/${component.tag}`;
-                    break;
-                case 'ip_router':
-                    endpoint = `/api/ip_router/${component.tag}`;
-                    break;
-                default:
-                    return;
+            const response = await fetch(`${this.baseUrl}${endpoint}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
-            const response = await fetch(`${this.baseUrl}${endpoint}`);
-            if (response.ok) {
-                const data = await response.json();
-                this.detailedData.set(component.tag, data);
-            }
+            const data = await response.json();
+            this.detailedData.set(component.tag, data);
         } catch (error) {
             console.warn(`Failed to fetch details for ${component.tag}:`, error);
         }
@@ -165,35 +181,14 @@ class UDPlexMonitor {
         const container = document.getElementById('componentsContainer');
         container.innerHTML = '';
 
-        for (const [tag, component] of this.components) {
-            const card = this.createComponentCard(component);
-            container.appendChild(card);
+        for (const component of this.components.values()) {
+            container.appendChild(this.createComponentCard(component));
         }
 
         document.getElementById('loadingContainer').style.display = 'none';
         container.style.display = 'grid';
         this.attachGeoButtons();
-    }
-
-    attachGeoButtons() {
-        document.querySelectorAll('.geo-update-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const tag = btn.getAttribute('data-tag');
-                try {
-                    const res = await fetch(`${this.baseUrl}/api/ip_router_action/${tag}?action=geoip_update`, { method: 'POST' });
-                    if (!res.ok) throw new Error(await res.text());
-                    // refresh this component details
-                    const comp = this.components.get(tag);
-                    if (comp) {
-                        await this.fetchComponentDetails(comp);
-                        this.renderComponents();
-                    }
-                } catch (err) {
-                    this.showError(`更新GeoIP失败: ${err.message}`);
-                }
-            });
-        });
+        this.attachDetourClicks();
     }
 
     createComponentCard(component) {
@@ -206,73 +201,36 @@ class UDPlexMonitor {
         });
 
         const detailedData = this.detailedData.get(component.tag);
-
         card.innerHTML = `
             <div class="component-header">
-                <div class="component-tag">${component.tag}</div>
-                <div class="component-type ${component.type}">${component.type}</div>
+                <div class="component-tag">${this.escapeHtml(component.tag)}</div>
+                <div class="component-type ${component.type}">${this.escapeHtml(component.type)}</div>
             </div>
 
             ${this.renderComponentDetails(component, detailedData)}
             ${this.renderDetourSection(component)}
             ${this.renderIPRouterActions(component, detailedData)}
-            ${this.renderConnectionsInfo(detailedData)}
+            ${this.renderConnectionsInfo(component, detailedData)}
         `;
 
         return card;
     }
 
-    // 新增：自适应速率单位
-    formatRate(bitsPerSec) {
-        if (bitsPerSec >= 1024 * 1024 * 1024) {
-            return (bitsPerSec / (1024 * 1024 * 1024)).toFixed(2) + ' Gbps';
-        } else if (bitsPerSec >= 1024 * 1024) {
-            return (bitsPerSec / (1024 * 1024)).toFixed(2) + ' Mbps';
-        } else if (bitsPerSec >= 1024) {
-            return (bitsPerSec / 1024).toFixed(2) + ' Kbps';
-        } else {
-            return bitsPerSec + ' bps';
-        }
-    }
-
     renderComponentDetails(component, detailedData) {
-        // ip_router 专属显示：规则与 GeoIP 状态
         if (component.type === 'ip_router' && detailedData) {
-            const rules = Array.isArray(detailedData.rules) ? detailedData.rules : [];
-            const miss = Array.isArray(detailedData.detour_miss) ? detailedData.detour_miss : (Array.isArray(component.detour_miss) ? component.detour_miss : []);
-            const geo = detailedData.geoip || {};
-            const ruleList = rules.map(r => `${r.match} → [${(r.targets||[]).join(', ')}]`).join('<br/>');
-            const geoRows = [];
-            if (typeof geo.db_loaded === 'boolean') geoRows.push(['GeoIP已加载', geo.db_loaded ? '是' : '否']);
-            if (geo.geoip_url) geoRows.push(['GeoIP URL', geo.geoip_url]);
-            if (geo.geoip_path) geoRows.push(['GeoIP 本地路径', geo.geoip_path]);
-            if (geo.update_interval_sec) geoRows.push(['更新间隔', `${geo.update_interval_sec}s`]);
-            let html = '<div class="component-details">';
-            if (ruleList) {
-                html += `
-                <div class="detail-item"><span class="detail-label">规则:</span>
-                    <span class="detail-value">${ruleList}</span></div>`;
-            }
-            if (miss && miss.length > 0) {
-                html += `
-                <div class=\"detail-item\"><span class=\"detail-label\">未匹配(Miss):</span>
-                    <span class=\"detail-value\">[${miss.join(', ')}]</span></div>`;
-            }
-            geoRows.forEach(([label, value]) => {
-                html += `
-                <div class="detail-item"><span class="detail-label">${label}:</span>
-                    <span class="detail-value">${value}</span></div>`;
-            });
-            html += '</div>';
-            return html;
+            return this.renderIPRouterDetails(component, detailedData);
         }
+
+        if (component.type === 'wg') {
+            return this.renderWireGuardDetails(component, detailedData);
+        }
+
         const details = [];
 
-        // 基本配置信息
         if (component.listen_addr) {
             details.push(['监听地址', component.listen_addr]);
         }
-        if (component.forwarders) {
+        if (Array.isArray(component.forwarders) && component.forwarders.length > 0) {
             details.push(['转发目标', component.forwarders.join(', ')]);
         }
         if (component.interface_name) {
@@ -284,46 +242,206 @@ class UDPlexMonitor {
         if (component.window_size) {
             details.push(['窗口大小', component.window_size]);
         }
-        if (component.use_proto_detectors) {
-            details.push(['协议检测器', component.use_proto_detectors.join(', ')]);
+        if (Array.isArray(component.use_proto_detectors) && component.use_proto_detectors.length > 0) {
+            details.push(['协议探测器', component.use_proto_detectors.join(', ')]);
         }
-
-        // 连接统计信息
-        if (detailedData) {
-            if (detailedData.count !== undefined) {
-                details.push(['连接数', detailedData.count]);
-            }
-            if (detailedData.total_connections !== undefined) {
-                details.push(['总连接数', detailedData.total_connections]);
-            }
-            // 修改：load_balancer速率自适应单位
-            if (detailedData.bits_per_sec !== undefined) {
-                const rate = component.type === 'load_balancer'
-                    ? this.formatRate(detailedData.bits_per_sec)
-                    : ((detailedData.bits_per_sec / 1024).toFixed(2) + ' Kbps');
-                details.push(['流量速率', rate]);
-            }
-            if (detailedData.packets_per_sec !== undefined) {
-                details.push(['包速率', `${detailedData.packets_per_sec} pps`]);
-            }
-            // 平均延迟信息
-            if (detailedData.average_delay_ms !== undefined && detailedData.average_delay_ms > 0) {
-                details.push(['平均延迟', `${detailedData.average_delay_ms.toFixed(2)} ms`]);
-            }
+        if (detailedData && detailedData.count !== undefined) {
+            details.push(['连接数', detailedData.count]);
+        }
+        if (detailedData && detailedData.total_connections !== undefined) {
+            details.push(['总连接数', detailedData.total_connections]);
+        }
+        if (detailedData && detailedData.bits_per_sec !== undefined) {
+            const rate = component.type === 'load_balancer'
+                ? this.formatRate(detailedData.bits_per_sec)
+                : `${(detailedData.bits_per_sec / 1024).toFixed(2)} Kbps`;
+            details.push(['流量速率', rate]);
+        }
+        if (detailedData && detailedData.packets_per_sec !== undefined) {
+            details.push(['包速率', `${detailedData.packets_per_sec} pps`]);
+        }
+        if (detailedData && detailedData.average_delay_ms !== undefined && detailedData.average_delay_ms > 0) {
+            details.push(['平均延迟', `${detailedData.average_delay_ms.toFixed(2)} ms`]);
         }
 
         if (details.length === 0) {
             return '';
         }
 
-        return `
-            <div class="component-details">
-                ${details.map(([label, value]) => `
-                    <div class="detail-item">
-                        <span class="detail-label">${label}:</span>
-                        <span class="detail-value">${value}</span>
+        return this.renderDetailList(details);
+    }
+
+    renderIPRouterDetails(component, detailedData) {
+        const rules = Array.isArray(detailedData.rules) ? detailedData.rules : [];
+        const miss = Array.isArray(detailedData.detour_miss)
+            ? detailedData.detour_miss
+            : (Array.isArray(component.detour_miss) ? component.detour_miss : []);
+        const geo = detailedData.geoip || {};
+
+        const details = [];
+        if (rules.length > 0) {
+            const ruleText = rules
+                .map((rule) => `${rule.match} -> [${(rule.targets || []).join(', ')}]`)
+                .join('<br>');
+            details.push(['规则', ruleText, true]);
+        }
+        if (miss.length > 0) {
+            details.push(['未命中', `[${miss.join(', ')}]`]);
+        }
+        if (typeof geo.db_loaded === 'boolean') {
+            details.push(['GeoIP 已加载', geo.db_loaded ? '是' : '否']);
+        }
+        if (geo.geoip_url) {
+            details.push(['GeoIP URL', geo.geoip_url]);
+        }
+        if (geo.geoip_path) {
+            details.push(['GeoIP 本地路径', geo.geoip_path]);
+        }
+        if (geo.update_interval_sec) {
+            details.push(['更新间隔', `${geo.update_interval_sec}s`]);
+        }
+
+        return this.renderDetailList(details);
+    }
+
+    renderWireGuardDetails(component, detailedData) {
+        const details = [];
+        const peerCount = detailedData?.peer_count ?? component.peer_count;
+        const interfaceName = detailedData?.interface_name ?? component.interface_name;
+        const actualInterfaceName = detailedData?.actual_interface_name;
+        const effectiveRoutes = Array.isArray(detailedData?.effective_routes) ? detailedData.effective_routes : [];
+        const routes = Array.isArray(detailedData?.routes)
+            ? detailedData.routes
+            : (Array.isArray(component.routes) ? component.routes : []);
+        const addresses = Array.isArray(detailedData?.addresses)
+            ? detailedData.addresses
+            : (Array.isArray(component.addresses) ? component.addresses : []);
+
+        if (interfaceName) {
+            details.push(['接口名', interfaceName]);
+        }
+        if (actualInterfaceName && actualInterfaceName !== interfaceName) {
+            details.push(['实际接口名', actualInterfaceName]);
+        }
+        if (typeof detailedData?.is_running === 'boolean') {
+            details.push(['运行状态', detailedData.is_running ? '运行中' : '未运行']);
+        }
+        if (detailedData?.listen_port || component.listen_port) {
+            details.push(['监听端口', detailedData?.listen_port ?? component.listen_port]);
+        }
+        if (detailedData?.mtu) {
+            details.push(['MTU', detailedData.mtu]);
+        }
+        if (Array.isArray(addresses) && addresses.length > 0) {
+            details.push(['地址', addresses.join('<br>'), true]);
+        }
+        if (Array.isArray(routes) && routes.length > 0) {
+            details.push(['静态路由', routes.join('<br>'), true]);
+        }
+        if (effectiveRoutes.length > 0) {
+            details.push(['生效路由', effectiveRoutes.join('<br>'), true]);
+        }
+        if (typeof detailedData?.route_allowed_ips === 'boolean') {
+            details.push(['自动写入 AllowedIPs', detailedData.route_allowed_ips ? '是' : '否']);
+        }
+        if (typeof detailedData?.setup_interface === 'boolean') {
+            details.push(['自动配置接口', detailedData.setup_interface ? '是' : '否']);
+        }
+        if (typeof detailedData?.reuse_incoming_detour === 'boolean') {
+            details.push(['回包复用入站链路', detailedData.reuse_incoming_detour ? '是' : '否']);
+        }
+        if (typeof peerCount === 'number') {
+            details.push(['Peer 数量', peerCount]);
+        }
+        if (typeof detailedData?.send_timeout_ms === 'number') {
+            details.push(['发送超时', `${detailedData.send_timeout_ms} ms`]);
+        }
+        if (typeof detailedData?.rx_queue_length === 'number' && typeof detailedData?.rx_queue_capacity === 'number') {
+            details.push(['接收队列', `${detailedData.rx_queue_length} / ${detailedData.rx_queue_capacity}`]);
+        }
+        if (detailedData?.runtime_error) {
+            details.push(['运行态错误', detailedData.runtime_error]);
+        }
+
+        let html = this.renderDetailList(details);
+        if (Array.isArray(detailedData?.peers) && detailedData.peers.length > 0) {
+            html += this.renderWireGuardPeers(detailedData.peers);
+        }
+        return html;
+    }
+
+    renderWireGuardPeers(peers) {
+        const items = peers.map((peer, index) => {
+            const badges = [];
+            if (peer.runtime_present) {
+                badges.push('<span class="peer-badge success">运行态已识别</span>');
+            } else {
+                badges.push('<span class="peer-badge warn">仅配置态</span>');
+            }
+            if (peer.runtime_only) {
+                badges.push('<span class="peer-badge">仅运行态</span>');
+            }
+            if (peer.has_preshared_key) {
+                badges.push('<span class="peer-badge">PSK</span>');
+            }
+
+            const rows = [];
+            rows.push(['Public Key', this.escapeHtml(peer.public_key || `peer-${index + 1}`)]);
+            if (peer.endpoint) {
+                rows.push(['配置 Endpoint', this.escapeHtml(peer.endpoint)]);
+            }
+            if (peer.runtime_endpoint) {
+                rows.push(['运行 Endpoint', this.escapeHtml(peer.runtime_endpoint)]);
+            }
+            if (Array.isArray(peer.allowed_ips) && peer.allowed_ips.length > 0) {
+                rows.push(['配置 AllowedIPs', this.escapeHtml(peer.allowed_ips.join(', '))]);
+            }
+            if (Array.isArray(peer.runtime_allowed_ips) && peer.runtime_allowed_ips.length > 0) {
+                rows.push(['运行 AllowedIPs', this.escapeHtml(peer.runtime_allowed_ips.join(', '))]);
+            }
+            if (peer.persistent_keepalive) {
+                rows.push(['配置 Keepalive', `${peer.persistent_keepalive}s`]);
+            }
+            if (peer.runtime_persistent_keepalive) {
+                rows.push(['运行 Keepalive', `${peer.runtime_persistent_keepalive}s`]);
+            }
+            if (peer.last_handshake_time) {
+                rows.push(['最近握手', this.formatDateTime(peer.last_handshake_time)]);
+            }
+            if (typeof peer.rx_bytes === 'number') {
+                rows.push(['接收字节', this.formatBytes(peer.rx_bytes)]);
+            }
+            if (typeof peer.tx_bytes === 'number') {
+                rows.push(['发送字节', this.formatBytes(peer.tx_bytes)]);
+            }
+            if (peer.protocol_version) {
+                rows.push(['协议版本', String(peer.protocol_version)]);
+            }
+
+            return `
+                <div class="peer-card">
+                    <div class="peer-header">
+                        <div class="peer-title">Peer ${index + 1}</div>
+                        <div class="peer-badges">${badges.join('')}</div>
                     </div>
-                `).join('')}
+                    <div class="peer-grid">
+                        ${rows.map(([label, value]) => `
+                            <div class="peer-row">
+                                <span class="peer-label">${label}</span>
+                                <span class="peer-value">${value}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="connections-info">
+                <div class="detour-title">WireGuard Peers</div>
+                <div class="peer-list">
+                    ${items}
+                </div>
             </div>
         `;
     }
@@ -333,115 +451,97 @@ class UDPlexMonitor {
             return '';
         }
 
-        let detourHtml = '<div class="detour-section"><div class="detour-title">路由目标 (Detour):</div>';
+        let html = '<div class="detour-section"><div class="detour-title">路由目标 (Detour)</div>';
 
         if (Array.isArray(component.detour)) {
             if (component.detour.length > 0 && typeof component.detour[0] === 'object') {
-                // 负载均衡规则
-                component.detour.forEach(rule => {
-                    detourHtml += `
+                component.detour.forEach((rule) => {
+                    html += `
                         <div class="detour-protocol">
-                            <span class="protocol-label">规则: ${rule.rule}</span>
-                            ${rule.targets.map(target => 
-                                `<span class="detour-tag" data-target="${target}">${target}</span>`
-                            ).join('')}
+                            <span class="protocol-label">规则: ${this.escapeHtml(rule.rule)}</span>
+                            ${(rule.targets || []).map((target) => this.renderDetourTag(target)).join('')}
                         </div>
                     `;
                 });
             } else {
-                // 简单数组
-                detourHtml += component.detour.map(target => 
-                    `<span class="detour-tag" data-target="${target}">${target}</span>`
-                ).join('');
+                html += component.detour.map((target) => this.renderDetourTag(target)).join('');
             }
         } else if (typeof component.detour === 'object') {
-            // 协议映射对象
             Object.entries(component.detour).forEach(([protocol, targets]) => {
-                detourHtml += `
+                html += `
                     <div class="detour-protocol">
-                        <span class="protocol-label">${protocol}:</span>
-                        ${targets.map(target => 
-                            `<span class="detour-tag" data-target="${target}">${target}</span>`
-                        ).join('')}
+                        <span class="protocol-label">${this.escapeHtml(protocol)}:</span>
+                        ${(targets || []).map((target) => this.renderDetourTag(target)).join('')}
                     </div>
                 `;
             });
         }
 
-        // detour_miss（优先展示详情接口中的 detour_miss，其次回退到组件配置）
-        const missFromDetail = (this.detailedData.get(component.tag) || {}).detour_miss;
-        const missArray = Array.isArray(missFromDetail) ? missFromDetail : (component.detour_miss || []);
-        if (missArray && missArray.length > 0) {
-            detourHtml += `
+        const detail = this.detailedData.get(component.tag) || {};
+        const missArray = Array.isArray(detail.detour_miss)
+            ? detail.detour_miss
+            : (Array.isArray(component.detour_miss) ? component.detour_miss : []);
+        if (missArray.length > 0) {
+            html += `
                 <div class="detour-protocol">
-                    <span class="protocol-label">未匹配:</span>
-                    ${missArray.map(target => 
-                        `<span class="detour-tag" data-target="${target}">${target}</span>`
-                    ).join('')}
+                    <span class="protocol-label">未命中:</span>
+                    ${missArray.map((target) => this.renderDetourTag(target)).join('')}
                 </div>
             `;
         }
 
-        detourHtml += '</div>';
-        return detourHtml;
+        html += '</div>';
+        return html;
     }
 
     renderIPRouterActions(component, detailedData) {
-        if (component.type !== 'ip_router') return '';
-        const geo = detailedData && detailedData.geoip || {};
+        if (component.type !== 'ip_router') {
+            return '';
+        }
+
+        const geo = detailedData?.geoip || {};
         const disabled = geo.geoip_url ? '' : 'disabled';
         return `
             <div class="detour-section">
-                <div class="detour-title">IP Router 操作:</div>
-                <button class="btn geo-update-btn" data-tag="${component.tag}" ${disabled}>更新GeoIP数据库</button>
+                <div class="detour-title">IP Router 操作</div>
+                <button class="btn geo-update-btn" data-tag="${this.escapeHtml(component.tag)}" ${disabled}>更新 GeoIP 数据库</button>
             </div>
         `;
     }
 
-    renderConnectionsInfo(detailedData) {
-        if (!detailedData || (!detailedData.connections && !detailedData.pools)) {
+    renderConnectionsInfo(component, detailedData) {
+        if (!detailedData || component.type === 'wg') {
             return '';
         }
 
-        let html = '<div class="connections-info"><div class="detour-title">连接信息:</div>';
+        if (!Array.isArray(detailedData.connections) && !Array.isArray(detailedData.pools)) {
+            return '';
+        }
 
-        if (detailedData.connections) {
-            detailedData.connections.forEach(conn => {
-                const status = conn.is_connected !== undefined ? 
-                    (conn.is_connected ? 'online' : 'offline') : 
-                    (conn.is_authenticated ? 'online' : 'warning');
-                
-                html += `
-                    <div class="connection-item">
-                        <span class="status-indicator status-${status}"></span>
-                        ${conn.address || conn.remote_addr}
-                        ${conn.last_active ? ` (${new Date(conn.last_active).toLocaleTimeString()})` : ''}
-                    </div>
-                `;
+        let html = '<div class="connections-info"><div class="detour-title">连接信息</div>';
+
+        if (Array.isArray(detailedData.connections)) {
+            detailedData.connections.forEach((connection) => {
+                html += this.renderConnectionRow(connection, false);
             });
         }
 
-        if (detailedData.pools) {
-            detailedData.pools.forEach(pool => {
+        if (Array.isArray(detailedData.pools)) {
+            detailedData.pools.forEach((pool) => {
                 html += `
                     <div class="connection-item">
-                        <strong>池 ${pool.pool_id}:</strong> ${pool.conn_count} 连接
-                        ${pool.target_count ? ` (目标: ${pool.target_count})` : ''}
+                        <div class="connection-main">
+                            <strong>池 ${this.escapeHtml(pool.pool_id || '-')}</strong>
+                            <span>${pool.conn_count || 0} 个连接</span>
+                            ${pool.target_count ? `<span>目标数: ${pool.target_count}</span>` : ''}
+                            ${pool.target_spec ? `<span>目标: ${this.escapeHtml(pool.target_spec)}</span>` : ''}
+                            ${pool.interface_name ? `<span>网卡: ${this.escapeHtml(pool.interface_name)}</span>` : ''}
+                        </div>
                     </div>
                 `;
-                // 展示该池的所有连接
-                if (pool.connections && pool.connections.length > 0) {
-                    pool.connections.forEach(conn => {
-                        const status = conn.is_connected !== undefined
-                            ? (conn.is_connected ? 'online' : 'offline')
-                            : (conn.is_authenticated ? 'online' : 'warning');
-                        html += `
-                            <div class="connection-item" style="margin-left: 24px;">
-                                <span class="status-indicator status-${status}"></span>
-                                ${conn.address || conn.remote_addr}
-                                ${conn.last_active ? ` (${new Date(conn.last_active).toLocaleTimeString()})` : ''}
-                            </div>
-                        `;
+                if (Array.isArray(pool.connections)) {
+                    pool.connections.forEach((connection) => {
+                        html += this.renderConnectionRow(connection, true);
                     });
                 }
             });
@@ -451,63 +551,87 @@ class UDPlexMonitor {
         return html;
     }
 
-    highlightDetourTargets(component) {
-        this.clearHighlights();
-
-        const targets = new Set();
-
-        // 1) ip_router：将规则里的 targets + detour_miss 一并高亮
-        if (component.type === 'ip_router') {
-            const detailed = this.detailedData.get(component.tag) || {};
-            const rules = Array.isArray(detailed.rules) ? detailed.rules : [];
-            rules.forEach(r => {
-                const tgs = Array.isArray(r.targets) ? r.targets : [];
-                tgs.forEach(t => targets.add(t));
-            });
-            if (Array.isArray(component.detour_miss)) {
-                component.detour_miss.forEach(t => targets.add(t));
-            }
+    renderConnectionRow(connection, indented) {
+        const status = connection.is_connected !== undefined
+            ? (connection.is_connected ? 'online' : 'offline')
+            : (connection.is_authenticated ? 'online' : 'warning');
+        const address = connection.address || connection.remote_addr || '-';
+        const lastActive = connection.last_active
+            ? `最后活跃: ${this.formatDateTime(connection.last_active)}`
+            : '';
+        const extraParts = [];
+        if (connection.target_spec) {
+            extraParts.push(`目标: ${this.escapeHtml(connection.target_spec)}`);
+        }
+        if (connection.interface_name) {
+            extraParts.push(`网卡: ${this.escapeHtml(connection.interface_name)}`);
+        }
+        if (typeof connection.heartbeat_miss === 'number') {
+            extraParts.push(`心跳丢失: ${connection.heartbeat_miss}`);
         }
 
-        // 2) 通用 detour 高亮逻辑（保留原有，兼容其他组件类型）
-        if (component.detour) {
-            if (Array.isArray(component.detour)) {
-                if (component.detour.length > 0 && typeof component.detour[0] === 'object') {
-                    // 负载均衡规则
-                    component.detour.forEach(rule => {
-                        rule.targets.forEach(target => targets.add(target));
+        return `
+            <div class="connection-item ${indented ? 'connection-item-nested' : ''}">
+                <div class="connection-main">
+                    <span><span class="status-indicator status-${status}"></span>${this.escapeHtml(address)}</span>
+                    ${lastActive ? `<span>${this.escapeHtml(lastActive)}</span>` : ''}
+                </div>
+                ${extraParts.length > 0 ? `<div class="connection-meta">${extraParts.join(' | ')}</div>` : ''}
+            </div>
+        `;
+    }
+
+    renderDetailList(details) {
+        if (!Array.isArray(details) || details.length === 0) {
+            return '';
+        }
+
+        return `
+            <div class="component-details">
+                ${details.map(([label, value, allowHTML]) => `
+                    <div class="detail-item">
+                        <span class="detail-label">${this.escapeHtml(label)}:</span>
+                        <span class="detail-value">${allowHTML ? value : this.escapeHtml(String(value))}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    renderDetourTag(target) {
+        return `<span class="detour-tag" data-target="${this.escapeHtml(target)}">${this.escapeHtml(target)}</span>`;
+    }
+
+    attachGeoButtons() {
+        document.querySelectorAll('.geo-update-btn').forEach((button) => {
+            button.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                const tag = button.getAttribute('data-tag');
+                try {
+                    const response = await fetch(`${this.baseUrl}/api/ip_router_action/${tag}?action=geoip_update`, {
+                        method: 'POST'
                     });
-                } else {
-                    // 简单数组
-                    component.detour.forEach(target => targets.add(target));
+                    if (!response.ok) {
+                        throw new Error(await response.text());
+                    }
+
+                    const component = this.components.get(tag);
+                    if (component) {
+                        await this.fetchComponentDetails(component);
+                        this.renderComponents();
+                    }
+                } catch (error) {
+                    this.showError(`更新 GeoIP 失败: ${error.message}`);
                 }
-            } else if (typeof component.detour === 'object') {
-                // 协议映射对象
-                Object.values(component.detour).forEach(targetList => {
-                    targetList.forEach(target => targets.add(target));
-                });
-            }
-        }
-
-        // detour_miss（非 ip_router 的场景依然适用）
-        if (component.type !== 'ip_router' && component.detour_miss) {
-            component.detour_miss.forEach(target => targets.add(target));
-        }
-
-        // 高亮目标组件
-        targets.forEach(target => {
-            const targetCard = document.querySelector(`[data-tag="${target}"]`);
-            if (targetCard) {
-                targetCard.classList.add('highlight');
-            }
+            });
         });
+    }
 
-        // 添加detour标签点击事件
-        const detourTags = document.querySelectorAll('.detour-tag');
-        detourTags.forEach(tag => {
-            tag.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const targetTag = tag.dataset.target;
+    attachDetourClicks() {
+        document.querySelectorAll('.detour-tag').forEach((tagElement) => {
+            tagElement.addEventListener('click', (event) => {
+                event.stopPropagation();
+                const targetTag = tagElement.dataset.target;
                 const targetComponent = this.components.get(targetTag);
                 if (targetComponent) {
                     this.highlightDetourTargets(targetComponent);
@@ -516,9 +640,52 @@ class UDPlexMonitor {
         });
     }
 
+    highlightDetourTargets(component) {
+        this.clearHighlights();
+        const targets = new Set();
+
+        if (component.type === 'ip_router') {
+            const detailed = this.detailedData.get(component.tag) || {};
+            const rules = Array.isArray(detailed.rules) ? detailed.rules : [];
+            rules.forEach((rule) => {
+                const routeTargets = Array.isArray(rule.targets) ? rule.targets : [];
+                routeTargets.forEach((target) => targets.add(target));
+            });
+            if (Array.isArray(component.detour_miss)) {
+                component.detour_miss.forEach((target) => targets.add(target));
+            }
+        }
+
+        if (component.detour) {
+            if (Array.isArray(component.detour)) {
+                if (component.detour.length > 0 && typeof component.detour[0] === 'object') {
+                    component.detour.forEach((rule) => {
+                        (rule.targets || []).forEach((target) => targets.add(target));
+                    });
+                } else {
+                    component.detour.forEach((target) => targets.add(target));
+                }
+            } else if (typeof component.detour === 'object') {
+                Object.values(component.detour).forEach((targetList) => {
+                    (targetList || []).forEach((target) => targets.add(target));
+                });
+            }
+        }
+
+        if (component.type !== 'ip_router' && Array.isArray(component.detour_miss)) {
+            component.detour_miss.forEach((target) => targets.add(target));
+        }
+
+        targets.forEach((target) => {
+            const targetCard = document.querySelector(`[data-tag="${target}"]`);
+            if (targetCard) {
+                targetCard.classList.add('highlight');
+            }
+        });
+    }
+
     clearHighlights() {
-        const highlighted = document.querySelectorAll('.component-card.highlight');
-        highlighted.forEach(card => {
+        document.querySelectorAll('.component-card.highlight').forEach((card) => {
             card.classList.remove('highlight');
         });
     }
@@ -531,15 +698,57 @@ class UDPlexMonitor {
 
     showError(message) {
         const errorContainer = document.getElementById('errorContainer');
-        errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
-        
+        errorContainer.innerHTML = `<div class="error-message">${this.escapeHtml(message)}</div>`;
+
         setTimeout(() => {
             errorContainer.innerHTML = '';
         }, 10000);
     }
+
+    formatRate(bitsPerSec) {
+        if (bitsPerSec >= 1024 * 1024 * 1024) {
+            return `${(bitsPerSec / (1024 * 1024 * 1024)).toFixed(2)} Gbps`;
+        }
+        if (bitsPerSec >= 1024 * 1024) {
+            return `${(bitsPerSec / (1024 * 1024)).toFixed(2)} Mbps`;
+        }
+        if (bitsPerSec >= 1024) {
+            return `${(bitsPerSec / 1024).toFixed(2)} Kbps`;
+        }
+        return `${bitsPerSec} bps`;
+    }
+
+    formatBytes(bytes) {
+        if (bytes >= 1024 * 1024 * 1024) {
+            return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+        }
+        if (bytes >= 1024 * 1024) {
+            return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+        }
+        if (bytes >= 1024) {
+            return `${(bytes / 1024).toFixed(2)} KB`;
+        }
+        return `${bytes} B`;
+    }
+
+    formatDateTime(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+        return date.toLocaleString();
+    }
+
+    escapeHtml(value) {
+        return String(value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
 }
 
-// 初始化监控系统
 document.addEventListener('DOMContentLoaded', () => {
     new UDPlexMonitor();
 });
