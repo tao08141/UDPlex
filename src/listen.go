@@ -17,11 +17,11 @@ type listenSendJob struct {
 // ListenConn represents a logical UDP "connection" from a remote address
 // It encapsulates per-peer state like authentication and activity timestamps.
 type ListenConn struct {
-	addr              net.Addr
-	lastActive        time.Time
-	authState         *AuthState // Authentication state for this connection
-	connID            ConnID     // Unique connection identifier
-	lastHeartbeatSent time.Time  // Last heartbeat sent time
+	addr       net.Addr
+	lastActive time.Time
+	authState  *AuthState // Authentication state for this connection
+	connID     ConnID     // Unique connection identifier
+	heartbeatTracker
 }
 
 // Address returns the remote address associated with this logical connection.
@@ -187,7 +187,6 @@ func (l *ListenComponent) drainSendQueue() {
 	}
 }
 
-
 func (l *ListenComponent) queueSend(addr net.Addr, packet *Packet) {
 	l.queueSendWithPriority(addr, packet, false)
 }
@@ -340,6 +339,7 @@ func (l *ListenComponent) removeMapping(addrKey string) bool {
 	if !exists {
 		return false
 	}
+	mapping.MarkPendingHeartbeatLost()
 	delete(l.mappings, addrKey)
 	l.RemoveConnData(mapping.connID)
 	return true
@@ -422,6 +422,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		if mapping, exists := l.mappings[addrKey]; exists {
 			mapping.lastActive = time.Now()
 			if mapping.authState != nil {
+				mapping.MarkPendingHeartbeatLost()
 				// Echo's heartbeat back
 				pkt := l.router.GetPacket(l.tag)
 				responseLen := CreateHeartbeat(pkt.BufAtOffset())
@@ -433,7 +434,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 				}
 				l.queueSendHigh(addr, &pkt)
 				pkt.Release(1)
-				mapping.lastHeartbeatSent = time.Now()
+				mapping.NoteHeartbeatSent()
 			}
 		}
 
@@ -442,14 +443,15 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 		if mapping, exists := l.mappings[addrKey]; exists {
 			mapping.lastActive = time.Now()
 			if mapping.authState != nil {
+				mapping.MarkHeartbeatResponse()
 				// If this is a response to our heartbeat, measure delay
-				if !mapping.lastHeartbeatSent.IsZero() {
-					delay := time.Since(mapping.lastHeartbeatSent)
+				if lastHeartbeatSent := mapping.LastHeartbeatSent(); !lastHeartbeatSent.IsZero() {
+					delay := time.Since(lastHeartbeatSent)
 					if l.authManager != nil {
 						l.authManager.RecordDelayMeasurement(delay)
 					}
 				}
-				mapping.lastHeartbeatSent = time.Time{} // Reset last heartbeat sent
+				mapping.ClearLastHeartbeatSent()
 			}
 		}
 

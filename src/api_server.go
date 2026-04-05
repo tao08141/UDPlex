@@ -435,6 +435,15 @@ func parseIntOrZero(value string) int {
 	return parsed
 }
 
+func addHeartbeatStats(result map[string]interface{}, sent uint64, lost uint64, lossRate float64, lastHeartbeatSent time.Time) {
+	result["heartbeat_sent"] = sent
+	result["heartbeat_lost"] = lost
+	result["heartbeat_loss_rate"] = lossRate
+	if !lastHeartbeatSent.IsZero() {
+		result["last_heartbeat"] = lastHeartbeatSent.Format(time.RFC3339)
+	}
+}
+
 // getComponentTypeFromConfig retrieves the component type from router config
 func (a *APIServer) getComponentTypeFromConfig(tag string) string {
 	// Get the component type from router's configuration
@@ -490,6 +499,8 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 			"last_active":   mapping.lastActive.Format(time.RFC3339),
 			"connection_id": fmt.Sprintf("%x", mapping.connID),
 		}
+		sent, lost, lossRate := mapping.HeartbeatStats()
+		addHeartbeatStats(connection, sent, lost, lossRate, mapping.LastHeartbeatSent())
 
 		// Only include is_authenticated if auth is configured
 		if hasAuth {
@@ -564,9 +575,9 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 			"is_connected":     atomic.LoadInt32(&conn.isConnected) == 1,
 			"last_reconnect":   conn.lastReconnectAttempt.Format(time.RFC3339),
 			"auth_retry_count": conn.authRetryCount,
-			"heartbeat_miss":   conn.heartbeatMissCount,
-			"last_heartbeat":   conn.lastHeartbeatSent.Format(time.RFC3339),
 		}
+		sent, lost, lossRate := conn.HeartbeatStats()
+		addHeartbeatStats(connection, sent, lost, lossRate, conn.LastHeartbeatSent())
 
 		// Only include is_authenticated if auth is configured
 		if hasAuth {
@@ -643,13 +654,14 @@ func (a *APIServer) handleGetTcpTunnelListenConnections(w http.ResponseWriter, r
 			connections := make([]map[string]interface{}, 0, len(conns))
 			for _, conn := range conns {
 				if conn != nil {
-					connections = append(connections, map[string]interface{}{
+					connection := map[string]interface{}{
 						"remote_addr":      conn.conn.RemoteAddr().String(),
 						"is_authenticated": conn.authState != nil && conn.authState.IsAuthenticated(),
 						"last_active":      conn.lastActive.Format(time.RFC3339),
-						"heartbeat_miss":   conn.heartbeatMissCount,
-						"last_heartbeat":   conn.lastHeartbeatSent.Format(time.RFC3339),
-					})
+					}
+					sent, lost, lossRate := conn.HeartbeatStats()
+					addHeartbeatStats(connection, sent, lost, lossRate, conn.LastHeartbeatSent())
+					connections = append(connections, connection)
 				}
 			}
 
@@ -722,13 +734,14 @@ func (a *APIServer) handleGetTcpTunnelForwardConnections(w http.ResponseWriter, 
 		connections := make([]map[string]interface{}, 0, len(conns))
 		for _, conn := range conns {
 			if conn != nil {
-				connections = append(connections, map[string]interface{}{
+				connection := map[string]interface{}{
 					"remote_addr":      conn.conn.RemoteAddr().String(),
 					"is_authenticated": conn.authState != nil && conn.authState.IsAuthenticated(),
 					"last_active":      conn.lastActive.Format(time.RFC3339),
-					"heartbeat_miss":   conn.heartbeatMissCount,
-					"last_heartbeat":   conn.lastHeartbeatSent.Format(time.RFC3339),
-				})
+				}
+				sent, lost, lossRate := conn.HeartbeatStats()
+				addHeartbeatStats(connection, sent, lost, lossRate, conn.LastHeartbeatSent())
+				connections = append(connections, connection)
 			}
 		}
 

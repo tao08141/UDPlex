@@ -331,11 +331,17 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 		return
 	}
 
+	consecutiveLoss := c.MarkPendingHeartbeatLost()
+	if consecutiveLoss >= 5 {
+		logger.Warnf("%s: Heartbeat timeout for %s, disconnecting", f.tag, c.conn.RemoteAddr())
+		f.Disconnect(c)
+		return
+	}
+
 	packet := f.router.GetPacket(f.GetTag())
 	defer packet.Release(1)
 
 	length := CreateHeartbeat(packet.BufAtOffset())
-	c.lastHeartbeatSent = time.Now()
 	packet.SetLength(length)
 
 	err := c.WriteHighPriority(&packet)
@@ -343,14 +349,7 @@ func (f *TcpTunnelForwardComponent) sendHeartbeat(c *TcpTunnelConn) {
 		logger.Warnf("%s: Failed to send heartbeat: %v", f.tag, err)
 		return
 	}
-
-	c.heartbeatMissCount++
-	if c.heartbeatMissCount >= 5 {
-		logger.Warnf("%s: Heartbeat missed %d times, disconnecting", f.tag, c.heartbeatMissCount)
-		f.Disconnect(c)
-		return
-	}
-
+	c.NoteHeartbeatSent()
 }
 
 func (f *TcpTunnelForwardComponent) connectionChecker() {

@@ -147,8 +147,7 @@ type TcpTunnelConn struct {
 	authState  *AuthState
 	lastActive time.Time
 
-	heartbeatMissCount int
-	lastHeartbeatSent  time.Time
+	heartbeatTracker
 
 	writeQueue     chan *Packet
 	writePrio      chan *Packet
@@ -206,6 +205,7 @@ func (c *TcpTunnelConn) ConnID() ConnID {
 
 func (c *TcpTunnelConn) Close() {
 	c.closeOnce.Do(func() {
+		c.MarkPendingHeartbeatLost()
 		close(c.closed)
 		if c.conn != nil {
 			_ = c.conn.Close()
@@ -647,6 +647,7 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 					case MsgTypeHeartbeat:
 						switch mode {
 						case TcpTunnelListenMode:
+							c.MarkPendingHeartbeatLost()
 							// Echo heartbeat back
 							packet := router.GetPacket(tag)
 							length := CreateHeartbeat(packet.BufAtOffset())
@@ -655,15 +656,15 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							if err != nil {
 								logger.Infof("%s: %s Failed to write heartbeat packet: %v", tag, remoteAddr, err)
 							}
-							c.lastHeartbeatSent = time.Now()
+							c.NoteHeartbeatSent()
 							packet.Release(1)
 
 						case TcpTunnelForwardMode:
-							c.heartbeatMissCount = 0
+							c.MarkHeartbeatResponse()
 
 							// If this is the second heartbeat (response to our response), measure delay
-							if !c.lastHeartbeatSent.IsZero() {
-								delay := time.Since(c.lastHeartbeatSent)
+							if lastHeartbeatSent := c.LastHeartbeatSent(); !lastHeartbeatSent.IsZero() {
+								delay := time.Since(lastHeartbeatSent)
 								if authManager != nil {
 									authManager.RecordDelayMeasurement(delay)
 								}
@@ -679,12 +680,13 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 							packet.Release(1)
 						}
 					case MsgTypeHeartbeatAck:
-						if !c.lastHeartbeatSent.IsZero() {
-							delay := time.Since(c.lastHeartbeatSent)
+						c.MarkHeartbeatResponse()
+						if lastHeartbeatSent := c.LastHeartbeatSent(); !lastHeartbeatSent.IsZero() {
+							delay := time.Since(lastHeartbeatSent)
 							if authManager != nil {
 								authManager.RecordDelayMeasurement(delay)
 							}
-							c.lastHeartbeatSent = time.Time{} // Reset after processing
+							c.ClearLastHeartbeatSent()
 						}
 					case MsgTypeDisconnect:
 						logger.Infof("%s: %s Client requested disconnect", tag, remoteAddr)

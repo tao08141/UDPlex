@@ -20,15 +20,14 @@ type ForwardConn struct {
 	lastReconnectAttempt time.Time
 
 	// Authentication state
-	authState          *AuthState
-	authRetryCount     int
-	heartbeatMissCount int
-	lastHeartbeatSent  time.Time
-	poolID             PoolID
-	sendQueue          chan *Packet
-	sendQueuePrio      chan *Packet
-	closeCh            chan struct{}
-	closed             atomic.Bool
+	authState      *AuthState
+	authRetryCount int
+	heartbeatTracker
+	poolID        PoolID
+	sendQueue     chan *Packet
+	sendQueuePrio chan *Packet
+	closeCh       chan struct{}
+	closed        atomic.Bool
 
 	// Guards against concurrent reconnect attempts and auth goroutine pile-up.
 	reconnecting   atomic.Int32
@@ -55,17 +54,9 @@ func (c *ForwardConn) IsAuthenticated() bool {
 	return c.authState != nil && c.authState.IsAuthenticated()
 }
 
-// NoteHeartbeatSent records the time a heartbeat was sent
-func (c *ForwardConn) NoteHeartbeatSent() { c.lastHeartbeatSent = time.Now() }
-
-// ResetHeartbeatMiss resets the missed heartbeat counter
-func (c *ForwardConn) ResetHeartbeatMiss() { c.heartbeatMissCount = 0 }
-
-// IncHeartbeatMiss increments the missed heartbeat counter
-func (c *ForwardConn) IncHeartbeatMiss() { c.heartbeatMissCount++ }
-
 // SetDisconnected marks the connection as disconnected and closes the socket if present
 func (c *ForwardConn) SetDisconnected() {
+	c.MarkPendingHeartbeatLost()
 	atomic.StoreInt32(&c.isConnected, 0)
 	if c.conn != nil {
 		_ = c.conn.Close()
@@ -470,7 +461,7 @@ func (f *ForwardComponent) handleConnectionMaintenance(conn *ForwardConn) {
 			go f.sendAuthChallenge(conn)
 		} else {
 			// Authenticated - send heartbeat if needed
-			if now.Sub(conn.lastHeartbeatSent) >= f.authManager.heartbeatInterval {
+			if now.Sub(conn.LastHeartbeatSent()) >= f.authManager.heartbeatInterval {
 				go f.sendHeartbeat(conn)
 			}
 		}
@@ -525,26 +516,25 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 		return
 	}
 
-	conn.NoteHeartbeatSent()
+	consecutiveLoss := conn.MarkPendingHeartbeatLost()
+	if consecutiveLoss >= 2 {
+		f.sendAuthChallenge(conn)
+	}
+	if consecutiveLoss >= 5 {
+		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.RouteLabel())
+		conn.SetDisconnected()
+		conn.authState.SetAuthenticated(0)
+		conn.ResetHeartbeatStats()
+		return
+	}
+
 	pkt := f.router.GetPacket(f.tag)
 	defer pkt.Release(1)
 
 	length := CreateHeartbeat(pkt.BufAtOffset())
 	pkt.SetLength(length)
 	f.enqueuePacketHigh(conn, &pkt)
-
-	if conn.heartbeatMissCount >= 2 {
-		f.sendAuthChallenge(conn)
-	}
-
-	// Increment miss count - will be reset when response received
-	conn.IncHeartbeatMiss()
-	if conn.heartbeatMissCount >= 5 {
-		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.RouteLabel())
-		conn.SetDisconnected()
-		conn.authState.SetAuthenticated(0)
-		conn.ResetHeartbeatMiss()
-	}
+	conn.NoteHeartbeatSent()
 }
 
 // setupForwarder creates a new connection to a forwarder
@@ -654,7 +644,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 
 	conn.SetConnected(newConn)
 	conn.authRetryCount = 0
-	conn.heartbeatMissCount = 0
+	conn.ResetHeartbeatStats()
 	conn.authState.SetAuthenticated(0)
 
 	conn.signalClose()
@@ -779,12 +769,11 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 		logger.Infof("%s: Authentication successful for %s", f.tag, conn.RouteLabel())
 
 	case MsgTypeHeartbeat:
-		// Reset heartbeat miss count
-		conn.ResetHeartbeatMiss()
+		conn.MarkHeartbeatResponse()
 
 		// If this is the second heartbeat (response to our response), measure delay
-		if !conn.lastHeartbeatSent.IsZero() {
-			delay := time.Since(conn.lastHeartbeatSent)
+		if lastHeartbeatSent := conn.LastHeartbeatSent(); !lastHeartbeatSent.IsZero() {
+			delay := time.Since(lastHeartbeatSent)
 			if f.authManager != nil {
 				f.authManager.RecordDelayMeasurement(delay)
 				logger.Debugf("%s: Recorded delay measurement: %v, average: %v", f.tag, delay, f.authManager.GetAverageDelay())

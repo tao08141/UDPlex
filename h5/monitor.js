@@ -566,8 +566,8 @@ class UDPlexMonitor {
         if (connection.interface_name) {
             extraParts.push(`网卡: ${this.escapeHtml(connection.interface_name)}`);
         }
-        if (typeof connection.heartbeat_miss === 'number') {
-            extraParts.push(`心跳丢失: ${connection.heartbeat_miss}`);
+        if (typeof connection.heartbeat_loss_rate === 'number') {
+            extraParts.push(`丢包率: ${connection.heartbeat_loss_rate.toFixed(2)}%`);
         }
 
         return `
