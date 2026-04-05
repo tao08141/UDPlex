@@ -13,7 +13,9 @@ import (
 type ForwardConn struct {
 	conn                 *net.UDPConn
 	isConnected          int32 // Atomic flag: 0=disconnected, 1=connected
+	targetSpec           string
 	remoteAddr           string
+	interfaceName        string
 	udpAddr              *net.UDPAddr
 	lastReconnectAttempt time.Time
 
@@ -35,6 +37,10 @@ type ForwardConn struct {
 
 // Address returns the remote address string for this forward connection
 func (c *ForwardConn) Address() string { return c.remoteAddr }
+
+func (c *ForwardConn) RouteLabel() string {
+	return formatOutboundRoute(c.remoteAddr, c.interfaceName)
+}
 
 // UDPAddr returns the UDP address for this forward connection
 func (c *ForwardConn) UDPAddr() *net.UDPAddr { return c.udpAddr }
@@ -89,6 +95,7 @@ type ForwardComponent struct {
 	BaseComponent
 
 	forwarders          []string
+	forwarderSpecs      []outboundForwarderSpec
 	reconnectInterval   time.Duration
 	connectionCheckTime time.Duration
 	detour              []string
@@ -145,13 +152,13 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 			now := time.Now()
 			if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= refreshInterval {
 				if err := conn.conn.SetWriteDeadline(now.Add(f.sendTimeout)); err != nil {
-					logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.remoteAddr, err)
+					logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.RouteLabel(), err)
 				}
 				lastDeadlineUpdate = now
 			}
 		}
 		if _, err := conn.conn.Write(pkt.GetData()); err != nil {
-			logger.Infof("%s: Error writing to %s: %v", f.tag, conn.remoteAddr, err)
+			logger.Infof("%s: Error writing to %s: %v", f.tag, conn.RouteLabel(), err)
 			conn.SetDisconnected()
 			pkt.Release(1)
 			return false
@@ -264,7 +271,7 @@ func (f *ForwardComponent) enqueuePacketWithPriority(conn *ForwardConn, packet *
 			case conn.sendQueue <- packet:
 				return
 			default:
-				logger.Infof("%s: Send priority queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+				logger.Infof("%s: Send priority queue full for %s, dropping packet", f.tag, conn.RouteLabel())
 				packet.Release(1)
 				return
 			}
@@ -275,7 +282,7 @@ func (f *ForwardComponent) enqueuePacketWithPriority(conn *ForwardConn, packet *
 	case conn.sendQueue <- packet:
 		return
 	default:
-		logger.Infof("%s: Send queue full for %s, dropping packet", f.tag, conn.remoteAddr)
+		logger.Infof("%s: Send queue full for %s, dropping packet", f.tag, conn.RouteLabel())
 		packet.Release(1)
 		return
 	}
@@ -315,6 +322,16 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		queueSize = 10240
 	}
 
+	forwarderSpecs := make([]outboundForwarderSpec, 0, len(cfg.Forwarders))
+	for _, raw := range cfg.Forwarders {
+		spec, err := parseOutboundForwarderSpec(raw, cfg.InterfaceName)
+		if err != nil {
+			logger.Warnf("%s: Invalid forwarder %q: %v", cfg.Tag, raw, err)
+			continue
+		}
+		forwarderSpecs = append(forwarderSpecs, spec)
+	}
+
 	forwardID := ForwardID{}
 
 	_, err = rand.Read(forwardID[:])
@@ -326,6 +343,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
 		forwarders:          cfg.Forwarders,
+		forwarderSpecs:      forwarderSpecs,
 		reconnectInterval:   reconnectInterval,
 		connectionCheckTime: connectionCheckTime,
 		detour:              cfg.Detour,
@@ -386,13 +404,13 @@ func (f *ForwardComponent) IsAvailable() bool {
 // Start initializes and starts forwarder
 func (f *ForwardComponent) Start() error {
 	// Initialize connections to all forwarders
-	for _, addr := range f.forwarders {
-		conn, err := f.setupForwarder(addr)
+	for _, spec := range f.forwarderSpecs {
+		conn, err := f.setupForwarder(spec)
 		if err != nil {
-			logger.Errorf("%s: Failed to initialize forwarder %s: %v", f.tag, addr, err)
+			logger.Errorf("%s: Failed to initialize forwarder %s: %v", f.tag, spec.raw, err)
 			continue
 		}
-		f.forwardConns[addr] = conn
+		f.forwardConns[spec.raw] = conn
 		f.forwardConnList = append(f.forwardConnList, conn)
 	}
 
@@ -480,7 +498,7 @@ func (f *ForwardComponent) sendAuthChallenge(conn *ForwardConn) {
 
 	if conn.authRetryCount > 5 {
 		// Too many auth failures - mark as disconnected
-		logger.Warnf("%s: Too many auth failures for %s", f.tag, conn.remoteAddr)
+		logger.Warnf("%s: Too many auth failures for %s", f.tag, conn.RouteLabel())
 		conn.SetDisconnected()
 		return
 	}
@@ -522,7 +540,7 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 	// Increment miss count - will be reset when response received
 	conn.IncHeartbeatMiss()
 	if conn.heartbeatMissCount >= 5 {
-		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.remoteAddr)
+		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.RouteLabel())
 		conn.SetDisconnected()
 		conn.authState.SetAuthenticated(0)
 		conn.ResetHeartbeatMiss()
@@ -530,13 +548,18 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 }
 
 // setupForwarder creates a new connection to a forwarder
-func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, error) {
-	udpAddr, err := net.ResolveUDPAddr("udp", remoteAddr)
+func (f *ForwardComponent) setupForwarder(spec outboundForwarderSpec) (*ForwardConn, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", spec.address)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve address %v: %w", remoteAddr, err)
+		return nil, fmt.Errorf("failed to resolve address %v: %w", spec.address, err)
 	}
 
-	conn, err := net.DialUDP("udp", nil, udpAddr)
+	localAddr, err := resolveInterfaceLocalUDPAddr(spec.interfaceName, udpAddr.IP)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := net.DialUDP("udp", localAddr, udpAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -544,24 +567,26 @@ func (f *ForwardComponent) setupForwarder(remoteAddr string) (*ForwardConn, erro
 	// Apply socket optimizations if configured
 	if f.sendBufferSize > 0 {
 		if err := conn.SetWriteBuffer(f.sendBufferSize); err != nil {
-			logger.Warnf("%s: Failed to set write buffer size to %d: %v", f.tag, f.sendBufferSize, err)
+			logger.Warnf("%s: Failed to set write buffer size to %d for %s: %v", f.tag, f.sendBufferSize, formatOutboundRoute(spec.address, spec.interfaceName), err)
 		} else {
-			logger.Infof("%s: Set UDP write buffer size to %d bytes for %s", f.tag, f.sendBufferSize, remoteAddr)
+			logger.Infof("%s: Set UDP write buffer size to %d bytes for %s", f.tag, f.sendBufferSize, formatOutboundRoute(spec.address, spec.interfaceName))
 		}
 	}
 
 	if f.recvBufferSize > 0 {
 		if err := conn.SetReadBuffer(f.recvBufferSize); err != nil {
-			logger.Warnf("%s: Failed to set read buffer size to %d: %v", f.tag, f.recvBufferSize, err)
+			logger.Warnf("%s: Failed to set read buffer size to %d for %s: %v", f.tag, f.recvBufferSize, formatOutboundRoute(spec.address, spec.interfaceName), err)
 		} else {
-			logger.Infof("%s: Set UDP read buffer size to %d bytes for %s", f.tag, f.recvBufferSize, remoteAddr)
+			logger.Infof("%s: Set UDP read buffer size to %d bytes for %s", f.tag, f.recvBufferSize, formatOutboundRoute(spec.address, spec.interfaceName))
 		}
 	}
 
 	forwardConn := &ForwardConn{
 		conn:                 conn,
 		isConnected:          1,
-		remoteAddr:           remoteAddr,
+		targetSpec:           spec.raw,
+		remoteAddr:           spec.address,
+		interfaceName:        spec.interfaceName,
 		udpAddr:              udpAddr,
 		lastReconnectAttempt: time.Now(),
 		authState:            &AuthState{},
@@ -600,24 +625,30 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 		conn.Close()
 	}
 
-	logger.Infof("%s: Attempting to reconnect to %s", f.tag, conn.remoteAddr)
+	logger.Infof("%s: Attempting to reconnect to %s", f.tag, conn.RouteLabel())
 
-	newConn, err := net.DialUDP("udp", nil, conn.udpAddr)
+	localAddr, err := resolveInterfaceLocalUDPAddr(conn.interfaceName, conn.udpAddr.IP)
 	if err != nil {
-		logger.Infof("%s: Reconnection to %s failed: %v", f.tag, conn.remoteAddr, err)
+		logger.Infof("%s: Failed to resolve local interface for %s: %v", f.tag, conn.RouteLabel(), err)
+		return
+	}
+
+	newConn, err := net.DialUDP("udp", localAddr, conn.udpAddr)
+	if err != nil {
+		logger.Infof("%s: Reconnection to %s failed: %v", f.tag, conn.RouteLabel(), err)
 		return
 	}
 
 	// Apply socket optimizations if configured
 	if f.sendBufferSize > 0 {
 		if err := newConn.SetWriteBuffer(f.sendBufferSize); err != nil {
-			logger.Warnf("%s: Failed to set write buffer size to %d: %v", f.tag, f.sendBufferSize, err)
+			logger.Warnf("%s: Failed to set write buffer size to %d for %s: %v", f.tag, f.sendBufferSize, conn.RouteLabel(), err)
 		}
 	}
 
 	if f.recvBufferSize > 0 {
 		if err := newConn.SetReadBuffer(f.recvBufferSize); err != nil {
-			logger.Warnf("%s: Failed to set read buffer size to %d: %v", f.tag, f.recvBufferSize, err)
+			logger.Warnf("%s: Failed to set read buffer size to %d for %s: %v", f.tag, f.recvBufferSize, conn.RouteLabel(), err)
 		}
 	}
 
@@ -634,7 +665,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 	f.drainForwardQueue(conn)
 	go f.forwardConnSendLoop(conn)
 
-	logger.Infof("%s: Successfully reconnected to %s", f.tag, conn.remoteAddr)
+	logger.Infof("%s: Successfully reconnected to %s", f.tag, conn.RouteLabel())
 
 	go f.readFromForwarder(conn)
 
@@ -662,7 +693,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 			now := time.Now()
 			if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= deadlineRefresh {
 				if err := conn.conn.SetReadDeadline(now.Add(f.connectionCheckTime)); err != nil {
-					logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.remoteAddr, err)
+					logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.RouteLabel(), err)
 					return
 				}
 				lastDeadlineUpdate = now
@@ -681,7 +712,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 						return
 					}
 
-					logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.remoteAddr, err)
+					logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.RouteLabel(), err)
 					conn.SetDisconnected()
 					return
 				}
@@ -697,7 +728,7 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 					header, err := f.authManager.UnwrapData(&packet)
 					if err != nil {
 						if err.Error() != "duplicate packet detected" {
-							logger.Infof("%s: %s Failed to unwrap data: %v", f.tag, conn.remoteAddr, err)
+							logger.Infof("%s: %s Failed to unwrap data: %v", f.tag, conn.RouteLabel(), err)
 						}
 						return
 					}
@@ -745,7 +776,7 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 		conn.authState.SetAuthenticated(1)
 		conn.authRetryCount = 0
 
-		logger.Infof("%s: Authentication successful for %s", f.tag, conn.remoteAddr)
+		logger.Infof("%s: Authentication successful for %s", f.tag, conn.RouteLabel())
 
 	case MsgTypeHeartbeat:
 		// Reset heartbeat miss count

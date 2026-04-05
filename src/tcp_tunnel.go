@@ -28,10 +28,12 @@ func max(a, b int) int {
 type TcpTunnelConnPool struct {
 	conns atomic.Pointer[[]*TcpTunnelConn]
 
-	index      uint32
-	remoteAddr string
-	poolID     PoolID
-	connCount  int
+	index         uint32
+	remoteAddr    string
+	targetSpec    string
+	interfaceName string
+	poolID        PoolID
+	connCount     int
 }
 
 func NewTcpTunnelConnPool(addr string, poolID PoolID, count int) *TcpTunnelConnPool {
@@ -45,6 +47,13 @@ func NewTcpTunnelConnPool(addr string, poolID PoolID, count int) *TcpTunnelConnP
 	pool.conns.Store(&emptySlice)
 
 	return pool
+}
+
+func (p *TcpTunnelConnPool) RouteLabel() string {
+	if p == nil {
+		return ""
+	}
+	return formatOutboundRoute(p.remoteAddr, p.interfaceName)
 }
 
 func (p *TcpTunnelConnPool) ConnectionCount() int {

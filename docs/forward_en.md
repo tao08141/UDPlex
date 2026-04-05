@@ -9,7 +9,8 @@ The Forward component is responsible for forwarding packets to one or more targe
 |-----------|-------------|
 | `type` | Component type: `forward`, indicates a forwarding component |
 | `tag` | Unique component identifier, used for reference in detour |
-| `forwarders` | List of forwarding target addresses, multiple targets can be configured for parallel forwarding |
+| `forwarders` | List of forwarding target addresses. Each entry also supports `@interface_name`, for example `192.168.1.100:9001@eth0` |
+| `interface_name` | Optional default outbound interface for all forwarders that do not explicitly use `@interface_name` |
 | `reconnect_interval` | Reconnection interval (seconds), waiting time before attempting to reconnect after disconnection |
 | `connection_check_time` | Connection check interval (seconds), time interval for regularly checking connection status |
 | `send_keepalive` | Whether to send empty packets as heartbeats to keep the connection active |
@@ -22,8 +23,9 @@ The Forward component is responsible for forwarding packets to one or more targe
 type: forward
 tag: game_server_forward
 forwarders:
-  - 192.168.1.100:9001
-  - 192.168.1.101:9001
+  - 192.168.1.100:9001@eth0
+  - 192.168.1.101:9001@eth1
+interface_name: eth0
 reconnect_interval: 5
 connection_check_time: 30
 send_keepalive: true
@@ -35,6 +37,10 @@ auth:
   enable_encryption: true
   heartbeat_interval: 30
 ```
+
+Notes:
+- Per-line interface selection has higher priority than `interface_name`.
+- When `@interface_name` is used, UDPlex resolves a usable local IP from that interface and binds the outbound socket to it.
 
 ## How It Works
 

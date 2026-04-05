@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -60,6 +63,7 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/filter/", a.handleGetFilterInfo)
 	mux.HandleFunc("/api/ip_router/", a.handleGetIPRouterInfo)
 	mux.HandleFunc("/api/ip_router_action/", a.handleIPRouterAction)
+	mux.HandleFunc("/api/wg/", a.handleGetWireGuardInfo)
 
 	// Register H5 files handler if path is configured
 	if a.config.H5FilesPath != "" {
@@ -189,6 +193,9 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 						if forwarders, ok := serviceConfig["forwarders"]; ok {
 							result["forwarders"] = forwarders
 						}
+						if interfaceName, ok := serviceConfig["interface_name"]; ok {
+							result["interface_name"] = interfaceName
+						}
 						if reconnectInterval, ok := serviceConfig["reconnect_interval"]; ok {
 							result["reconnect_interval"] = reconnectInterval
 						}
@@ -205,6 +212,9 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 					case "tcp_tunnel_forward":
 						if forwarders, ok := serviceConfig["forwarders"]; ok {
 							result["forwarders"] = forwarders
+						}
+						if interfaceName, ok := serviceConfig["interface_name"]; ok {
+							result["interface_name"] = interfaceName
 						}
 						if reconnectInterval, ok := serviceConfig["reconnect_interval"]; ok {
 							result["reconnect_interval"] = reconnectInterval
@@ -263,7 +273,166 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 		}
 	}
 
+	if a.router != nil {
+		if component := a.router.GetComponentByTag(tag); component != nil {
+			if wgComponent, ok := component.(*WireGuardComponent); ok {
+				result["interface_name"] = wgComponent.interfaceName
+				if wgComponent.actualInterfaceName != "" {
+					result["actual_interface_name"] = wgComponent.actualInterfaceName
+				}
+				result["listen_port"] = wgComponent.listenPort
+				result["addresses"] = append([]string(nil), wgComponent.addresses...)
+				result["routes"] = append([]string(nil), wgComponent.routes...)
+				result["effective_routes"] = wgComponent.collectRoutes()
+				result["mtu"] = wgComponent.mtu
+				result["route_allowed_ips"] = wgComponent.routeAllowedIPs
+				result["setup_interface"] = wgComponent.setupInterface
+				result["reuse_incoming_detour"] = wgComponent.reuseIncomingDetour
+				result["peer_count"] = len(wgComponent.peers)
+				result["send_timeout_ms"] = int(wgComponent.GetSendTimeout() / time.Millisecond)
+			}
+		}
+	}
+
 	return result
+}
+
+type wireGuardRuntimePeerState struct {
+	publicKey           string
+	endpoint            string
+	allowedIPs          []string
+	persistentKeepalive int
+	lastHandshakeSec    int64
+	lastHandshakeNSec   int64
+	rxBytes             int64
+	txBytes             int64
+	protocolVersion     int
+}
+
+func parseWireGuardIPCState(state string) map[string]*wireGuardRuntimePeerState {
+	peers := make(map[string]*wireGuardRuntimePeerState)
+	var current *wireGuardRuntimePeerState
+
+	for _, rawLine := range strings.Split(state, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "public_key="):
+			key := strings.TrimSpace(strings.TrimPrefix(line, "public_key="))
+			if key == "" {
+				current = nil
+				continue
+			}
+			normalizedKey := normalizeWGKey(key)
+			current = &wireGuardRuntimePeerState{
+				publicKey: normalizedKey,
+			}
+			peers[normalizedKey] = current
+		case current == nil:
+			continue
+		case strings.HasPrefix(line, "endpoint="):
+			current.endpoint = strings.TrimSpace(strings.TrimPrefix(line, "endpoint="))
+		case strings.HasPrefix(line, "allowed_ip="):
+			current.allowedIPs = append(current.allowedIPs, strings.TrimSpace(strings.TrimPrefix(line, "allowed_ip=")))
+		case strings.HasPrefix(line, "persistent_keepalive_interval="):
+			current.persistentKeepalive = parseIntOrZero(strings.TrimPrefix(line, "persistent_keepalive_interval="))
+		case strings.HasPrefix(line, "last_handshake_time_sec="):
+			current.lastHandshakeSec = int64(parseIntOrZero(strings.TrimPrefix(line, "last_handshake_time_sec=")))
+		case strings.HasPrefix(line, "last_handshake_time_nsec="):
+			current.lastHandshakeNSec = int64(parseIntOrZero(strings.TrimPrefix(line, "last_handshake_time_nsec=")))
+		case strings.HasPrefix(line, "rx_bytes="):
+			current.rxBytes = int64(parseIntOrZero(strings.TrimPrefix(line, "rx_bytes=")))
+		case strings.HasPrefix(line, "tx_bytes="):
+			current.txBytes = int64(parseIntOrZero(strings.TrimPrefix(line, "tx_bytes=")))
+		case strings.HasPrefix(line, "protocol_version="):
+			current.protocolVersion = parseIntOrZero(strings.TrimPrefix(line, "protocol_version="))
+		}
+	}
+
+	return peers
+}
+
+func buildWireGuardPeerDetails(configPeers []WireGuardPeerConfig, ipcState string) []map[string]interface{} {
+	runtimePeers := parseWireGuardIPCState(ipcState)
+	usedRuntimeKeys := make(map[string]struct{}, len(configPeers))
+	details := make([]map[string]interface{}, 0, len(configPeers)+len(runtimePeers))
+
+	for _, peer := range configPeers {
+		detail := map[string]interface{}{
+			"public_key":           strings.TrimSpace(peer.PublicKey),
+			"has_preshared_key":    strings.TrimSpace(peer.PresharedKey) != "",
+			"endpoint":             strings.TrimSpace(peer.Endpoint),
+			"allowed_ips":          append([]string(nil), peer.AllowedIPs...),
+			"persistent_keepalive": peer.PersistentKeepalive,
+			"runtime_present":      false,
+		}
+
+		normalizedKey := normalizeWGKey(peer.PublicKey)
+		if runtimePeer, ok := runtimePeers[normalizedKey]; ok {
+			enrichWireGuardPeerWithRuntime(detail, runtimePeer)
+			usedRuntimeKeys[normalizedKey] = struct{}{}
+		}
+
+		details = append(details, detail)
+	}
+
+	extraKeys := make([]string, 0, len(runtimePeers))
+	for key := range runtimePeers {
+		if _, ok := usedRuntimeKeys[key]; ok {
+			continue
+		}
+		extraKeys = append(extraKeys, key)
+	}
+	sort.Strings(extraKeys)
+
+	for _, key := range extraKeys {
+		runtimePeer := runtimePeers[key]
+		detail := map[string]interface{}{
+			"public_key":           runtimePeer.publicKey,
+			"has_preshared_key":    false,
+			"endpoint":             "",
+			"allowed_ips":          append([]string(nil), runtimePeer.allowedIPs...),
+			"persistent_keepalive": runtimePeer.persistentKeepalive,
+			"runtime_only":         true,
+		}
+		enrichWireGuardPeerWithRuntime(detail, runtimePeer)
+		details = append(details, detail)
+	}
+
+	return details
+}
+
+func enrichWireGuardPeerWithRuntime(detail map[string]interface{}, runtimePeer *wireGuardRuntimePeerState) {
+	detail["runtime_present"] = true
+	if runtimePeer.endpoint != "" {
+		detail["runtime_endpoint"] = runtimePeer.endpoint
+	}
+	if len(runtimePeer.allowedIPs) > 0 {
+		detail["runtime_allowed_ips"] = append([]string(nil), runtimePeer.allowedIPs...)
+	}
+	if runtimePeer.persistentKeepalive > 0 {
+		detail["runtime_persistent_keepalive"] = runtimePeer.persistentKeepalive
+	}
+	if runtimePeer.protocolVersion > 0 {
+		detail["protocol_version"] = runtimePeer.protocolVersion
+	}
+	detail["rx_bytes"] = runtimePeer.rxBytes
+	detail["tx_bytes"] = runtimePeer.txBytes
+	if runtimePeer.lastHandshakeSec > 0 {
+		handshakeTime := time.Unix(runtimePeer.lastHandshakeSec, runtimePeer.lastHandshakeNSec).UTC()
+		detail["last_handshake_time"] = handshakeTime.Format(time.RFC3339Nano)
+	}
+}
+
+func parseIntOrZero(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 // getComponentTypeFromConfig retrieves the component type from router config
@@ -390,6 +559,8 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 	for _, conn := range forwardComponent.forwardConnList {
 		connection := map[string]interface{}{
 			"remote_addr":      conn.remoteAddr,
+			"target_spec":      conn.targetSpec,
+			"interface_name":   conn.interfaceName,
 			"is_connected":     atomic.LoadInt32(&conn.isConnected) == 1,
 			"last_reconnect":   conn.lastReconnectAttempt.Format(time.RFC3339),
 			"auth_retry_count": conn.authRetryCount,
@@ -564,11 +735,13 @@ func (a *APIServer) handleGetTcpTunnelForwardConnections(w http.ResponseWriter, 
 		totalConnections += len(connections)
 
 		pools = append(pools, map[string]interface{}{
-			"pool_id":      fmt.Sprintf("%x", poolID),
-			"remote_addr":  pool.remoteAddr,
-			"connections":  connections,
-			"conn_count":   len(connections),
-			"target_count": pool.connCount,
+			"pool_id":        fmt.Sprintf("%x", poolID),
+			"remote_addr":    pool.remoteAddr,
+			"target_spec":    pool.targetSpec,
+			"interface_name": pool.interfaceName,
+			"connections":    connections,
+			"conn_count":     len(connections),
+			"target_count":   pool.connCount,
 		})
 	}
 
@@ -684,6 +857,63 @@ func (a *APIServer) handleGetFilterInfo(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		logger.Errorf("Error encoding JSON: %v", err)
 		return
+	}
+}
+
+func (a *APIServer) handleGetWireGuardInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tag := r.URL.Path[len("/api/wg/"):]
+	if tag == "" {
+		http.Error(w, "Component tag is required", http.StatusBadRequest)
+		return
+	}
+
+	component := a.router.GetComponentByTag(tag)
+	if component == nil {
+		http.Error(w, "Component not found", http.StatusNotFound)
+		return
+	}
+
+	wgComponent, ok := component.(*WireGuardComponent)
+	if !ok {
+		http.Error(w, "Component is not a WireGuardComponent", http.StatusBadRequest)
+		return
+	}
+
+	result := a.getComponentInfo(wgComponent.GetTag())
+	result["tag"] = wgComponent.GetTag()
+	result["type"] = "wg"
+	result["is_running"] = wgComponent.wgDevice != nil && wgComponent.bind != nil && wgComponent.tunDevice != nil
+	result["actual_interface_name"] = wgComponent.interfaceName
+	if wgComponent.actualInterfaceName != "" {
+		result["actual_interface_name"] = wgComponent.actualInterfaceName
+	}
+	result["effective_routes"] = wgComponent.collectRoutes()
+
+	if wgComponent.bind != nil {
+		result["rx_queue_length"] = len(wgComponent.bind.rxQueue)
+		result["rx_queue_capacity"] = cap(wgComponent.bind.rxQueue)
+	}
+
+	ipcState := ""
+	if wgComponent.wgDevice != nil {
+		state, err := wgComponent.wgDevice.IpcGet()
+		if err != nil {
+			result["runtime_error"] = err.Error()
+		} else {
+			ipcState = state
+		}
+	}
+
+	result["peers"] = buildWireGuardPeerDetails(wgComponent.peers, ipcState)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		logger.Errorf("Error encoding JSON: %v", err)
 	}
 }
 

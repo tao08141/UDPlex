@@ -63,18 +63,6 @@ chmod +x udplex-wg-manager.sh
 sudo bash ./udplex-wg-manager.sh install
 ```
 
-During install, the script will:
-
-- show the local WireGuard public key
-- ask for language
-- ask for the UDPlex shared secret, or generate one automatically
-- ask for role: Entry or Exit
-- ask for the peer public key
-- ask the outer protocol for line #1 and line #2 independently
-- ask how high-bandwidth traffic should be handled
-- generate `/opt/udplex/config.yaml`
-- generate `/opt/udplex/docker-compose.yml`
-
 ## Files Written By The Script
 
 - `/opt/udplex/config.yaml`
@@ -169,7 +157,6 @@ Important:
 
 ```bash
 sudo bash ./udplex-wg-manager.sh status
-sudo wg show
 ip addr show wg_udplex
 ```
 
@@ -190,7 +177,6 @@ sudo bash ./udplex-wg-manager.sh logs
 WireGuard state:
 
 ```bash
-sudo wg show
 ip addr show wg_udplex
 ```
 
@@ -203,8 +189,6 @@ ss -lntp | grep -E ":(9000|9001)\b" || true
 
 If replies do not come back correctly on the outer lines, check:
 
-- `reuse_incoming_detour: true`
-- `broadcast_mode: false` on outer `listen`
 - whether both outer lines are actually authenticated and available
 - whether the correct ports are open in the firewall
 

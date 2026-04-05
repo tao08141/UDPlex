@@ -65,18 +65,6 @@ chmod +x udplex-wg-manager.sh
 sudo bash ./udplex-wg-manager.sh install
 ```
 
-安装过程中脚本会：
-
-- 显示本机 WireGuard 公钥
-- 询问语言
-- 询问 UDPlex 共享密钥，或自动生成
-- 询问角色：入口 / 出口
-- 询问对端公钥
-- 分别询问线路 1 和线路 2 的外层协议
-- 询问大流量阶段的线路策略
-- 生成 `/opt/udplex/config.yaml`
-- 生成 `/opt/udplex/docker-compose.yml`
-
 ## 脚本现在会写入哪些文件
 
 - `/opt/udplex/config.yaml`
@@ -171,7 +159,6 @@ sudo bash ./udplex-wg-manager.sh reload
 
 ```bash
 sudo bash ./udplex-wg-manager.sh status
-sudo wg show
 ip addr show wg_udplex
 ```
 
@@ -192,7 +179,6 @@ sudo bash ./udplex-wg-manager.sh logs
 查看 WireGuard 状态：
 
 ```bash
-sudo wg show
 ip addr show wg_udplex
 ```
 
@@ -205,8 +191,6 @@ ss -lntp | grep -E ":(9000|9001)\b" || true
 
 如果外层“能收到但回不去”，优先检查：
 
-- `reuse_incoming_detour: true`
-- 外层 `listen` 是否为 `broadcast_mode: false`
 - 两条外层线是否都已完成认证并处于可用状态
 - 防火墙是否放通了正确端口
 

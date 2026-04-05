@@ -9,7 +9,8 @@ The TCP Tunnel Forward component is responsible for establishing connections to 
 |-----------|-------------|
 | `type` | Component type: `tcp_tunnel_forward`, indicates a TCP tunnel forwarding end |
 | `tag` | Unique component identifier, used for reference in detour |
-| `forwarders` | List of target server addresses, format "IP:port[:connection_count]", e.g. "1.2.3.4:9001:4". Using multiple connections may cause UDP packet reordering, which might lead to unknown issues in some scenarios |
+| `forwarders` | List of target server addresses, format `IP:port[:connection_count][@interface_name]`, e.g. `1.2.3.4:9001:4@eth0`. Using multiple connections may cause UDP packet reordering, which might lead to unknown issues in some scenarios |
+| `interface_name` | Optional default outbound interface for forwarders that do not explicitly use `@interface_name` |
 | `connection_check_time` | Connection check interval (seconds), regularly checks and reconnects broken connections |
 | `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
 | `write_batch_size` | Maximum number of packets grouped into a single TCP write batch; defaults to `64` |
@@ -22,8 +23,9 @@ The TCP Tunnel Forward component is responsible for establishing connections to 
 type: tcp_tunnel_forward
 tag: tcp_tunnel_client
 forwarders:
-  - 203.0.113.1:9001:2
-  - 203.0.113.2:9001:2
+  - 203.0.113.1:9001:2@eth0
+  - 203.0.113.2:9001:2@eth1
+interface_name: eth0
 connection_check_time: 30
 no_delay: true
 write_batch_size: 64
@@ -35,6 +37,10 @@ auth:
   enable_encryption: true
   heartbeat_interval: 30
 ```
+
+Notes:
+- Per-line `@interface_name` overrides the component-level `interface_name`.
+- The TCP client socket is bound to a local IP selected from that interface before dialing the tunnel server.
 
 ## How It Works
 

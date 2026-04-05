@@ -275,6 +275,9 @@ class UDPlexMonitor {
         if (component.forwarders) {
             details.push(['转发目标', component.forwarders.join(', ')]);
         }
+        if (component.interface_name) {
+            details.push(['默认网卡', component.interface_name]);
+        }
         if (component.timeout) {
             details.push(['超时时间', `${component.timeout}s`]);
         }

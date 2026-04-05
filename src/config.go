@@ -20,6 +20,7 @@ type ComponentConfig struct {
 	Timeout             int         `json:"timeout" yaml:"timeout"`
 	ReplaceOldMapping   bool        `json:"replace_old_mapping" yaml:"replace_old_mapping"`
 	Forwarders          []string    `json:"forwarders" yaml:"forwarders"`
+	InterfaceName       string      `json:"interface_name" yaml:"interface_name"` // Default outbound interface, can be overridden per forwarder with addr@iface
 	ReconnectInterval   int         `json:"reconnect_interval" yaml:"reconnect_interval"`
 	ConnectionCheckTime int         `json:"connection_check_time" yaml:"connection_check_time"`
 	Detour              []string    `json:"detour" yaml:"detour"`

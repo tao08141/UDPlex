@@ -67,7 +67,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	pools := make(map[PoolID]*TcpTunnelConnPool)
 
 	for _, fwd := range cfg.Forwarders {
-		addr, count, perr := parseForwarderAddress(fwd)
+		spec, perr := parseTCPForwarderAddress(fwd, cfg.InterfaceName)
 		if perr != nil {
 			logger.Warnf("Invalid forwarder address '%s': %v", fwd, perr)
 			continue
@@ -79,7 +79,10 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 			return nil
 		}
 
-		pools[poolID] = NewTcpTunnelConnPool(addr, poolID, count)
+		pool := NewTcpTunnelConnPool(spec.address, poolID, spec.connectionCount)
+		pool.targetSpec = spec.raw
+		pool.interfaceName = spec.interfaceName
+		pools[poolID] = pool
 	}
 
 	return &TcpTunnelForwardComponent{
@@ -97,38 +100,56 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	}
 }
 
-// parseForwarderAddress parses a forwarder string in one of the following formats:
+// parseTCPForwarderAddress parses a forwarder string in one of the following formats:
 // - host:port
+// - host:port@iface
 // - host:port:count
+// - host:port:count@iface
 // - [ipv6]:port
+// - [ipv6]:port@iface
 // - [ipv6]:port:count
-// It returns a dialable address (with IPv6 properly bracketed) and the connection count (default 4).
-func parseForwarderAddress(s string) (string, int, error) {
+// - [ipv6]:port:count@iface
+func parseTCPForwarderAddress(s string, defaultInterface string) (tcpTunnelForwarderSpec, error) {
+	spec, err := parseOutboundForwarderSpec(s, defaultInterface)
+	if err != nil {
+		return tcpTunnelForwarderSpec{}, err
+	}
+
 	// Default connection count
 	count := 4
-	addrPart := s
+	addrPart := spec.address
 
-	// Try to peel off an optional trailing ":count"
-	if idx := strings.LastIndex(addrPart, ":"); idx != -1 {
-		tail := addrPart[idx+1:]
-		if n, err := strconv.Atoi(tail); err == nil {
-			if n >= 1 {
-				count = n
-			}
-			addrPart = addrPart[:idx]
-		}
-	}
-
-	// Validate and normalize address using net.SplitHostPort / JoinHostPort
+	// First, try the legacy host:port form directly.
 	host, port, err := net.SplitHostPort(addrPart)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid host:port '%s': %w", addrPart, err)
+		// If that fails, try peeling off an optional trailing ":count".
+		idx := strings.LastIndex(addrPart, ":")
+		if idx == -1 {
+			return tcpTunnelForwarderSpec{}, fmt.Errorf("invalid host:port '%s': %w", addrPart, err)
+		}
+		tail := addrPart[idx+1:]
+		n, convErr := strconv.Atoi(tail)
+		if convErr != nil {
+			return tcpTunnelForwarderSpec{}, fmt.Errorf("invalid host:port '%s': %w", addrPart, err)
+		}
+		if n >= 1 {
+			count = n
+		}
+		addrPart = addrPart[:idx]
+		host, port, err = net.SplitHostPort(addrPart)
+		if err != nil {
+			return tcpTunnelForwarderSpec{}, fmt.Errorf("invalid host:port '%s': %w", addrPart, err)
+		}
 	}
 	if port == "" {
-		return "", 0, fmt.Errorf("missing port in '%s'", s)
+		return tcpTunnelForwarderSpec{}, fmt.Errorf("missing port in '%s'", s)
 	}
 	addr := net.JoinHostPort(host, port)
-	return addr, count, nil
+	spec.address = addr
+	return tcpTunnelForwarderSpec{
+		outboundForwarderSpec: spec,
+		connectionCount:       count,
+	}, nil
 }
 
 func (f *TcpTunnelForwardComponent) Start() error {
@@ -150,17 +171,17 @@ func (f *TcpTunnelForwardComponent) Start() error {
 			logger.Warnf("%s: Pool for %x is nil, skipping", f.tag, poolID)
 			continue
 		}
-		logger.Infof("%s: Forwarding to %s with %d connections", f.tag, pool.remoteAddr, pool.connCount)
+		logger.Infof("%s: Forwarding to %s with %d connections", f.tag, pool.RouteLabel(), pool.connCount)
 
 		for range pool.connCount {
-			ttc, err := f.setupConnection(pool.remoteAddr, pool.poolID)
+			ttc, err := f.setupConnection(pool)
 			if err != nil {
-				logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.remoteAddr, err)
+				logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.RouteLabel(), err)
 				continue
 			}
 			pool.AddConnection(ttc)
 
-			logger.Infof("%s: Added new connection to %s", f.tag, pool.remoteAddr)
+			logger.Infof("%s: Added new connection to %s", f.tag, pool.RouteLabel())
 		}
 	}
 
@@ -203,9 +224,25 @@ func (f *TcpTunnelForwardComponent) Stop() error {
 	return nil
 }
 
-func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) (*TcpTunnelConn, error) {
+func (f *TcpTunnelForwardComponent) setupConnection(pool *TcpTunnelConnPool) (*TcpTunnelConn, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("pool is nil")
+	}
+
 	dialer := net.Dialer{}
-	conn, err := dialer.Dial("tcp", addr)
+	if pool.interfaceName != "" {
+		remoteAddr, err := net.ResolveTCPAddr("tcp", pool.remoteAddr)
+		if err != nil {
+			return nil, err
+		}
+		localAddr, err := resolveInterfaceLocalTCPAddr(pool.interfaceName, remoteAddr.IP)
+		if err != nil {
+			return nil, err
+		}
+		dialer.LocalAddr = localAddr
+	}
+
+	conn, err := dialer.Dial("tcp", pool.remoteAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -229,12 +266,12 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 		}
 	}
 
-	ttc := NewTcpTunnelConn(conn, f.forwardID, poolID, f, f.router.config.QueueSize, f.writeBatchSize, TcpTunnelForwardMode)
+	ttc := NewTcpTunnelConn(conn, f.forwardID, pool.poolID, f, f.router.config.QueueSize, f.writeBatchSize, TcpTunnelForwardMode)
 
 	packet := f.router.GetPacket(f.GetTag())
 	defer packet.Release(1)
 
-	length, err := f.authManager.CreateAuthChallenge(packet.BufAtOffset(), MsgTypeAuthChallenge, f.forwardID, poolID)
+	length, err := f.authManager.CreateAuthChallenge(packet.BufAtOffset(), MsgTypeAuthChallenge, f.forwardID, pool.poolID)
 	if err != nil {
 		logger.Warnf("%s: Failed to create auth challenge: %v", f.tag, err)
 		ttc.Close()
@@ -245,7 +282,7 @@ func (f *TcpTunnelForwardComponent) setupConnection(addr string, poolID PoolID) 
 
 	err = ttc.Write(&packet)
 	if err != nil {
-		logger.Warnf("%s: Failed to send auth challenge to %s: %v", f.tag, addr, err)
+		logger.Warnf("%s: Failed to send auth challenge to %s: %v", f.tag, pool.RouteLabel(), err)
 		ttc.Close()
 		return nil, err
 	}
@@ -344,12 +381,12 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 				for i := range conns {
 					// Get reference to the connection
 					if conns[i] == nil {
-						logger.Warnf("%s: Connection in pool %s is nil, adding to removal list", f.tag, pool.remoteAddr)
+						logger.Warnf("%s: Connection in pool %s is nil, adding to removal list", f.tag, pool.RouteLabel())
 						continue
 					}
 
 					if conns[i].conn == nil {
-						logger.Infof("%s: Connection in pool %s is nil or closed, adding to removal list", f.tag, pool.remoteAddr)
+						logger.Infof("%s: Connection in pool %s is nil or closed, adding to removal list", f.tag, pool.RouteLabel())
 						connectionsToRemove = append(connectionsToRemove, conns[i])
 						continue
 					}
@@ -360,13 +397,13 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 				}
 
 				for i := pool.ConnectionCount(); i < pool.connCount; i++ {
-					ttc, err := f.setupConnection(pool.remoteAddr, pool.poolID)
+					ttc, err := f.setupConnection(pool)
 					if err != nil {
-						logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.remoteAddr, err)
+						logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.RouteLabel(), err)
 						continue
 					}
 					pool.AddConnection(ttc)
-					logger.Infof("%s: Added new connection to %s", f.tag, pool.remoteAddr)
+					logger.Infof("%s: Added new connection to %s", f.tag, pool.RouteLabel())
 				}
 			}
 		case <-heartbeatIntervalTicker.C:
@@ -383,7 +420,7 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 				for i := range conns {
 					conn := conns[i]
 					if conn == nil || conn.conn == nil {
-						logger.Warnf("%s: Connection in pool %s is nil or closed, skipping", f.tag, pool.remoteAddr)
+						logger.Warnf("%s: Connection in pool %s is nil or closed, skipping", f.tag, pool.RouteLabel())
 						continue
 					}
 
@@ -456,7 +493,7 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 		for _, pool := range f.pools {
 			c := pool.GetNextConn()
 			if c == nil {
-				logger.Debugf("%s: No available connections in pool %s", f.tag, pool.remoteAddr)
+				logger.Debugf("%s: No available connections in pool %s", f.tag, pool.RouteLabel())
 				continue
 			}
 
