@@ -17,6 +17,56 @@ type tcpTunnelForwarderSpec struct {
 	connectionCount int
 }
 
+func newOutboundDialer(interfaceName string, localAddr net.Addr) net.Dialer {
+	dialer := net.Dialer{
+		LocalAddr: localAddr,
+	}
+	if control := outboundInterfaceControl(interfaceName); control != nil {
+		dialer.Control = control
+	}
+	return dialer
+}
+
+func dialUDPWithInterface(remoteAddr *net.UDPAddr, interfaceName string) (*net.UDPConn, error) {
+	if remoteAddr == nil {
+		return nil, fmt.Errorf("remote UDP address is nil")
+	}
+
+	localAddr, err := resolveInterfaceLocalUDPAddr(interfaceName, remoteAddr.IP)
+	if err != nil {
+		return nil, err
+	}
+
+	dialer := newOutboundDialer(interfaceName, localAddr)
+	conn, err := dialer.Dial("udp", remoteAddr.String())
+	if err != nil {
+		return nil, err
+	}
+
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		_ = conn.Close()
+		return nil, fmt.Errorf("unexpected UDP connection type %T", conn)
+	}
+
+	return udpConn, nil
+}
+
+func dialTCPWithInterface(remoteAddr string, interfaceName string) (net.Conn, error) {
+	resolvedRemoteAddr, err := net.ResolveTCPAddr("tcp", remoteAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	localAddr, err := resolveInterfaceLocalTCPAddr(interfaceName, resolvedRemoteAddr.IP)
+	if err != nil {
+		return nil, err
+	}
+
+	dialer := newOutboundDialer(interfaceName, localAddr)
+	return dialer.Dial("tcp", remoteAddr)
+}
+
 func formatOutboundRoute(address, interfaceName string) string {
 	if strings.TrimSpace(interfaceName) == "" {
 		return address

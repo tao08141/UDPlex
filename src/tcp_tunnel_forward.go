@@ -229,20 +229,7 @@ func (f *TcpTunnelForwardComponent) setupConnection(pool *TcpTunnelConnPool) (*T
 		return nil, fmt.Errorf("pool is nil")
 	}
 
-	dialer := net.Dialer{}
-	if pool.interfaceName != "" {
-		remoteAddr, err := net.ResolveTCPAddr("tcp", pool.remoteAddr)
-		if err != nil {
-			return nil, err
-		}
-		localAddr, err := resolveInterfaceLocalTCPAddr(pool.interfaceName, remoteAddr.IP)
-		if err != nil {
-			return nil, err
-		}
-		dialer.LocalAddr = localAddr
-	}
-
-	conn, err := dialer.Dial("tcp", pool.remoteAddr)
+	conn, err := dialTCPWithInterface(pool.remoteAddr, pool.interfaceName)
 	if err != nil {
 		return nil, err
 	}

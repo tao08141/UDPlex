@@ -544,12 +544,7 @@ func (f *ForwardComponent) setupForwarder(spec outboundForwarderSpec) (*ForwardC
 		return nil, fmt.Errorf("failed to resolve address %v: %w", spec.address, err)
 	}
 
-	localAddr, err := resolveInterfaceLocalUDPAddr(spec.interfaceName, udpAddr.IP)
-	if err != nil {
-		return nil, err
-	}
-
-	conn, err := net.DialUDP("udp", localAddr, udpAddr)
+	conn, err := dialUDPWithInterface(udpAddr, spec.interfaceName)
 	if err != nil {
 		return nil, err
 	}
@@ -617,13 +612,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 
 	logger.Infof("%s: Attempting to reconnect to %s", f.tag, conn.RouteLabel())
 
-	localAddr, err := resolveInterfaceLocalUDPAddr(conn.interfaceName, conn.udpAddr.IP)
-	if err != nil {
-		logger.Infof("%s: Failed to resolve local interface for %s: %v", f.tag, conn.RouteLabel(), err)
-		return
-	}
-
-	newConn, err := net.DialUDP("udp", localAddr, conn.udpAddr)
+	newConn, err := dialUDPWithInterface(conn.udpAddr, conn.interfaceName)
 	if err != nil {
 		logger.Infof("%s: Reconnection to %s failed: %v", f.tag, conn.RouteLabel(), err)
 		return
