@@ -273,7 +273,7 @@ func TestTcpTunnelConn_WriteBatchToggle(t *testing.T) {
 	}
 }
 
-func TestTcpTunnelConn_WriteTimeoutDropsWholePendingPackets(t *testing.T) {
+func TestTcpTunnelConn_WriteTimeoutWithProgressKeepsConnection(t *testing.T) {
 	router := NewRouter(Config{BufferSize: 64 * 1024, BufferOffset: 64, QueueSize: 16})
 	auth, err := NewAuthManager(&AuthConfig{Enabled: true, Secret: "test", AuthTimeout: 1, DelayWindowSize: 1}, router)
 	if err != nil {
@@ -282,8 +282,9 @@ func TestTcpTunnelConn_WriteTimeoutDropsWholePendingPackets(t *testing.T) {
 
 	comp := &testTcpTunnelComponent{tag: "test", stop: make(chan struct{}), r: router, a: auth, sendTimeout: 5 * time.Millisecond}
 	mockConn := newScriptedWriteConn(
-		scriptedWriteResult{n: len([]byte("one")), err: nil},
-		scriptedWriteResult{n: 0, err: timeoutTestError{}},
+		scriptedWriteResult{n: 1, err: timeoutTestError{}},
+		scriptedWriteResult{n: 2, err: nil},
+		scriptedWriteResult{n: 3, err: nil},
 	)
 	conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, 16, true, 64, TcpTunnelListenMode)
 
@@ -302,14 +303,14 @@ func TestTcpTunnelConn_WriteTimeoutDropsWholePendingPackets(t *testing.T) {
 		t.Fatalf("second write failed: %v", err)
 	}
 
-	waitForWriteStarts(t, mockConn.writeStarted, 2)
+	waitForWriteStarts(t, mockConn.writeStarted, 3)
 	waitForCondition(t, func() bool {
 		return comp.disconnects.Load() == 0 && len(conn.writeQueue) == 0
 	})
 
 	select {
 	case <-conn.closed:
-		t.Fatalf("connection should stay open after dropping whole pending packets")
+		t.Fatalf("connection should stay open while writes keep making progress")
 	default:
 	}
 
@@ -317,7 +318,7 @@ func TestTcpTunnelConn_WriteTimeoutDropsWholePendingPackets(t *testing.T) {
 	conn.Wait()
 }
 
-func TestTcpTunnelConn_WriteTimeoutAfterPartialPacketDisconnects(t *testing.T) {
+func TestTcpTunnelConn_WriteTimeoutWithoutProgressDisconnects(t *testing.T) {
 	router := NewRouter(Config{BufferSize: 64 * 1024, BufferOffset: 64, QueueSize: 16})
 	auth, err := NewAuthManager(&AuthConfig{Enabled: true, Secret: "test", AuthTimeout: 1, DelayWindowSize: 1}, router)
 	if err != nil {
@@ -326,7 +327,7 @@ func TestTcpTunnelConn_WriteTimeoutAfterPartialPacketDisconnects(t *testing.T) {
 
 	comp := &testTcpTunnelComponent{tag: "test", stop: make(chan struct{}), r: router, a: auth, sendTimeout: 5 * time.Millisecond}
 	mockConn := newScriptedWriteConn(
-		scriptedWriteResult{n: 1, err: timeoutTestError{}},
+		scriptedWriteResult{n: 0, err: timeoutTestError{}},
 	)
 	conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, 16, false, 64, TcpTunnelListenMode)
 

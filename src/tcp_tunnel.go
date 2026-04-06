@@ -368,19 +368,28 @@ func (c *TcpTunnelConn) writeLoop() {
 
 		for len(buffers) > 0 {
 			n, err := buffers.WriteTo(c.conn)
-			partialPacketWritten := advanceBatchWrite(n)
+			progressMade := n > 0
+			advanceBatchWrite(n)
 			if err != nil {
 				if isTimeoutError(err) {
-					if partialPacketWritten {
-						logger.Infof("Write timeout after partial packet write: %v", err)
-						releaseBatch()
-						(*c.t).Disconnect(c)
-						return false
+					if progressMade {
+						logger.Infof("Write timeout after partial progress, retrying remaining bytes: %v", err)
+						lastWriteDeadlineUpdate = time.Time{}
+						if sendTimeout := (*c.t).GetSendTimeout(); sendTimeout > 0 {
+							if deadlineErr := refreshWriteDeadline(sendTimeout); deadlineErr != nil {
+								logger.Infof("Failed to refresh write deadline after timeout: %v", deadlineErr)
+								releaseBatch()
+								(*c.t).Disconnect(c)
+								return false
+							}
+						}
+						continue
 					}
 
-					logger.Infof("Write timeout, dropping pending packets: %v", err)
+					logger.Infof("Write timeout without progress: %v", err)
 					releaseBatch()
-					return true
+					(*c.t).Disconnect(c)
+					return false
 				}
 
 				logger.Infof("Write error: %v", err)
