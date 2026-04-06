@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +36,7 @@ type TcpTunnelConnPool struct {
 	interfaceName string
 	poolID        PoolID
 	connCount     int
+	connecting    atomic.Int32
 }
 
 func NewTcpTunnelConnPool(addr string, poolID PoolID, count int) *TcpTunnelConnPool {
@@ -149,12 +152,13 @@ type TcpTunnelConn struct {
 
 	heartbeatTracker
 
-	writeQueue     chan *Packet
-	writePrio      chan *Packet
-	writeBatchSize int
-	writeWg        sync.WaitGroup
-	closed         chan struct{}
-	closeOnce      sync.Once
+	writeQueue       chan *Packet
+	writePrio        chan *Packet
+	enableWriteBatch bool
+	writeBatchSize   int
+	writeWg          sync.WaitGroup
+	closed           chan struct{}
+	closeOnce        sync.Once
 }
 
 func normalizeTcpTunnelWriteBatchSize(size int) int {
@@ -164,7 +168,7 @@ func normalizeTcpTunnelWriteBatchSize(size int) int {
 	return size
 }
 
-func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, queueSize int, writeBatchSize int, mode int) *TcpTunnelConn {
+func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, queueSize int, enableWriteBatch bool, writeBatchSize int, mode int) *TcpTunnelConn {
 	connID := ConnID{}
 	if _, err := rand.Read(connID[:]); err != nil {
 		connID = ConnID{}
@@ -181,13 +185,14 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 		lastActive: time.Now(),
 		// Split write queue into priority (heartbeat/control) and normal (data).
 		// Priority queue is small but always preferred by the writer.
-		writePrio:      make(chan *Packet, max(4, queueSize/16)),
-		writeQueue:     make(chan *Packet, queueSize), // Buffered channel for normal packets
-		writeBatchSize: writeBatchSize,
-		closed:         make(chan struct{}),
-		closeOnce:      sync.Once{},
-		writeWg:        sync.WaitGroup{},
-		t:              &t,
+		writePrio:        make(chan *Packet, max(4, queueSize/16)),
+		writeQueue:       make(chan *Packet, queueSize), // Buffered channel for normal packets
+		enableWriteBatch: enableWriteBatch,
+		writeBatchSize:   writeBatchSize,
+		closed:           make(chan struct{}),
+		closeOnce:        sync.Once{},
+		writeWg:          sync.WaitGroup{},
+		t:                &t,
 	}
 
 	// Start to write goroutine
@@ -285,6 +290,8 @@ func (c *TcpTunnelConn) writeLoop() {
 
 	batch := make([]*Packet, 0, c.writeBatchSize)
 	buffers := make(net.Buffers, 0, c.writeBatchSize)
+	currentPacketIndex := 0
+	currentPacketOffset := 0
 
 	releaseBatch := func() {
 		for i := range batch {
@@ -295,6 +302,41 @@ func (c *TcpTunnelConn) writeLoop() {
 		}
 		batch = batch[:0]
 		buffers = buffers[:0]
+		currentPacketIndex = 0
+		currentPacketOffset = 0
+	}
+
+	advanceBatchWrite := func(written int64) bool {
+		for written > 0 && currentPacketIndex < len(batch) {
+			packet := batch[currentPacketIndex]
+			if packet == nil {
+				currentPacketIndex++
+				currentPacketOffset = 0
+				continue
+			}
+
+			packetLen := len(packet.GetData()) - currentPacketOffset
+			if packetLen <= 0 {
+				packet.Release(1)
+				batch[currentPacketIndex] = nil
+				currentPacketIndex++
+				currentPacketOffset = 0
+				continue
+			}
+
+			if written < int64(packetLen) {
+				currentPacketOffset += int(written)
+				return true
+			}
+
+			written -= int64(packetLen)
+			packet.Release(1)
+			batch[currentPacketIndex] = nil
+			currentPacketIndex++
+			currentPacketOffset = 0
+		}
+
+		return false
 	}
 
 	sendPacketBatch := func() bool {
@@ -321,10 +363,26 @@ func (c *TcpTunnelConn) writeLoop() {
 			}
 			buffers = append(buffers, packet.GetData())
 		}
+		currentPacketIndex = 0
+		currentPacketOffset = 0
 
 		for len(buffers) > 0 {
-			_, err := buffers.WriteTo(c.conn)
+			n, err := buffers.WriteTo(c.conn)
+			partialPacketWritten := advanceBatchWrite(n)
 			if err != nil {
+				if isTimeoutError(err) {
+					if partialPacketWritten {
+						logger.Infof("Write timeout after partial packet write: %v", err)
+						releaseBatch()
+						(*c.t).Disconnect(c)
+						return false
+					}
+
+					logger.Infof("Write timeout, dropping pending packets: %v", err)
+					releaseBatch()
+					return true
+				}
+
 				logger.Infof("Write error: %v", err)
 				releaseBatch()
 				(*c.t).Disconnect(c)
@@ -340,6 +398,10 @@ func (c *TcpTunnelConn) writeLoop() {
 		batch = batch[:0]
 		if first != nil {
 			batch = append(batch, first)
+		}
+
+		if !c.enableWriteBatch {
+			return sendPacketBatch()
 		}
 
 		drain := func(ch <-chan *Packet) {
@@ -393,6 +455,19 @@ func (c *TcpTunnelConn) writeLoop() {
 			}
 		}
 	}
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	return errors.Is(err, os.ErrDeadlineExceeded)
 }
 
 func (c *TcpTunnelConn) Write(packet *Packet) error {

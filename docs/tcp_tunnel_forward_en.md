@@ -13,6 +13,7 @@ The TCP Tunnel Forward component is responsible for establishing connections to 
 | `interface_name` | Optional default outbound interface for forwarders that do not explicitly use `@interface_name` |
 | `connection_check_time` | Connection check interval (seconds), regularly checks and reconnects broken connections |
 | `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
+| `enable_write_batch` | Whether to aggregate multiple packets into one write cycle; defaults to `true` |
 | `write_batch_size` | Maximum number of packets grouped into a single TCP write batch; defaults to `64` |
 | `detour` | Forwarding path, specifies the component identifiers that receive return data |
 | `auth` | Authentication configuration, see the authentication section |
@@ -28,6 +29,7 @@ forwarders:
 interface_name: eth0
 connection_check_time: 30
 no_delay: true
+enable_write_batch: true
 write_batch_size: 64
 detour:
   - listen_component
@@ -53,6 +55,7 @@ Notes:
 4. When a packet is received from the TCP tunnel, the component decapsulates the packet and forwards it to the components specified in `detour`
 5. The component regularly checks connection status (as specified by `connection_check_time`) and attempts to reconnect broken connections
 6. When `no_delay` is set to true, the TCP Nagle algorithm is disabled, reducing data transmission latency
+7. When `enable_write_batch` is set to `false`, packets are written one by one instead of being coalesced into a batched write
 
 ## Use Cases
 

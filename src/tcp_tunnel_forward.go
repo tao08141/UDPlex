@@ -21,10 +21,11 @@ type TcpTunnelForwardComponent struct {
 	pools               map[PoolID]*TcpTunnelConnPool
 	noDelay             bool
 
-	recvBufferSize int
-	sendBufferSize int
-	writeBatchSize int
-	connIndex      sync.Map
+	recvBufferSize   int
+	sendBufferSize   int
+	enableWriteBatch bool
+	writeBatchSize   int
+	connIndex        sync.Map
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
@@ -47,6 +48,11 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 	noDelay := true
 	if cfg.NoDelay != nil && !*cfg.NoDelay {
 		noDelay = false
+	}
+
+	enableWriteBatch := true
+	if cfg.EnableWriteBatch != nil && !*cfg.EnableWriteBatch {
+		enableWriteBatch = false
 	}
 
 	sendTimeout := time.Duration(cfg.SendTimeout) * time.Millisecond
@@ -96,6 +102,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		noDelay:             noDelay,
 		recvBufferSize:      recvBufferSize,
 		sendBufferSize:      sendBufferSize,
+		enableWriteBatch:    enableWriteBatch,
 		writeBatchSize:      writeBatchSize,
 	}
 }
@@ -172,22 +179,42 @@ func (f *TcpTunnelForwardComponent) Start() error {
 			continue
 		}
 		logger.Infof("%s: Forwarding to %s with %d connections", f.tag, pool.RouteLabel(), pool.connCount)
-
-		for range pool.connCount {
-			ttc, err := f.setupConnection(pool)
-			if err != nil {
-				logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.RouteLabel(), err)
-				continue
-			}
-			pool.AddConnection(ttc)
-
-			logger.Infof("%s: Added new connection to %s", f.tag, pool.RouteLabel())
-		}
+		go f.ensurePoolConnections(pool)
 	}
 
 	go f.connectionChecker()
 
 	return nil
+}
+
+func (f *TcpTunnelForwardComponent) ensurePoolConnections(pool *TcpTunnelConnPool) {
+	if pool == nil {
+		return
+	}
+	if !pool.connecting.CompareAndSwap(0, 1) {
+		return
+	}
+	defer pool.connecting.Store(0)
+
+	for {
+		select {
+		case <-f.GetStopChannel():
+			return
+		default:
+		}
+
+		if pool.ConnectionCount() >= pool.connCount {
+			return
+		}
+
+		ttc, err := f.setupConnection(pool)
+		if err != nil {
+			logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.RouteLabel(), err)
+			return
+		}
+		pool.AddConnection(ttc)
+		logger.Infof("%s: Added new connection to %s", f.tag, pool.RouteLabel())
+	}
 }
 
 func (f *TcpTunnelForwardComponent) Stop() error {
@@ -253,7 +280,7 @@ func (f *TcpTunnelForwardComponent) setupConnection(pool *TcpTunnelConnPool) (*T
 		}
 	}
 
-	ttc := NewTcpTunnelConn(conn, f.forwardID, pool.poolID, f, f.router.config.QueueSize, f.writeBatchSize, TcpTunnelForwardMode)
+	ttc := NewTcpTunnelConn(conn, f.forwardID, pool.poolID, f, f.router.config.QueueSize, f.enableWriteBatch, f.writeBatchSize, TcpTunnelForwardMode)
 
 	packet := f.router.GetPacket(f.GetTag())
 	defer packet.Release(1)
@@ -382,15 +409,7 @@ func (f *TcpTunnelForwardComponent) connectionChecker() {
 					pool.RemoveConnection(conn)
 				}
 
-				for i := pool.ConnectionCount(); i < pool.connCount; i++ {
-					ttc, err := f.setupConnection(pool)
-					if err != nil {
-						logger.Errorf("%s: Failed to setup connection to %s: %v", f.tag, pool.RouteLabel(), err)
-						continue
-					}
-					pool.AddConnection(ttc)
-					logger.Infof("%s: Added new connection to %s", f.tag, pool.RouteLabel())
-				}
+				go f.ensurePoolConnections(pool)
 			}
 		case <-heartbeatIntervalTicker.C:
 			for poolID, pool := range f.pools {

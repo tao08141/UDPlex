@@ -12,6 +12,7 @@ The TCP Tunnel Listen component is responsible for listening for TCP connections
 | `listen_addr` | Listening address and port, format "IP:port", e.g. "0.0.0.0:9001" |
 | `timeout` | Connection timeout (seconds), after which connections are closed if no data is transmitted |
 | `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
+| `enable_write_batch` | Whether to aggregate multiple packets into one write cycle; defaults to `true` |
 | `write_batch_size` | Maximum number of packets grouped into a single TCP write batch; defaults to `64` |
 | `detour` | Forwarding path, specifies the component identifiers that receive data |
 | `auth` | Authentication configuration, see the authentication section |
@@ -24,6 +25,7 @@ tag: tcp_tunnel_server
 listen_addr: 0.0.0.0:9001
 timeout: 300
 no_delay: true
+enable_write_batch: true
 write_batch_size: 64
 detour:
   - forward_component
@@ -44,6 +46,7 @@ auth:
 3. Received UDP packets are decapsulated and then forwarded to the components specified in `detour`
 4. If no data is received within the time specified by `timeout`, the TCP connection is closed
 5. When `no_delay` is set to true, the TCP Nagle algorithm is disabled, reducing data transmission latency
+6. When `enable_write_batch` is set to `false`, packets are written one by one instead of being coalesced into a batched write
 
 ## Use Cases
 

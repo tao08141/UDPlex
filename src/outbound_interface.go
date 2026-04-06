@@ -27,6 +27,13 @@ func newOutboundDialer(interfaceName string, localAddr net.Addr) net.Dialer {
 	return dialer
 }
 
+func describeAddr(addr net.Addr) string {
+	if addr == nil {
+		return "<auto>"
+	}
+	return addr.String()
+}
+
 func dialUDPWithInterface(remoteAddr *net.UDPAddr, interfaceName string) (*net.UDPConn, error) {
 	if remoteAddr == nil {
 		return nil, fmt.Errorf("remote UDP address is nil")
@@ -40,6 +47,9 @@ func dialUDPWithInterface(remoteAddr *net.UDPAddr, interfaceName string) (*net.U
 	dialer := newOutboundDialer(interfaceName, localAddr)
 	conn, err := dialer.Dial("udp", remoteAddr.String())
 	if err != nil {
+		if strings.TrimSpace(interfaceName) != "" {
+			return nil, fmt.Errorf("dial udp via interface %q (local %s -> remote %s): %w", interfaceName, describeAddr(localAddr), remoteAddr.String(), err)
+		}
 		return nil, err
 	}
 
@@ -64,7 +74,14 @@ func dialTCPWithInterface(remoteAddr string, interfaceName string) (net.Conn, er
 	}
 
 	dialer := newOutboundDialer(interfaceName, localAddr)
-	return dialer.Dial("tcp", remoteAddr)
+	conn, err := dialer.Dial("tcp", remoteAddr)
+	if err != nil {
+		if strings.TrimSpace(interfaceName) != "" {
+			return nil, fmt.Errorf("dial tcp via interface %q (local %s -> remote %s): %w", interfaceName, describeAddr(localAddr), remoteAddr, err)
+		}
+		return nil, err
+	}
+	return conn, nil
 }
 
 func formatOutboundRoute(address, interfaceName string) string {

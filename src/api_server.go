@@ -209,6 +209,12 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 						if timeout, ok := serviceConfig["timeout"]; ok {
 							result["timeout"] = timeout
 						}
+						if enableWriteBatch, ok := serviceConfig["enable_write_batch"]; ok {
+							result["enable_write_batch"] = enableWriteBatch
+						}
+						if writeBatchSize, ok := serviceConfig["write_batch_size"]; ok {
+							result["write_batch_size"] = writeBatchSize
+						}
 					case "tcp_tunnel_forward":
 						if forwarders, ok := serviceConfig["forwarders"]; ok {
 							result["forwarders"] = forwarders
@@ -221,6 +227,12 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 						}
 						if sendKeepalive, ok := serviceConfig["send_keepalive"]; ok {
 							result["send_keepalive"] = sendKeepalive
+						}
+						if enableWriteBatch, ok := serviceConfig["enable_write_batch"]; ok {
+							result["enable_write_batch"] = enableWriteBatch
+						}
+						if writeBatchSize, ok := serviceConfig["write_batch_size"]; ok {
+							result["write_batch_size"] = writeBatchSize
 						}
 					case "load_balancer":
 						if windowSize, ok := serviceConfig["window_size"]; ok {

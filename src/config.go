@@ -32,6 +32,7 @@ type ComponentConfig struct {
 	SendTimeout         int         `json:"send_timeout" yaml:"send_timeout"`         // ms
 	RecvBufferSize      int         `json:"recv_buffer_size" yaml:"recv_buffer_size"` // UDP socket receive buffer size in bytes
 	SendBufferSize      int         `json:"send_buffer_size" yaml:"send_buffer_size"` // UDP socket send buffer size in bytes
+	EnableWriteBatch    *bool       `json:"enable_write_batch" yaml:"enable_write_batch"`
 	WriteBatchSize      int         `json:"write_batch_size" yaml:"write_batch_size"` // TCP tunnel writev batch size
 }
 
