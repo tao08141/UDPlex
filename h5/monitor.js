@@ -263,6 +263,10 @@ class UDPlexMonitor {
         if (detailedData && detailedData.average_delay_ms !== undefined && detailedData.average_delay_ms > 0) {
             details.push(['平均延迟', `${detailedData.average_delay_ms.toFixed(2)} ms`]);
         }
+        const heartbeatSummary = this.formatHeartbeatStats(detailedData?.heartbeat_stats);
+        if (heartbeatSummary) {
+            details.push(['心跳丢包', heartbeatSummary]);
+        }
 
         if (details.length === 0) {
             return '';
@@ -566,9 +570,6 @@ class UDPlexMonitor {
         if (connection.interface_name) {
             extraParts.push(`网卡: ${this.escapeHtml(connection.interface_name)}`);
         }
-        if (typeof connection.heartbeat_loss_rate === 'number') {
-            extraParts.push(`丢包率: ${connection.heartbeat_loss_rate.toFixed(2)}%`);
-        }
 
         return `
             <div class="connection-item ${indented ? 'connection-item-nested' : ''}">
@@ -579,6 +580,24 @@ class UDPlexMonitor {
                 ${extraParts.length > 0 ? `<div class="connection-meta">${extraParts.join(' | ')}</div>` : ''}
             </div>
         `;
+    }
+
+    formatHeartbeatStats(heartbeatStats) {
+        if (!heartbeatStats || typeof heartbeatStats !== 'object') {
+            return '';
+        }
+
+        const windows = [
+            ['5 分钟', heartbeatStats.last_5m],
+            ['1 小时', heartbeatStats.last_1h],
+            ['24 小时', heartbeatStats.last_24h]
+        ];
+
+        const parts = windows
+            .filter(([, stats]) => stats && typeof stats.loss_rate === 'number')
+            .map(([label, stats]) => `${label}: ${stats.loss_rate.toFixed(2)}% (${stats.lost || 0}/${stats.sent || 0})`);
+
+        return parts.join(' | ');
     }
 
     renderDetailList(details) {

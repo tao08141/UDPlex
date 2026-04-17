@@ -524,7 +524,7 @@ func (f *ForwardComponent) sendHeartbeat(conn *ForwardConn) {
 		logger.Warnf("%s: Heartbeat timeout for %s", f.tag, conn.RouteLabel())
 		conn.SetDisconnected()
 		conn.authState.SetAuthenticated(0)
-		conn.ResetHeartbeatStats()
+		conn.ResetHeartbeatState()
 		return
 	}
 
@@ -576,6 +576,7 @@ func (f *ForwardComponent) setupForwarder(spec outboundForwarderSpec) (*ForwardC
 		lastReconnectAttempt: time.Now(),
 		authState:            &AuthState{},
 	}
+	forwardConn.SetHeartbeatStatsTracker(f.GetHeartbeatStatsTracker())
 
 	f.initSendQueue(forwardConn)
 
@@ -633,7 +634,7 @@ func (f *ForwardComponent) tryReconnect(conn *ForwardConn) {
 
 	conn.SetConnected(newConn)
 	conn.authRetryCount = 0
-	conn.ResetHeartbeatStats()
+	conn.ResetHeartbeatState()
 	conn.authState.SetAuthenticated(0)
 
 	conn.signalClose()

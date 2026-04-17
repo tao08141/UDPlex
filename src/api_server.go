@@ -447,10 +447,30 @@ func parseIntOrZero(value string) int {
 	return parsed
 }
 
-func addHeartbeatStats(result map[string]interface{}, sent uint64, lost uint64, lossRate float64, lastHeartbeatSent time.Time) {
-	result["heartbeat_sent"] = sent
-	result["heartbeat_lost"] = lost
-	result["heartbeat_loss_rate"] = lossRate
+func addHeartbeatStats(result map[string]interface{}, stats heartbeatStatsSnapshot, lastHeartbeatSent time.Time) {
+	result["heartbeat_sent"] = stats.Last24h.Sent
+	result["heartbeat_lost"] = stats.Last24h.Lost
+	result["heartbeat_loss_rate"] = stats.Last24h.LossRate
+	result["heartbeat_loss_rate_5m"] = stats.Last5m.LossRate
+	result["heartbeat_loss_rate_1h"] = stats.Last1h.LossRate
+	result["heartbeat_loss_rate_24h"] = stats.Last24h.LossRate
+	result["heartbeat_stats"] = map[string]interface{}{
+		"last_5m": map[string]interface{}{
+			"sent":      stats.Last5m.Sent,
+			"lost":      stats.Last5m.Lost,
+			"loss_rate": stats.Last5m.LossRate,
+		},
+		"last_1h": map[string]interface{}{
+			"sent":      stats.Last1h.Sent,
+			"lost":      stats.Last1h.Lost,
+			"loss_rate": stats.Last1h.LossRate,
+		},
+		"last_24h": map[string]interface{}{
+			"sent":      stats.Last24h.Sent,
+			"lost":      stats.Last24h.Lost,
+			"loss_rate": stats.Last24h.LossRate,
+		},
+	}
 	if !lastHeartbeatSent.IsZero() {
 		result["last_heartbeat"] = lastHeartbeatSent.Format(time.RFC3339)
 	}
@@ -511,8 +531,6 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 			"last_active":   mapping.lastActive.Format(time.RFC3339),
 			"connection_id": fmt.Sprintf("%x", mapping.connID),
 		}
-		sent, lost, lossRate := mapping.HeartbeatStats()
-		addHeartbeatStats(connection, sent, lost, lossRate, mapping.LastHeartbeatSent())
 
 		// Only include is_authenticated if auth is configured
 		if hasAuth {
@@ -535,6 +553,7 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 		"connections": connections,
 		"count":       len(connections),
 	}
+	addHeartbeatStats(result, listenComponent.HeartbeatStatsSnapshot(), listenComponent.LastHeartbeatSent())
 
 	// Only include average_delay if auth is configured
 	if hasAuth {
@@ -588,8 +607,6 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 			"last_reconnect":   conn.lastReconnectAttempt.Format(time.RFC3339),
 			"auth_retry_count": conn.authRetryCount,
 		}
-		sent, lost, lossRate := conn.HeartbeatStats()
-		addHeartbeatStats(connection, sent, lost, lossRate, conn.LastHeartbeatSent())
 
 		// Only include is_authenticated if auth is configured
 		if hasAuth {
@@ -611,6 +628,7 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 		"connections": connections,
 		"count":       len(connections),
 	}
+	addHeartbeatStats(result, forwardComponent.HeartbeatStatsSnapshot(), forwardComponent.LastHeartbeatSent())
 
 	// Only include average_delay if auth is configured
 	if hasAuth {
@@ -671,8 +689,6 @@ func (a *APIServer) handleGetTcpTunnelListenConnections(w http.ResponseWriter, r
 						"is_authenticated": conn.authState != nil && conn.authState.IsAuthenticated(),
 						"last_active":      conn.lastActive.Format(time.RFC3339),
 					}
-					sent, lost, lossRate := conn.HeartbeatStats()
-					addHeartbeatStats(connection, sent, lost, lossRate, conn.LastHeartbeatSent())
 					connections = append(connections, connection)
 				}
 			}
@@ -691,6 +707,7 @@ func (a *APIServer) handleGetTcpTunnelListenConnections(w http.ResponseWriter, r
 
 	result["pools"] = pools
 	result["total_connections"] = totalConnections
+	addHeartbeatStats(result, tcpTunnelListenComponent.HeartbeatStatsSnapshot(), tcpTunnelListenComponent.LastHeartbeatSent())
 
 	// Get average delay if auth is configured
 	if tcpTunnelListenComponent.authManager != nil {
@@ -751,8 +768,6 @@ func (a *APIServer) handleGetTcpTunnelForwardConnections(w http.ResponseWriter, 
 					"is_authenticated": conn.authState != nil && conn.authState.IsAuthenticated(),
 					"last_active":      conn.lastActive.Format(time.RFC3339),
 				}
-				sent, lost, lossRate := conn.HeartbeatStats()
-				addHeartbeatStats(connection, sent, lost, lossRate, conn.LastHeartbeatSent())
 				connections = append(connections, connection)
 			}
 		}
@@ -772,6 +787,7 @@ func (a *APIServer) handleGetTcpTunnelForwardConnections(w http.ResponseWriter, 
 
 	result["pools"] = pools
 	result["total_connections"] = totalConnections
+	addHeartbeatStats(result, tcpTunnelForwardComponent.HeartbeatStatsSnapshot(), tcpTunnelForwardComponent.LastHeartbeatSent())
 
 	// Get average delay if auth is configured
 	if tcpTunnelForwardComponent.authManager != nil {

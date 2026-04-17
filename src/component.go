@@ -72,6 +72,7 @@ type BaseComponent struct {
 	router              *Router
 	stopCh              chan struct{}
 	sendTimeout         time.Duration
+	heartbeatStats      heartbeatStatsTracker
 	sendQueueDelays     [10]time.Duration
 	sendQueueDelayIndex uint32
 }
@@ -113,6 +114,18 @@ func (bc *BaseComponent) GetAverageSendQueueDelay() time.Duration {
 
 func (bc *BaseComponent) GetSendTimeout() time.Duration {
 	return bc.sendTimeout
+}
+
+func (bc *BaseComponent) GetHeartbeatStatsTracker() *heartbeatStatsTracker {
+	return &bc.heartbeatStats
+}
+
+func (bc *BaseComponent) HeartbeatStatsSnapshot() heartbeatStatsSnapshot {
+	return bc.heartbeatStats.Snapshot()
+}
+
+func (bc *BaseComponent) LastHeartbeatSent() time.Time {
+	return bc.heartbeatStats.LastHeartbeatSent()
 }
 
 func (bc *BaseComponent) GetStopChannel() chan struct{} {

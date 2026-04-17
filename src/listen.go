@@ -361,6 +361,7 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 				authState:  &AuthState{},
 				connID:     l.generateConnID(),
 			}
+			mapping.SetHeartbeatStatsTracker(l.GetHeartbeatStatsTracker())
 			l.mappings[addrKey] = mapping
 			l.syncMapping()
 		}
@@ -569,6 +570,7 @@ func (l *ListenComponent) handlePackets() {
 						logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
 						connID := l.generateConnID()
 						mapping = &ListenConn{addr: addr, lastActive: time.Now(), connID: connID}
+						mapping.SetHeartbeatStatsTracker(l.GetHeartbeatStatsTracker())
 						l.mappings[addrKey] = mapping
 						l.syncMapping()
 						packet.SetConnID(connID)

@@ -194,6 +194,7 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 		writeWg:          sync.WaitGroup{},
 		t:                &t,
 	}
+	c.SetHeartbeatStatsTracker(t.GetHeartbeatStatsTracker())
 
 	// Start to write goroutine
 	c.writeWg.Add(1)
@@ -243,6 +244,7 @@ type TcpTunnelComponent interface {
 	GetTag() string
 	GetStopChannel() chan struct{}
 	GetAuthManager() *AuthManager
+	GetHeartbeatStatsTracker() *heartbeatStatsTracker
 	HandleAuthenticatedConnection(c *TcpTunnelConn) error
 	Disconnect(c *TcpTunnelConn)
 	GetSendTimeout() time.Duration

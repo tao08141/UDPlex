@@ -25,6 +25,7 @@ type testTcpTunnelComponent struct {
 	stop        chan struct{}
 	r           *Router
 	a           *AuthManager
+	heartbeat   heartbeatStatsTracker
 	sendTimeout time.Duration
 	disconnects atomic.Int32
 }
@@ -34,6 +35,9 @@ func (t *testTcpTunnelComponent) GetRouter() *Router            { return t.r }
 func (t *testTcpTunnelComponent) GetTag() string                { return t.tag }
 func (t *testTcpTunnelComponent) GetStopChannel() chan struct{} { return t.stop }
 func (t *testTcpTunnelComponent) GetAuthManager() *AuthManager  { return t.a }
+func (t *testTcpTunnelComponent) GetHeartbeatStatsTracker() *heartbeatStatsTracker {
+	return &t.heartbeat
+}
 func (t *testTcpTunnelComponent) Disconnect(c *TcpTunnelConn)   { t.disconnects.Add(1) }
 func (t *testTcpTunnelComponent) GetSendTimeout() time.Duration { return t.sendTimeout }
 func (t *testTcpTunnelComponent) HandleAuthenticatedConnection(c *TcpTunnelConn) error {
