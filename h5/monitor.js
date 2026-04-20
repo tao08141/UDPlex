@@ -265,7 +265,7 @@ class UDPlexMonitor {
         }
         const heartbeatSummary = this.formatHeartbeatStats(detailedData?.heartbeat_stats);
         if (heartbeatSummary) {
-            details.push(['心跳丢包', heartbeatSummary]);
+            details.push(['心跳丢包', heartbeatSummary, true]);
         }
 
         if (details.length === 0) {
@@ -441,12 +441,12 @@ class UDPlexMonitor {
         }).join('');
 
         return `
-            <div class="connections-info">
-                <div class="detour-title">WireGuard Peers</div>
+            <details class="connections-info">
+                <summary class="detour-title" style="cursor: pointer; user-select: none; font-weight: bold;">WireGuard Peers <span style="font-size: 0.8em; color: #888; font-weight: normal; margin-left: 8px;">(点击展开/折叠)</span></summary>
                 <div class="peer-list">
                     ${items}
                 </div>
-            </div>
+            </details>
         `;
     }
 
@@ -522,7 +522,20 @@ class UDPlexMonitor {
             return '';
         }
 
-        let html = '<div class="connections-info"><div class="detour-title">连接信息</div>';
+        let totalConns = 0;
+        if (Array.isArray(detailedData.connections)) {
+            totalConns += detailedData.connections.length;
+        }
+        if (Array.isArray(detailedData.pools)) {
+            detailedData.pools.forEach((pool) => {
+                if (Array.isArray(pool.connections)) {
+                    totalConns += pool.connections.length;
+                }
+            });
+        }
+
+        const isOpen = totalConns < 4 ? 'open' : '';
+        let html = `<details class="connections-info" ${isOpen}><summary class="detour-title" style="cursor: pointer; user-select: none; font-weight: bold; margin-bottom: 8px;">连接信息 <span style="font-size: 0.8em; color: #888; font-weight: normal; margin-left: 8px;">(点击展开/折叠)</span></summary>`;
 
         if (Array.isArray(detailedData.connections)) {
             detailedData.connections.forEach((connection) => {
@@ -551,7 +564,7 @@ class UDPlexMonitor {
             });
         }
 
-        html += '</div>';
+        html += '</details>';
         return html;
     }
 
@@ -597,7 +610,7 @@ class UDPlexMonitor {
             .filter(([, stats]) => stats && typeof stats.loss_rate === 'number')
             .map(([label, stats]) => `${label}: ${stats.loss_rate.toFixed(2)}% (${stats.lost || 0}/${stats.sent || 0})`);
 
-        return parts.join(' | ');
+        return parts.join('<br>');
     }
 
     renderDetailList(details) {
