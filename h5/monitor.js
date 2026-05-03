@@ -2,6 +2,7 @@ class UDPlexMonitor {
     constructor() {
         this.components = new Map();
         this.detailedData = new Map();
+        this.expandedSections = new Set();
         this.autoRefresh = true;
         this.refreshInterval = 5000;
         this.refreshTimer = null;
@@ -178,6 +179,7 @@ class UDPlexMonitor {
     }
 
     renderComponents() {
+        this.captureExpandedSections();
         const container = document.getElementById('componentsContainer');
         container.innerHTML = '';
 
@@ -189,6 +191,58 @@ class UDPlexMonitor {
         container.style.display = 'grid';
         this.attachGeoButtons();
         this.attachDetourClicks();
+        this.attachCollapsibleStateTracking();
+        this.pruneExpandedSections();
+    }
+
+    captureExpandedSections() {
+        document.querySelectorAll('details[data-expansion-key]').forEach((element) => {
+            const key = element.dataset.expansionKey;
+            if (!key) {
+                return;
+            }
+
+            if (element.open) {
+                this.expandedSections.add(key);
+            } else {
+                this.expandedSections.delete(key);
+            }
+        });
+    }
+
+    attachCollapsibleStateTracking() {
+        document.querySelectorAll('details[data-expansion-key]').forEach((element) => {
+            element.addEventListener('toggle', () => {
+                const key = element.dataset.expansionKey;
+                if (!key) {
+                    return;
+                }
+
+                if (element.open) {
+                    this.expandedSections.add(key);
+                } else {
+                    this.expandedSections.delete(key);
+                }
+            });
+        });
+    }
+
+    pruneExpandedSections() {
+        const visibleKeys = new Set(
+            Array.from(document.querySelectorAll('details[data-expansion-key]'))
+                .map((element) => element.dataset.expansionKey)
+                .filter(Boolean)
+        );
+
+        this.expandedSections.forEach((key) => {
+            if (!visibleKeys.has(key)) {
+                this.expandedSections.delete(key);
+            }
+        });
+    }
+
+    getDetailsOpenAttribute(key, defaultOpen = false) {
+        return (this.expandedSections.has(key) || defaultOpen) ? 'open' : '';
     }
 
     createComponentCard(component) {
@@ -369,12 +423,13 @@ class UDPlexMonitor {
 
         let html = this.renderDetailList(details);
         if (Array.isArray(detailedData?.peers) && detailedData.peers.length > 0) {
-            html += this.renderWireGuardPeers(detailedData.peers);
+            html += this.renderWireGuardPeers(component.tag, detailedData.peers);
         }
         return html;
     }
 
-    renderWireGuardPeers(peers) {
+    renderWireGuardPeers(componentTag, peers) {
+        const expansionKey = `wg-peers:${componentTag}`;
         const items = peers.map((peer, index) => {
             const badges = [];
             if (peer.runtime_present) {
@@ -441,7 +496,7 @@ class UDPlexMonitor {
         }).join('');
 
         return `
-            <details class="connections-info">
+            <details class="connections-info" data-expansion-key="${expansionKey}" ${this.getDetailsOpenAttribute(expansionKey)}>
                 <summary class="detour-title" style="cursor: pointer; user-select: none; font-weight: bold;">WireGuard Peers <span style="font-size: 0.8em; color: #888; font-weight: normal; margin-left: 8px;">(点击展开/折叠)</span></summary>
                 <div class="peer-list">
                     ${items}
@@ -535,7 +590,8 @@ class UDPlexMonitor {
         }
 
         const isOpen = totalConns < 4 ? 'open' : '';
-        let html = `<details class="connections-info" ${isOpen}><summary class="detour-title" style="cursor: pointer; user-select: none; font-weight: bold; margin-bottom: 8px;">连接信息 <span style="font-size: 0.8em; color: #888; font-weight: normal; margin-left: 8px;">(点击展开/折叠)</span></summary>`;
+    const expansionKey = `connections:${component.tag}`;
+    let html = `<details class="connections-info" data-expansion-key="${this.escapeHtml(expansionKey)}" ${this.getDetailsOpenAttribute(expansionKey, totalConns < 4)}><summary class="detour-title" style="cursor: pointer; user-select: none; font-weight: bold; margin-bottom: 8px;">连接信息 <span style="font-size: 0.8em; color: #888; font-weight: normal; margin-left: 8px;">(点击展开/折叠)</span></summary>`;
 
         if (Array.isArray(detailedData.connections)) {
             detailedData.connections.forEach((connection) => {
