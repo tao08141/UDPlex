@@ -103,8 +103,43 @@ docker-compose down
 | `buffer_size` | UDP数据包缓冲区大小（字节），建议设置为MTU大小，通常为1500 |
 | `queue_size` | 组件间数据包队列大小，高流量场景建议增大此值 |
 | `worker_count` | 为兼容性保留；当前路由器在调用方 goroutine 内直接完成路由 |
+| `udp_batch_size` | 仅 Linux：`listen`/`forward` 每次 `recvmmsg`/`sendmmsg` 处理的数据包数，默认 64，设为 `1` 关闭批量收发。批量只合并已经在排队的包，不会为了凑批而等待 |
+| `udp_offload` | 仅 Linux：在 `listen`/`forward` 套接字上启用 UDP GSO/GRO，默认 `true`。内核或网卡不支持时自动回退 |
 | `services` | 组件配置数组，定义系统中所有的处理组件 |
 | `protocol_detectors` | 协议检测器配置，用于识别和过滤特定协议的数据包 |
+
+## 性能调优
+
+在 Linux 上，`listen` 与 `forward` 默认使用批量收发（`recvmmsg`/`sendmmsg`）和 UDP GSO/GRO（见上方 `udp_batch_size` / `udp_offload`），无需额外配置。单个数据包仍会立即发送，游戏等低速率流量不会因此增加延迟。
+
+### 套接字缓冲区：吞吐与延迟的取舍
+
+`listen`、`forward` 组件的 `recv_buffer_size` / `send_buffer_size` 用于设置 `SO_RCVBUF` / `SO_SNDBUF`。更大的缓冲区能吸收突发流量（例如 WireGuard/OpenVPN 把大块数据拆成多个 MTU 大小的包），大幅提升大流量吞吐。但缓冲区里排队的每个字节都会成为后续数据包的额外延迟（bufferbloat）。以下是 WireGuard over UDPlex（forward / load balancer，veth，单机）的实测结果：
+
+| 套接字缓冲区 | 大流量 TCP 传输期间 100pps 探测包的 p50 延迟 | 大流量 TCP 吞吐 |
+|-------------|----------------------|----------------|
+| 系统默认（约 208 KB） | 0.5–0.6 ms | 2.0–3.0 Gbit/s |
+| 512 KB | 1.1–1.5 ms | 4.2–5.3 Gbit/s |
+| 1 MB | 1.7–2.5 ms | 5.0–6.1 Gbit/s |
+| 4 MB | 4–9 ms | 5.2–6.8 Gbit/s |
+
+建议：
+
+- 游戏加速等对延迟敏感的场景：不要设置缓冲区大小。
+- 以大流量为主的场景：512 KB–1 MB 是比较好的折中，再往上主要只会增加延迟。
+- Linux 会把这两个值静默限制在 `net.core.rmem_max` / `net.core.wmem_max` 以内，需要先调大，例如 `sysctl -w net.core.rmem_max=1048576 net.core.wmem_max=1048576`。
+
+```yaml
+  - type: forward
+    tag: line_a
+    forwarders: [SERVER_IP:5900]
+    recv_buffer_size: 1048576
+    send_buffer_size: 1048576
+```
+
+### 负载均衡
+
+使用 `seq % 2 == 0` 这类规则在多条线路间分流时，建议开启 `batch_decision: true`（见 [Load Balancer](docs/load_balancer_zh.md#批量决策)）。它让每个突发完整、有序地走同一条线路。在我们的测试中，WireGuard 隧道内的 TCP 吞吐比逐包轮换高约 25–35%，接近单线路的吞吐。
 
 ## 服务组件参数
 

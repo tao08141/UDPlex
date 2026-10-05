@@ -32,6 +32,7 @@ The load balancer component uses a sliding window mechanism for traffic statisti
 | `detour` | Forwarding path, specifies the component identifiers that receive data |
 | `window_size` | Traffic statistics time window, e.g., 10, representing 10s |
 | `miss`        | Optional list of target tags to use when no rules match      |
+| `batch_decision` | Optional, default `false`. Evaluate the rules once per receive batch instead of once per packet; see [Batch Decision](#batch-decision) |
 
 
 ### detour Configuration
@@ -180,3 +181,11 @@ In this example:
 - Otherwise (if the rule does not match), it goes to `target2`.
 - If `miss` is not configured and no rules match, the packet is dropped (or processed by next logic if applicable, but typically dropped in LB context).
 
+
+## Batch Decision
+
+With `batch_decision: true`, packets that were received together (one `recvmmsg`/GRO read on a `listen`/`forward` socket, or one send batch from the `wg` component) all follow the decision made for the first packet of the batch, and `seq` increases once per batch instead of once per packet.
+
+This matters for rules such as `seq % 2 == 0` that split high-bandwidth traffic across lines. Per-packet alternation interleaves every burst across both lines, so the receiver sees heavy reordering, which defeats TCP GRO inside the tunnel and causes spurious retransmissions. With batch decisions, a burst stays on one line in order and the next burst goes to the other line, so traffic is still spread across both lines.
+
+Low-rate traffic such as game packets usually arrives one packet per batch, so it behaves exactly as before. Rules that send to several targets (redundant mode) are unaffected, because every packet is still sent to all targets.

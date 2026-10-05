@@ -14,6 +14,8 @@ The Listen component is responsible for listening on a specified UDP port, recei
 | `replace_old_mapping` | Whether to replace old mappings, when true new mappings replace old mappings with the same address |
 | `detour` | Forwarding path, specifies the component identifiers that receive data |
 | `auth` | Authentication configuration, see the authentication section |
+| `recv_buffer_size` | Optional UDP socket receive buffer size in bytes (`SO_RCVBUF`). See [Performance Tuning](../README.md#performance-tuning) |
+| `send_buffer_size` | Optional UDP socket send buffer size in bytes (`SO_SNDBUF`) |
 
 ## Configuration Example
 

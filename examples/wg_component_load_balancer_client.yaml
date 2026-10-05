@@ -52,6 +52,7 @@ services:
   - type: load_balancer
     tag: load_balancer
     window_size: 3
+    batch_decision: true
     detour:
       - rule: "bps <= 50000000 || !available_redundant_forward1 || !available_redundant_forward2"
         targets: [redundant_forward1, redundant_forward2]

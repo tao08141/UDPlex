@@ -16,6 +16,7 @@ services:
   - type: load_balancer
     tag: load_balancer
     window_size: 10
+    batch_decision: true
     detour:
       - rule: available_client_forward && seq % 2 == 0
         targets: [client_forward]

@@ -527,11 +527,13 @@ func (b *WireGuardBind) Send(bufs [][]byte, ep wgconn.Endpoint) error {
 		return fmt.Errorf("%s: no detour available for wireguard packet", b.component.tag)
 	}
 
+	batchID := b.component.router.NextBatchID()
 	for _, buf := range bufs {
 		packet := b.component.router.GetPacket(b.component.tag)
 		copy(packet.BufAtOffset(), buf)
 		packet.SetLength(len(buf))
 		packet.SetConnID(endpoint.connID)
+		packet.SetBatchID(batchID)
 
 		if err := b.component.router.Route(&packet, destTags); err != nil {
 			packet.Release(1)

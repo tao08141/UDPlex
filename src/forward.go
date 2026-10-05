@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -131,30 +130,77 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 		refreshInterval = f.sendTimeout
 	}
 
-	sendPkt := func(pkt *Packet) bool {
-		if pkt == nil {
-			return true
-		}
-		if !conn.IsConnected() || conn.conn == nil {
-			pkt.Release(1)
+	writer := newUDPBatchWriter(f.router, f.tag)
+	batch := make([]*Packet, 0, writer.MaxBatch())
+	data := make([][]byte, 0, writer.MaxBatch())
+
+	// flush writes the collected packets and reports whether the loop should keep running.
+	flush := func() bool {
+		defer func() {
+			for i, pkt := range batch {
+				pkt.Release(1)
+				batch[i] = nil
+			}
+			batch = batch[:0]
+		}()
+		udpConn := conn.conn
+		if !conn.IsConnected() || udpConn == nil {
 			return true
 		}
 		if f.sendTimeout > 0 {
 			now := time.Now()
 			if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= refreshInterval {
-				if err := conn.conn.SetWriteDeadline(now.Add(f.sendTimeout)); err != nil {
+				if err := udpConn.SetWriteDeadline(now.Add(f.sendTimeout)); err != nil {
 					logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.RouteLabel(), err)
 				}
 				lastDeadlineUpdate = now
 			}
 		}
-		if _, err := conn.conn.Write(pkt.GetData()); err != nil {
+		data = data[:0]
+		for _, pkt := range batch {
+			data = append(data, pkt.GetData())
+		}
+		if _, err := writer.Write(udpConn, data, nil); err != nil {
 			logger.Infof("%s: Error writing to %s: %v", f.tag, conn.RouteLabel(), err)
 			conn.SetDisconnected()
-			pkt.Release(1)
 			return false
 		}
-		pkt.Release(1)
+		return true
+	}
+
+	add := func(pkt *Packet) {
+		if pkt != nil {
+			batch = append(batch, pkt)
+		}
+	}
+
+	// collect drains already queued packets without blocking, priority first.
+	collect := func() bool {
+		for len(batch) < cap(batch) {
+			select {
+			case pkt, ok := <-conn.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				add(pkt)
+				continue
+			default:
+			}
+			select {
+			case pkt, ok := <-conn.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				add(pkt)
+			case pkt, ok := <-conn.sendQueue:
+				if !ok {
+					return false
+				}
+				add(pkt)
+			default:
+				return true
+			}
+		}
 		return true
 	}
 
@@ -172,37 +218,38 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 				f.drainForwardQueue(conn)
 				return
 			}
-			if !sendPkt(pkt) {
-				return
-			}
-			continue
+			add(pkt)
 		default:
+			// No priority packets pending, wait on both channels.
+			select {
+			case <-f.GetStopChannel():
+				f.drainForwardQueue(conn)
+				return
+			case <-conn.closeCh:
+				f.drainForwardQueue(conn)
+				return
+			case pkt, ok := <-conn.sendQueuePrio:
+				if !ok {
+					f.drainForwardQueue(conn)
+					return
+				}
+				add(pkt)
+			case pkt, ok := <-conn.sendQueue:
+				if !ok {
+					f.drainForwardQueue(conn)
+					return
+				}
+				add(pkt)
+			}
 		}
 
-		// No priority packets pending, wait on both channels.
-		select {
-		case <-f.GetStopChannel():
+		open := collect()
+		if !flush() {
+			return
+		}
+		if !open {
 			f.drainForwardQueue(conn)
 			return
-		case <-conn.closeCh:
-			f.drainForwardQueue(conn)
-			return
-		case pkt, ok := <-conn.sendQueuePrio:
-			if !ok {
-				f.drainForwardQueue(conn)
-				return
-			}
-			if !sendPkt(pkt) {
-				return
-			}
-		case pkt, ok := <-conn.sendQueue:
-			if !ok {
-				f.drainForwardQueue(conn)
-				return
-			}
-			if !sendPkt(pkt) {
-				return
-			}
 		}
 	}
 }
@@ -665,76 +712,85 @@ func (f *ForwardComponent) readFromForwarder(conn *ForwardConn) {
 		deadlineRefresh = f.connectionCheckTime
 	}
 
-	for conn.IsConnected() {
+	udpConn := conn.conn
+	if udpConn == nil {
+		return
+	}
+	reader := newUDPBatchReader(udpConn, f.router)
+	defer reader.Close()
+
+	// A reconnect replaces conn.conn and starts a new reader, so stop when the socket changes.
+	for conn.IsConnected() && conn.conn == udpConn {
 		select {
 		case <-f.GetStopChannel():
 			return
 		default:
 			now := time.Now()
 			if lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= deadlineRefresh {
-				if err := conn.conn.SetReadDeadline(now.Add(f.connectionCheckTime)); err != nil {
+				if err := udpConn.SetReadDeadline(now.Add(f.connectionCheckTime)); err != nil {
 					logger.Warnf("%s: Failed to set read deadline for %s: %v", f.tag, conn.RouteLabel(), err)
 					return
 				}
 				lastDeadlineUpdate = now
 			}
 
-			func() {
-				packet := f.router.GetPacket(f.tag)
-				defer packet.Release(1)
-
-				length, err := conn.conn.Read(packet.BufAtOffset())
-
-				if err != nil {
-					var netErr net.Error
-					if errors.As(err, &netErr) && netErr.Timeout() {
-						lastDeadlineUpdate = time.Time{} // Force refresh on next iteration
-						return
-					}
-
-					logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.RouteLabel(), err)
-					conn.SetDisconnected()
+			n, err := reader.Read()
+			if err != nil {
+				if isTimeoutError(err) {
+					lastDeadlineUpdate = time.Time{} // Force refresh on next iteration
+					continue
+				}
+				if conn.conn != udpConn {
 					return
 				}
+				logger.Warnf("%s: Error reading from %s: %v", f.tag, conn.RouteLabel(), err)
+				conn.SetDisconnected()
+				continue
+			}
 
-				packet.SetLength(length)
-
-				// Handle authentication if enabled
-				if f.authManager != nil {
-					if length < HeaderSize {
-						return
-					}
-
-					header, err := f.authManager.UnwrapData(&packet)
-					if err != nil {
-						if err.Error() != "duplicate packet detected" {
-							logger.Infof("%s: %s Failed to unwrap data: %v", f.tag, conn.RouteLabel(), err)
-						}
-						return
-					}
-
-					// Handle auth messages
-					if header.MsgType != MsgTypeData {
-						f.handleAuthMessage(header, packet.GetData(), conn)
-						return
-					}
-
-					// For data messages, check authentication
-					if !conn.IsAuthenticated() {
-						return
-					}
-
-				}
-
-				// Set source address for downstream components
-				packet.SetSrcAddr(conn.UDPAddr())
-
-				// Forward to detour components
-				if err := f.router.Route(&packet, f.detour); err != nil {
-					logger.Infof("%s: Error routing: %v", f.tag, err)
-				}
-			}()
+			for i := 0; i < n; i++ {
+				packet, _ := reader.Take(i, f.tag)
+				f.handleForwarderPacket(conn, &packet)
+				packet.Release(1)
+			}
 		}
+	}
+}
+
+// handleForwarderPacket authenticates a datagram received from conn and routes it.
+func (f *ForwardComponent) handleForwarderPacket(conn *ForwardConn, packet *Packet) {
+	// Handle authentication if enabled
+	if f.authManager != nil {
+		if packet.Length() < HeaderSize {
+			return
+		}
+
+		header, err := f.authManager.UnwrapData(packet)
+		if err != nil {
+			if err.Error() != "duplicate packet detected" {
+				logger.Infof("%s: %s Failed to unwrap data: %v", f.tag, conn.RouteLabel(), err)
+			}
+			return
+		}
+
+		// Handle auth messages
+		if header.MsgType != MsgTypeData {
+			f.handleAuthMessage(header, packet.GetData(), conn)
+			return
+		}
+
+		// For data messages, check authentication
+		if !conn.IsAuthenticated() {
+			return
+		}
+	}
+
+	// Set source address for downstream components
+	packet.SetSrcAddr(conn.UDPAddr())
+
+	// Forward to detour components
+	if err := f.router.Route(packet, f.detour); err != nil {
+		logger.Infof("%s: Error routing: %v", f.tag, err)
 	}
 }
 

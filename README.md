@@ -102,8 +102,43 @@ It supports:
 | `buffer_size` | UDP packet buffer size (bytes), recommended to set to MTU size, usually 1500 |
 | `queue_size` | Inter-component packet queue size, increase for high traffic scenarios |
 | `worker_count` | Reserved for compatibility; the current router routes packets in the caller goroutine |
+| `udp_batch_size` | Linux only: datagrams per `recvmmsg`/`sendmmsg` call on `listen`/`forward` sockets, default 64, `1` disables batching. Batching only groups packets that are already queued, so it adds no waiting time |
+| `udp_offload` | Linux only: enable UDP GSO/GRO on `listen`/`forward` sockets, default `true`. Falls back automatically when the kernel or NIC does not support it |
 | `services` | Component configuration array, defines all processing components in the system |
 | `protocol_detectors` | Protocol detector configuration for identifying and filtering packets of specific protocols |
+
+## Performance Tuning
+
+On Linux, `listen` and `forward` read and write UDP in batches (`recvmmsg`/`sendmmsg`) and use UDP GSO/GRO by default (see `udp_batch_size` / `udp_offload` above). No configuration is needed. A lone packet is still sent immediately, so low-rate traffic such as game packets sees no extra delay.
+
+### Socket buffers: throughput vs. latency
+
+`recv_buffer_size` / `send_buffer_size` on `listen` and `forward` components set `SO_RCVBUF` / `SO_SNDBUF`. Larger buffers absorb bursts (e.g. WireGuard/OpenVPN splitting large writes into MTU-sized packets) and raise bulk throughput a lot. However, every byte queued in the buffer is added latency for everything behind it (bufferbloat). Measured with WireGuard over UDPlex (forward / load balancer, veth, single host):
+
+| Socket buffer | 100 pps ping p50 while a bulk TCP transfer runs | Bulk TCP throughput |
+|---------------|------------------------|----------------------|
+| system default (≈208 KB) | 0.5–0.6 ms | 2.0–3.0 Gbit/s |
+| 512 KB | 1.1–1.5 ms | 4.2–5.3 Gbit/s |
+| 1 MB | 1.7–2.5 ms | 5.0–6.1 Gbit/s |
+| 4 MB | 4–9 ms | 5.2–6.8 Gbit/s |
+
+Recommendations:
+
+- Game acceleration or other latency-sensitive use: leave the buffers unset.
+- Mainly bulk traffic: 512 KB–1 MB is a good compromise. Going beyond that mostly adds latency.
+- Linux silently caps the values at `net.core.rmem_max` / `net.core.wmem_max`. Raise those first, e.g. `sysctl -w net.core.rmem_max=1048576 net.core.wmem_max=1048576`.
+
+```yaml
+  - type: forward
+    tag: line_a
+    forwarders: [SERVER_IP:5900]
+    recv_buffer_size: 1048576
+    send_buffer_size: 1048576
+```
+
+### Load balancer
+
+When splitting traffic across lines with rules such as `seq % 2 == 0`, enable `batch_decision: true` (see [Load Balancer](docs/load_balancer_en.md#batch-decision)). It keeps each burst on one line in order, In our tests this raised TCP throughput through a WireGuard tunnel by about 25–35% over per-packet alternation, close to the throughput of a single line.
 
 ## Service Component Parameters
 

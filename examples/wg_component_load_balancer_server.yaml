@@ -44,6 +44,7 @@ services:
   - type: load_balancer
     tag: load_balancer
     window_size: 3
+    batch_decision: true
     detour:
       - rule: "bps <= 50000000 || !available_server_listen1 || !available_server_listen2"
         targets: [server_listen1, server_listen2]

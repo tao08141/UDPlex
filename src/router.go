@@ -28,6 +28,7 @@ func NewRouter(config Config) *Router {
 	r := &Router{
 		config:     config,
 		components: make(map[string]Component),
+		udpIO:      newUDPIOOptions(config),
 		bufferPool: sync.Pool{
 			New: func() any {
 				buf := make([]byte, config.BufferSize+config.BufferOffset)
@@ -50,6 +51,13 @@ type Router struct {
 	bufferRefCount int32
 	config         Config
 	connPool       atomic.Pointer[connDataSnapshot]
+	udpIO          udpIOOptions
+	batchSeq       atomic.Uint64
+}
+
+// NextBatchID returns a new non-zero id for a group of packets received together.
+func (r *Router) NextBatchID() uint64 {
+	return r.batchSeq.Add(1)
 }
 
 func (r *Router) GetConnData(connID ConnID, tag string) any {

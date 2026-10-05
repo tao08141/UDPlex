@@ -10,6 +10,8 @@ type Config struct {
 	ProtocolDetectors map[string]ProtocolDefinition `json:"protocol_detectors" yaml:"protocol_detectors"`
 	Logging           LoggingConfig                 `json:"logging" yaml:"logging"`
 	API               APIConfig                     `json:"api" yaml:"api"`
+	UDPBatchSize      int                           `json:"udp_batch_size" yaml:"udp_batch_size"` // Datagrams per recvmmsg/sendmmsg on Linux, 1 disables batching (default 64)
+	UDPOffload        *bool                         `json:"udp_offload" yaml:"udp_offload"`       // UDP GSO/GRO on Linux (default true)
 }
 
 // ComponentConfig represents the common configuration for all components
@@ -77,6 +79,9 @@ type LoadBalancerComponentConfig struct {
 	Miss        []string                 `json:"miss" yaml:"miss"`
 	WindowSize  uint32                   `json:"window_size" yaml:"window_size"`
 	EnableCache bool                     `json:"enable_cache" yaml:"enable_cache"`
+	// BatchDecision evaluates the rules once per receive batch instead of once
+	// per packet, so packets received together stay on the same path in order.
+	BatchDecision bool `json:"batch_decision" yaml:"batch_decision"`
 }
 
 type WireGuardPeerConfig struct {

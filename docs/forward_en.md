@@ -16,6 +16,8 @@ The Forward component is responsible for forwarding packets to one or more targe
 | `send_keepalive` | Whether to send empty packets as heartbeats to keep the connection active |
 | `detour` | Forwarding path, specifies the component identifiers that receive return data |
 | `auth` | Authentication configuration, see the authentication section |
+| `recv_buffer_size` | Optional UDP socket receive buffer size in bytes (`SO_RCVBUF`). See [Performance Tuning](../README.md#performance-tuning) |
+| `send_buffer_size` | Optional UDP socket send buffer size in bytes (`SO_SNDBUF`) |
 
 ## Configuration Example
 

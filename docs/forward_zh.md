@@ -15,6 +15,8 @@ Forward 组件负责将数据包转发到一个或多个目标服务器，并处
 | `send_keepalive` | 是否发送空数据包作为心跳包来保持连接活跃 |
 | `detour` | 转发路径，指定接收返回数据的组件标识列表 |
 | `auth` | 鉴权配置，详见鉴权部分 |
+| `recv_buffer_size` | 可选，UDP 套接字接收缓冲区大小（字节，`SO_RCVBUF`），参见[性能调优](../README_ZH.md#性能调优) |
+| `send_buffer_size` | 可选，UDP 套接字发送缓冲区大小（字节，`SO_SNDBUF`） |
 
 ## 配置示例
 

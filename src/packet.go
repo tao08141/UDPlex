@@ -15,6 +15,7 @@ type Packet struct {
 	proto   string
 	router  *Router
 	connID  ConnID // Unique connection identifier
+	batchID uint64 // Non-zero for packets received in the same batch (recvmmsg, GRO or a wireguard Send)
 }
 
 func (p *Packet) GetData() []byte {
@@ -49,6 +50,7 @@ func (p *Packet) Copy() Packet {
 		proto:   p.proto,
 		router:  p.router,
 		connID:  p.connID,
+		batchID: p.batchID,
 	}
 	if p.length > 0 {
 		copy(newPacket.buffer[newPacket.offset:newPacket.offset+newPacket.length], p.buffer[p.offset:p.offset+p.length])
@@ -108,3 +110,9 @@ func (p *Packet) ConnID() ConnID { return p.connID }
 
 // SetConnID sets the unique connection identifier.
 func (p *Packet) SetConnID(id ConnID) { p.connID = id }
+
+// BatchID returns the id shared by packets received in the same batch, or 0.
+func (p *Packet) BatchID() uint64 { return p.batchID }
+
+// SetBatchID sets the batch id.
+func (p *Packet) SetBatchID(id uint64) { p.batchID = id }

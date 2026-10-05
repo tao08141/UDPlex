@@ -37,6 +37,12 @@ type TrafficStats struct {
 	totalPackets   uint64          // totalPackets represents the cumulative count of packets processed across all samples in the traffic statistics.
 }
 
+// lbBatchDecision remembers the targets chosen for one receive batch.
+type lbBatchDecision struct {
+	batchID uint64
+	targets []string
+}
+
 // LoadBalancerComponent implements intelligent packet distribution based on traffic and rules
 type LoadBalancerComponent struct {
 	BaseComponent
@@ -48,6 +54,8 @@ type LoadBalancerComponent struct {
 	ruleTargets     [][]string                     // Corresponding targets for each rule (array of arrays)
 	expressionCache map[string]*CompiledExpression // Cache for compiled expressions
 	enableCache     bool
+	batchDecision   bool
+	lastBatch       atomic.Pointer[lbBatchDecision] // Decision for the most recent receive batch
 	evalEnvPool     sync.Pool
 	vmPool          sync.Pool
 }
@@ -65,6 +73,7 @@ func NewLoadBalancerComponent(cfg LoadBalancerComponentConfig, router *Router) (
 		packetSeq:       0,
 		expressionCache: make(map[string]*CompiledExpression),
 		enableCache:     cfg.EnableCache,
+		batchDecision:   cfg.BatchDecision,
 	}
 	lb.evalEnvPool.New = func() any {
 		return make(map[string]any, 8)
@@ -231,6 +240,18 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 	// Update traffic statistics
 	lb.updateStats(packet)
 
+	// Packets received in the same batch follow the first packet's decision, so a
+	// burst stays on one path in order instead of being interleaved across paths.
+	batchID := packet.BatchID()
+	if lb.batchDecision && batchID != 0 {
+		if last := lb.lastBatch.Load(); last != nil && last.batchID == batchID {
+			if err := lb.router.Route(packet, last.targets); err != nil {
+				return fmt.Errorf("routing error: %w", err)
+			}
+			return nil
+		}
+	}
+
 	// Get current stats for rule evaluation
 	bps, pps := lb.getCurrentStats()
 
@@ -249,6 +270,10 @@ func (lb *LoadBalancerComponent) HandlePacket(packet *Packet) error {
 		} else {
 			return nil
 		}
+	}
+
+	if lb.batchDecision && batchID != 0 {
+		lb.lastBatch.Store(&lbBatchDecision{batchID: batchID, targets: targets})
 	}
 
 	// Route packet to all determined targets

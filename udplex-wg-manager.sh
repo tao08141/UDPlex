@@ -630,6 +630,7 @@ $(render_client_outer_service "redundant_forward2" "${LINE2_ADDR}" "${LINE2_PROT
   - type: load_balancer
     tag: load_balancer
     window_size: 3
+    batch_decision: true
     detour:
 $(render_load_balancer_rules "${THRESH}" "redundant_forward1" "redundant_forward2" "${HIGH_TRAFFIC_MODE}" "${PREFERRED_LINE}")
 YAML
@@ -677,6 +678,7 @@ $(render_server_outer_service "server_listen2" "${LISTEN2_PORT}" "${LINE2_PROTO}
   - type: load_balancer
     tag: load_balancer
     window_size: 3
+    batch_decision: true
     detour:
 $(render_load_balancer_rules "${THRESH}" "server_listen1" "server_listen2" "${HIGH_TRAFFIC_MODE}" "${PREFERRED_LINE}")
 YAML

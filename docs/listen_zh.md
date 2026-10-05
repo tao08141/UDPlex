@@ -14,6 +14,8 @@ Listen 组件负责监听指定的 UDP 端口，接收来自客户端的数据�
 | `replace_old_mapping` | 是否替换旧映射，当为true时新映射会替换同地址的旧映射 |
 | `detour` | 转发路径，指定接收数据的组件标识列表 |
 | `auth` | 鉴权配置，详见鉴权部分 |
+| `recv_buffer_size` | 可选，UDP 套接字接收缓冲区大小（字节，`SO_RCVBUF`），参见[性能调优](../README_ZH.md#性能调优) |
+| `send_buffer_size` | 可选，UDP 套接字发送缓冲区大小（字节，`SO_SNDBUF`） |
 
 ## 配置示例
 

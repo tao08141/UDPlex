@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -110,12 +109,29 @@ func (l *ListenComponent) runSendLoop() {
 		refreshInterval = l.sendTimeout
 	}
 
-	processJob := func(job listenSendJob) {
+	udpConn, _ := l.conn.(*net.UDPConn)
+	writer := newUDPBatchWriter(l.router, l.tag)
+	maxBatch := writer.MaxBatch()
+	if udpConn == nil {
+		maxBatch = 1
+	}
+	jobs := make([]listenSendJob, 0, maxBatch)
+	data := make([][]byte, 0, maxBatch)
+	addrs := make([]net.Addr, 0, maxBatch)
+
+	addJob := func(job listenSendJob) {
 		if job.packet == nil {
 			return
 		}
 		if job.addr == nil {
 			job.packet.Release(1)
+			return
+		}
+		jobs = append(jobs, job)
+	}
+
+	flush := func() {
+		if len(jobs) == 0 {
 			return
 		}
 		if l.sendTimeout > 0 {
@@ -127,10 +143,63 @@ func (l *ListenComponent) runSendLoop() {
 				lastDeadlineUpdate = now
 			}
 		}
-		if _, err := l.conn.WriteTo(job.packet.GetData(), job.addr); err != nil {
-			logger.Infof("%s: Failed to send packet: %v", l.tag, err)
+		if udpConn == nil {
+			for _, job := range jobs {
+				if _, err := l.conn.WriteTo(job.packet.GetData(), job.addr); err != nil {
+					logger.Infof("%s: Failed to send packet: %v", l.tag, err)
+				}
+			}
+		} else {
+			data, addrs = data[:0], addrs[:0]
+			for _, job := range jobs {
+				data = append(data, job.packet.GetData())
+				addrs = append(addrs, job.addr)
+			}
+			for sent := 0; sent < len(data); {
+				n, err := writer.Write(udpConn, data[sent:], addrs[sent:])
+				sent += n
+				if err != nil {
+					// Skip the datagram that failed, like a single WriteTo would.
+					logger.Infof("%s: Failed to send packet: %v", l.tag, err)
+					sent++
+				}
+			}
 		}
-		job.packet.Release(1)
+		for i := range jobs {
+			jobs[i].packet.Release(1)
+			jobs[i] = listenSendJob{}
+		}
+		jobs = jobs[:0]
+	}
+
+	// collect drains already queued jobs without blocking, priority first.
+	collect := func() bool {
+		for len(jobs) < maxBatch {
+			select {
+			case job, ok := <-l.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				addJob(job)
+				continue
+			default:
+			}
+			select {
+			case job, ok := <-l.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				addJob(job)
+			case job, ok := <-l.sendQueue:
+				if !ok {
+					return false
+				}
+				addJob(job)
+			default:
+				return true
+			}
+		}
+		return true
 	}
 
 	for {
@@ -144,28 +213,33 @@ func (l *ListenComponent) runSendLoop() {
 				l.drainSendQueue()
 				return
 			}
-			processJob(job)
-			continue
+			addJob(job)
 		default:
+			// No priority packets pending, wait on both.
+			select {
+			case <-l.GetStopChannel():
+				l.drainSendQueue()
+				return
+			case job, ok := <-l.sendQueuePrio:
+				if !ok {
+					l.drainSendQueue()
+					return
+				}
+				addJob(job)
+			case job, ok := <-l.sendQueue:
+				if !ok {
+					l.drainSendQueue()
+					return
+				}
+				addJob(job)
+			}
 		}
 
-		// No priority packets pending, wait on both.
-		select {
-		case <-l.GetStopChannel():
+		open := collect()
+		flush()
+		if !open {
 			l.drainSendQueue()
 			return
-		case job, ok := <-l.sendQueuePrio:
-			if !ok {
-				l.drainSendQueue()
-				return
-			}
-			processJob(job)
-		case job, ok := <-l.sendQueue:
-			if !ok {
-				l.drainSendQueue()
-				return
-			}
-			processJob(job)
 		}
 	}
 }
@@ -476,6 +550,9 @@ func (l *ListenComponent) handlePackets() {
 	}
 	var lastDeadlineUpdate time.Time
 
+	reader := newUDPBatchReader(l.conn.(*net.UDPConn), l.router)
+	defer reader.Close()
+
 	for {
 		select {
 		case <-l.GetStopChannel():
@@ -496,13 +573,8 @@ func (l *ListenComponent) handlePackets() {
 					lastDeadlineUpdate = now
 				}
 
-				packet := l.router.GetPacket(l.tag)
-				defer packet.Release(1)
-
-				length, addr, err := l.conn.ReadFrom(packet.BufAtOffset())
-
-				var netErr net.Error
-				if errors.As(err, &netErr) && netErr.Timeout() {
+				n, err := reader.Read()
+				if isTimeoutError(err) {
 					lastDeadlineUpdate = time.Time{} // Force refresh on next iteration
 					return
 				} else if err != nil {
@@ -510,85 +582,92 @@ func (l *ListenComponent) handlePackets() {
 					return
 				}
 
-				packet.SetLength(length)
-
-				// Handle authentication if enabled
-				if l.authManager != nil {
-					if length < HeaderSize {
-						logger.Infof("%s: %s Packet too short for header: %d bytes", l.tag, addr.String(), length)
-						return
-					}
-
-					header, err := l.authManager.UnwrapData(&packet)
-					if err != nil {
-						if err.Error() != "duplicate packet detected" {
-							logger.Infof("%s: %s Failed to unwrap data: %v", l.tag, addr.String(), err)
-						}
-						return
-					}
-
-					// Handle auth messages
-					if header.MsgType != MsgTypeData {
-						l.handleAuthMessage(header, packet.GetData(), addr)
-						return
-					}
-
-					// For data messages, check authentication
-					addrKey := addr.String()
-					mapping, exists := l.mappings[addrKey]
-					if !exists || mapping.authState == nil || !mapping.authState.IsAuthenticated() {
-						// Not authenticated - silently drop
-						return
-					}
-
-					mapping.lastActive = time.Now()
-					packet.SetConnID(mapping.connID)
-				}
-
-				// Handle address mapping for non-auth mode
-				if l.authManager == nil {
-					addrKey := addr.String()
-					// Check if this is a new mapping
-					mapping, exists := l.mappings[addrKey]
-					if !exists {
-						if l.replaceOldMapping {
-							addrIP := addr.(*net.UDPAddr).IP.String()
-							removed := false
-							for key, existing := range l.mappings {
-								if existing.addr.(*net.UDPAddr).IP.String() == addrIP {
-									logger.Warnf("%s: Replacing old mapping: %s", l.tag, existing.addr.String())
-									if l.removeMapping(key) {
-										removed = true
-									}
-								}
-							}
-							if removed {
-								l.syncMapping()
-							}
-						}
-
-						logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
-						connID := l.generateConnID()
-						mapping = &ListenConn{addr: addr, lastActive: time.Now(), connID: connID}
-						mapping.SetHeartbeatStatsTracker(l.GetHeartbeatStatsTracker())
-						l.mappings[addrKey] = mapping
-						l.syncMapping()
-						packet.SetConnID(connID)
-					} else {
-						mapping.lastActive = time.Now()
-						packet.SetConnID(mapping.connID)
-					}
-				}
-
-				packet.SetSrcAddr(addr)
-
-				// Forward the packet to detour components
-				if err := l.router.Route(&packet, l.detour); err != nil {
-					logger.Infof("%s: Error routing: %v", l.tag, err)
+				for i := 0; i < n; i++ {
+					packet, addr := reader.Take(i, l.tag)
+					l.handleIncoming(&packet, addr)
+					packet.Release(1)
 				}
 			}()
 
 		}
+	}
+}
+
+// handleIncoming authenticates and maps a datagram received from addr, then routes it.
+func (l *ListenComponent) handleIncoming(packet *Packet, addr net.Addr) {
+	// Handle authentication if enabled
+	if l.authManager != nil {
+		if packet.Length() < HeaderSize {
+			logger.Infof("%s: %s Packet too short for header: %d bytes", l.tag, addr.String(), packet.Length())
+			return
+		}
+
+		header, err := l.authManager.UnwrapData(packet)
+		if err != nil {
+			if err.Error() != "duplicate packet detected" {
+				logger.Infof("%s: %s Failed to unwrap data: %v", l.tag, addr.String(), err)
+			}
+			return
+		}
+
+		// Handle auth messages
+		if header.MsgType != MsgTypeData {
+			l.handleAuthMessage(header, packet.GetData(), addr)
+			return
+		}
+
+		// For data messages, check authentication
+		addrKey := addr.String()
+		mapping, exists := l.mappings[addrKey]
+		if !exists || mapping.authState == nil || !mapping.authState.IsAuthenticated() {
+			// Not authenticated - silently drop
+			return
+		}
+
+		mapping.lastActive = time.Now()
+		packet.SetConnID(mapping.connID)
+	}
+
+	// Handle address mapping for non-auth mode
+	if l.authManager == nil {
+		addrKey := addr.String()
+		// Check if this is a new mapping
+		mapping, exists := l.mappings[addrKey]
+		if !exists {
+			if l.replaceOldMapping {
+				addrIP := addr.(*net.UDPAddr).IP.String()
+				removed := false
+				for key, existing := range l.mappings {
+					if existing.addr.(*net.UDPAddr).IP.String() == addrIP {
+						logger.Warnf("%s: Replacing old mapping: %s", l.tag, existing.addr.String())
+						if l.removeMapping(key) {
+							removed = true
+						}
+					}
+				}
+				if removed {
+					l.syncMapping()
+				}
+			}
+
+			logger.Warnf("%s: New mapping: %s", l.tag, addr.String())
+			connID := l.generateConnID()
+			mapping = &ListenConn{addr: addr, lastActive: time.Now(), connID: connID}
+			mapping.SetHeartbeatStatsTracker(l.GetHeartbeatStatsTracker())
+			l.mappings[addrKey] = mapping
+			l.syncMapping()
+			packet.SetConnID(connID)
+		} else {
+			mapping.lastActive = time.Now()
+			packet.SetConnID(mapping.connID)
+		}
+	}
+
+	packet.SetSrcAddr(addr)
+
+	// Forward the packet to detour components
+	if err := l.router.Route(packet, l.detour); err != nil {
+		logger.Infof("%s: Error routing: %v", l.tag, err)
 	}
 }
 
