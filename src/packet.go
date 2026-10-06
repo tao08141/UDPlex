@@ -16,6 +16,7 @@ type Packet struct {
 	router  *Router
 	connID  ConnID // Unique connection identifier
 	batchID uint64 // Non-zero for packets received in the same batch (recvmmsg, GRO or a wireguard Send)
+	noDrop  bool   // Queues must not drop it to signal congestion (TCP stream frames)
 }
 
 func (p *Packet) GetData() []byte {
@@ -51,6 +52,7 @@ func (p *Packet) Copy() Packet {
 		router:  p.router,
 		connID:  p.connID,
 		batchID: p.batchID,
+		noDrop:  p.noDrop,
 	}
 	if p.length > 0 {
 		copy(newPacket.buffer[newPacket.offset:newPacket.offset+newPacket.length], p.buffer[p.offset:p.offset+p.length])
@@ -116,3 +118,9 @@ func (p *Packet) BatchID() uint64 { return p.batchID }
 
 // SetBatchID sets the batch id.
 func (p *Packet) SetBatchID(id uint64) { p.batchID = id }
+
+// NoDrop reports whether queues must keep the packet instead of dropping it.
+func (p *Packet) NoDrop() bool { return p.noDrop }
+
+// SetNoDrop marks the packet as one queues must not drop.
+func (p *Packet) SetNoDrop(v bool) { p.noDrop = v }

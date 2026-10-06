@@ -1,0 +1,46 @@
+# Machine A: TCP connections to :8080 are relayed to machine B's wg address.
+# The kernel TCP stack inside the WireGuard tunnel handles loss, so the wg
+# packets can use plain UDP lines (forward), redundancy and load balancing.
+buffer_size: 2048
+logging:
+  level: info
+  format: console
+  output_path: stdout
+services:
+  - type: tcp_listen
+    tag: tcp_in
+    listen_addr: 0.0.0.0:8080
+    forwarders: [10.66.0.1:8080]
+
+  - type: wg
+    tag: wg_client
+    interface_name: wg0
+    mtu: 1420
+    reuse_incoming_detour: false
+    addresses:
+      - 10.66.0.2/24
+    private_key: CLIENT_PRIVATE_KEY_HEX
+    listen_port: 51820
+    detour: [line_a, line_b]
+    peers:
+      - public_key: SERVER_PUBLIC_KEY_HEX
+        endpoint: udplex-server:51820
+        allowed_ips:
+          - 10.66.0.1/32
+        persistent_keepalive: 25
+
+  - type: forward
+    tag: line_a
+    forwarders: [SERVER_IP_A:5900]
+    detour: [wg_client]
+    auth:
+      enabled: true
+      secret: your-secret-key-here
+
+  - type: forward
+    tag: line_b
+    forwarders: [SERVER_IP_B:5901]
+    detour: [wg_client]
+    auth:
+      enabled: true
+      secret: your-secret-key-here

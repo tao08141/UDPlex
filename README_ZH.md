@@ -159,6 +159,8 @@ UDPlex 支持多种组件类型，每种组件都有特定的功能和配置参�
 - [WireGuard 组件](docs/wg_component_zh.md) - 内嵌 `wireguard-go` 并让 WireGuard 数据通过 UDPlex 转发
 - [TCP Tunnel Listen 组件](docs/tcp_tunnel_listen_zh.md) - TCP 隧道监听端
 - [TCP Tunnel Forward 组件](docs/tcp_tunnel_forward_zh.md) - TCP 隧道转发端
+- [TCP Listen 组件](docs/tcp_listen_zh.md) - TCP 转发入口：经 TCP 隧道多线路传输 TCP 连接，或直连（配合 wg）
+- [TCP Forward 组件](docs/tcp_forward_zh.md) - TCP 转发出口：为 `tcp_listen` 的连接拨号目标
 - [Load Balancer 组件](docs/load_balancer_zh.md) - 负载均衡组件
 - [IP Router 组件](docs/ip_router_zh.md) - 基于来源 IP/CIDR 与 GeoIP2 的路由
 - [TCP 隧道调优](docs/tcp_tunnel_tuning_zh.md) - TCP 隧道满载时的延迟优化

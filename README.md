@@ -158,6 +158,8 @@ UDPlex supports multiple component types, each with specific functions and confi
 - [WireGuard Component](docs/wg_component_en.md) - Embed `wireguard-go` and route WireGuard packets through UDPlex
 - [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening endpoint
 - [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding endpoint
+- [TCP Listen Component](docs/tcp_listen_en.md) - TCP forwarding entry: carries TCP connections over TCP tunnels and multiple lines, or relays directly (with wg)
+- [TCP Forward Component](docs/tcp_forward_en.md) - TCP forwarding exit: dials the targets of `tcp_listen` connections
 - [Load Balancer Component](docs/load_balancer_en.md) - Load balancing component
 - [IP Router Component](docs/ip_router_en.md) - Route by source IP/CIDR and GeoIP2
 - [TCP Tunnel Tuning](docs/tcp_tunnel_tuning_en.md) - Latency under load for the TCP tunnel

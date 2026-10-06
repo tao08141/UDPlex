@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 type outboundForwarderSpec struct {
@@ -63,6 +64,11 @@ func dialUDPWithInterface(remoteAddr *net.UDPAddr, interfaceName string) (*net.U
 }
 
 func dialTCPWithInterface(remoteAddr string, interfaceName string) (net.Conn, error) {
+	return dialTCPWithInterfaceTimeout(remoteAddr, interfaceName, 0)
+}
+
+// dialTCPWithInterfaceTimeout is dialTCPWithInterface giving up after timeout (0 means no limit).
+func dialTCPWithInterfaceTimeout(remoteAddr string, interfaceName string, timeout time.Duration) (net.Conn, error) {
 	resolvedRemoteAddr, err := net.ResolveTCPAddr("tcp", remoteAddr)
 	if err != nil {
 		return nil, err
@@ -74,6 +80,7 @@ func dialTCPWithInterface(remoteAddr string, interfaceName string) (net.Conn, er
 	}
 
 	dialer := newOutboundDialer(interfaceName, localAddr)
+	dialer.Timeout = timeout
 	conn, err := dialer.Dial("tcp", remoteAddr)
 	if err != nil {
 		if strings.TrimSpace(interfaceName) != "" {

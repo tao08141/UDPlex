@@ -207,3 +207,52 @@ func TestTcpTunedLowat(t *testing.T) {
 		t.Error("explicit notsent_lowat is retuned")
 	}
 }
+
+func TestTcpQueueNoDropSurvivesCodelAndOverflow(t *testing.T) {
+	q, r := testTcpQueue(t, &TcpQueueConfig{QueueLimit: 64 << 10})
+	start := time.Unix(0, 0)
+	reliable := 0
+	// Twice the drain rate arrives, half of it no-drop: CoDel and the byte
+	// limit may only drop the ordinary packets, and order is kept.
+	var lastSeq uint64
+	seq := uint64(0)
+	for ms := 0; ms < 2000; ms++ {
+		now := start.Add(time.Duration(ms) * time.Millisecond)
+		p := testShaperPacket(r, 1400)
+		seq++
+		p.SetNoDrop(true)
+		p.SetConnID(ConnIDFromUint64(seq))
+		q.push(p, false, now)
+		q.push(testShaperPacket(r, 1400), false, now)
+		for _, p := range q.pop(now, nil, 1) {
+			if p.NoDrop() {
+				reliable++
+				if got := p.ConnID().ToUint64(); got != lastSeq+1 {
+					t.Fatalf("no-drop packet %d sent after %d", got, lastSeq)
+				}
+				lastSeq = p.ConnID().ToUint64()
+			}
+			p.Release(1)
+		}
+	}
+	end := start.Add(time.Hour)
+	for {
+		out := q.pop(end, nil, 64)
+		if len(out) == 0 {
+			break
+		}
+		for _, p := range out {
+			if p.NoDrop() {
+				reliable++
+			}
+			p.Release(1)
+		}
+	}
+	if reliable != 2000 {
+		t.Fatalf("sent %d of 2000 no-drop packets", reliable)
+	}
+	if q.stats.codelDrops.Load()+q.stats.overflowDrops.Load() == 0 {
+		t.Fatal("ordinary packets were never dropped; the test does not overload the queue")
+	}
+	q.close()
+}

@@ -202,6 +202,30 @@ func main() {
 				continue
 			}
 			component = NewTcpTunnelForwardComponent(cfg, router)
+		case "tcp_listen":
+			var cfg ComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal tcp_listen config: %v", err)
+				continue
+			}
+			var err error
+			component, err = NewTcpListenComponent(cfg, router)
+			if err != nil {
+				logger.Warnf("Failed to create tcp_listen component: %v", err)
+				continue
+			}
+		case "tcp_forward":
+			var cfg ComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal tcp_forward config: %v", err)
+				continue
+			}
+			var err error
+			component, err = NewTcpForwardComponent(cfg, router)
+			if err != nil {
+				logger.Warnf("Failed to create tcp_forward component: %v", err)
+				continue
+			}
 		case "ip_router":
 			var cfg IPRouteComponentConfig
 			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {

@@ -1,0 +1,48 @@
+# Machine A: TCP connections to :8080 reach TARGET through machine B over two
+# TCP tunnel lines. The load balancer alternates the stream frames between the
+# lines and moves everything to the remaining line when one fails; frames lost
+# on a failed line are retransmitted.
+buffer_size: 1500
+logging:
+  level: info
+  format: console
+  output_path: stdout
+services:
+  - type: tcp_listen
+    tag: tcp_in
+    listen_addr: 0.0.0.0:8080
+    target: 127.0.0.1:80        # dialed by machine B
+    detour: [lb]
+
+  - type: load_balancer
+    tag: lb
+    window_size: 10
+    detour:
+      - rule: available_line_a && (seq % 2 == 0 || !available_line_b)
+        targets: [line_a]
+      - rule: available_line_b && (seq % 2 == 1 || !available_line_a)
+        targets: [line_b]
+    # For redundancy instead, send every frame on both lines:
+    # tcp_listen detour: [line_a, line_b]
+
+  - type: tcp_tunnel_forward
+    tag: line_a
+    forwarders: [SERVER_IP_A:9001:2]
+    broadcast_mode: false
+    connection_check_time: 2
+    detour: [tcp_in]
+    auth:
+      enabled: true
+      secret: your-secret-key-here
+      enable_encryption: true
+
+  - type: tcp_tunnel_forward
+    tag: line_b
+    forwarders: [SERVER_IP_B:9001:2]
+    broadcast_mode: false
+    connection_check_time: 2
+    detour: [tcp_in]
+    auth:
+      enabled: true
+      secret: your-secret-key-here
+      enable_encryption: true

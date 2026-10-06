@@ -164,10 +164,14 @@ type tcpTunnelQueue struct {
 	s     *tcpQueueSettings
 	stats *tcpQueueStats
 
-	mu            sync.Mutex
-	control       shaperQueue
-	priority      shaperQueue
-	bulk          shaperQueue
+	mu       sync.Mutex
+	control  shaperQueue
+	priority shaperQueue
+	bulk     shaperQueue
+	// reliable holds large no-drop packets (TCP stream data). They are sent
+	// in arrival order with bulk but never dropped: the streams' windows
+	// bound how much of them can be queued.
+	reliable      shaperQueue
 	codel         codel
 	priorityCodel codel
 	// credit balances priority against bulk bytes while both are queued:
@@ -205,15 +209,21 @@ func (q *tcpTunnelQueue) push(pkt *Packet, control bool, now time.Time) bool {
 	switch {
 	case control:
 		q.control.push(it)
+	case pkt.NoDrop():
+		if q.s.prioritySize > 0 && it.wire <= q.s.prioritySize {
+			q.priority.push(it)
+		} else {
+			q.reliable.push(it)
+		}
 	default:
 		// Make room by dropping the oldest bulk packets.
-		for q.priority.bytes+q.bulk.bytes+it.wire > q.s.limit && q.bulk.len() > 0 {
+		for q.priority.bytes+q.bulk.bytes+q.reliable.bytes+it.wire > q.s.limit && q.bulk.len() > 0 {
 			old := q.bulk.pop()
 			q.account(-int64(old.wire))
 			q.stats.overflowDrops.Add(1)
 			old.pkt.Release(1)
 		}
-		if q.priority.bytes+q.bulk.bytes+it.wire > q.s.limit {
+		if q.priority.bytes+q.bulk.bytes+q.reliable.bytes+it.wire > q.s.limit {
 			q.mu.Unlock()
 			q.stats.overflowDrops.Add(1)
 			pkt.Release(1)
@@ -240,30 +250,35 @@ func (q *tcpTunnelQueue) pop(now time.Time, out []*Packet, limit int) []*Packet 
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for len(out) < limit {
-		if q.bulk.len() == 0 {
+		bulkLen := q.bulk.len() + q.reliable.len()
+		if bulkLen == 0 {
 			q.credit = tcpQueueMaxCredit
 		}
 		var it shaperItem
 		switch {
 		case q.control.len() > 0:
 			it = q.control.pop()
-		case q.priority.len() > 0 && (q.credit > 0 || q.bulk.len() == 0):
+		case q.priority.len() > 0 && (q.credit > 0 || bulkLen == 0):
 			it = q.priority.pop()
 			sojourn := now.Sub(it.enq)
 			q.stats.observeDelay(sojourn)
 			// Priority packets also wait while the socket is busy; only drop
 			// them when priority traffic is over its share.
-			if q.s.codel && q.credit <= 0 && q.bulk.len() > 0 && q.priority.bytes >= shaperMinStandingBytes && q.priorityCodel.shouldDrop(now, sojourn) {
+			if q.s.codel && !it.pkt.NoDrop() && q.credit <= 0 && bulkLen > 0 && q.priority.bytes >= shaperMinStandingBytes && q.priorityCodel.shouldDrop(now, sojourn) {
 				q.drop(it)
 				continue
 			}
 			q.credit -= float64(it.wire)
 			q.stats.priorityPkts.Add(1)
+		case q.reliable.len() > 0 && (q.bulk.len() == 0 || q.reliable.peek().enq.Before(q.bulk.peek().enq)):
+			it = q.reliable.pop()
+			q.stats.observeDelay(now.Sub(it.enq))
+			q.credit = math.Min(q.credit+float64(it.wire)*q.s.share/(1-q.s.share+1e-9), tcpQueueMaxCredit)
 		case q.bulk.len() > 0:
 			it = q.bulk.pop()
 			sojourn := now.Sub(it.enq)
 			q.stats.observeDelay(sojourn)
-			if q.bulk.bytes < shaperMinStandingBytes {
+			if q.bulk.bytes+q.reliable.bytes < shaperMinStandingBytes {
 				sojourn = 0
 			}
 			if q.s.codel && q.codel.shouldDrop(now, sojourn) {
@@ -300,7 +315,7 @@ func (q *tcpTunnelQueue) delay(now time.Time) time.Duration {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	var d time.Duration
-	for _, sq := range []*shaperQueue{&q.priority, &q.bulk} {
+	for _, sq := range []*shaperQueue{&q.priority, &q.bulk, &q.reliable} {
 		if sq.len() > 0 && now.Sub(sq.peek().enq) > d {
 			d = now.Sub(sq.peek().enq)
 		}
@@ -311,7 +326,7 @@ func (q *tcpTunnelQueue) delay(now time.Time) time.Duration {
 func (q *tcpTunnelQueue) len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.control.len() + q.priority.len() + q.bulk.len()
+	return q.control.len() + q.priority.len() + q.bulk.len() + q.reliable.len()
 }
 
 // close releases every queued packet; later pushes are dropped.
@@ -319,7 +334,7 @@ func (q *tcpTunnelQueue) close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.closed = true
-	for _, sq := range []*shaperQueue{&q.control, &q.priority, &q.bulk} {
+	for _, sq := range []*shaperQueue{&q.control, &q.priority, &q.bulk, &q.reliable} {
 		for sq.len() > 0 {
 			it := sq.pop()
 			q.account(-int64(it.wire))

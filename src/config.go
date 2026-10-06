@@ -40,6 +40,8 @@ type ComponentConfig struct {
 	Queue               *TcpQueueConfig `json:"queue,omitempty" yaml:"queue,omitempty"`   // Send queue of TCP tunnel connections
 	Congestion          string          `json:"congestion" yaml:"congestion"`             // TCP tunnel congestion control, e.g. bbr (Linux)
 	PacingRate          float64         `json:"pacing_rate" yaml:"pacing_rate"`           // TCP tunnel send rate cap in Mbit/s (Linux)
+	Target              string          `json:"target" yaml:"target"`                     // tcp_listen: address tcp_forward dials; tcp_forward: overrides it
+	WindowSize          int             `json:"window_size" yaml:"window_size"`           // tcp_listen/tcp_forward: receive window per stream in bytes
 }
 
 // AuthConfig represents authentication and encryption settings

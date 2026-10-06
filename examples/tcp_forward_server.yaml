@@ -1,0 +1,23 @@
+# Machine B: ends the TCP streams of tcp_forward_client.yaml. Both lines
+# connect to the same tcp_tunnel_listen; replies follow the line each stream's
+# frames last arrived on.
+buffer_size: 1500
+logging:
+  level: info
+  format: console
+  output_path: stdout
+services:
+  - type: tcp_tunnel_listen
+    tag: server_listen
+    listen_addr: 0.0.0.0:9001
+    broadcast_mode: false
+    detour: [tcp_out]
+    auth:
+      enabled: true
+      secret: your-secret-key-here
+      enable_encryption: true
+
+  - type: tcp_forward
+    tag: tcp_out
+    detour: [server_listen]
+    # target: 127.0.0.1:80      # optional: ignore the target sent by tcp_listen
