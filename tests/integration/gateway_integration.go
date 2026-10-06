@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,31 +9,41 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // Access gateway integration tests (examples/gateway_entry.yaml and
-// examples/gateway_exit.yaml). The official clients connect to the entry:
+// examples/gateway_exit.yaml). The official clients connect to the entry,
+// which relays their packets over two lines to the exit, where the clients
+// are terminated:
 //
-//	cli --(kernel WireGuard / openvpn)--> entry ==(line A, line B)==> exit --> tgt
+//	cli, cli2 --(kernel WireGuard / openvpn)--> entry ==(line A, line B)==> exit --> tgt
 //
 // tgt only knows its own subnet, so reaching it from a client proves that the
-// entry NATs the clients into the inner tunnel and the exit NATs the tunnel to
-// its default interface. "Gateway Internet" replaces tgt with the real
-// internet through the host and only runs when selected explicitly.
+// exit NATs the clients to its default interface. Below the load balancer
+// threshold every packet crosses both lines, and the UDP check counts copies
+// per datagram to show that the client protocols drop the duplicates, while
+// two clients at once show that the lines keep them apart. "Gateway Internet"
+// replaces tgt with the real internet through the host and only runs when
+// selected explicitly.
 
 const (
 	gwCliIP      = "10.201.1.2"
 	gwEntryIP    = "10.201.1.1"
+	gwCli2IP     = "10.201.5.2"
+	gwEntryIP2   = "10.201.5.1"
 	gwEntryLineA = "10.201.2.1"
 	gwExitLineA  = "10.201.2.2"
 	gwEntryLineB = "10.201.4.1"
@@ -43,15 +54,18 @@ const (
 	gwHostNetIP  = "10.201.9.2"
 	gwHostNet    = "10.201.9.0/30"
 
-	gwInnerExitIP = "10.0.0.2"
-	gwWGClientIP  = "10.8.0.2"
+	gwWGServerIP  = "10.8.0.1"
 	gwWGPort      = 51821
 	gwOpenVPNPort = 1194
-	gwPolicyTable = "7100"
+	gwUDPEchoPort = 5401
+
+	gwDupDatagrams = 200
+	gwDupInterval  = 5 * time.Millisecond
+	gwDupSize      = 200
 
 	gwInternetTraceURL    = "https://1.1.1.1/cdn-cgi/trace"
 	gwInternetDNSTraceURL = "https://www.cloudflare.com/cdn-cgi/trace"
-	gwInternetDownloadURL = "https://speed.cloudflare.com/__down?bytes=25000000"
+	gwInternetDownloadURL = "https://speed.cloudflare.com/__down?bytes=10000000"
 )
 
 func supportsGatewayIntegration() (bool, string) {
@@ -63,13 +77,19 @@ func supportsGatewayIntegration() (bool, string) {
 	return true, ""
 }
 
+// gatewayClient is one client namespace and the entry address it reaches.
+type gatewayClient struct {
+	ns, entryIP string
+	index       int
+}
+
 type gatewayEnv struct {
-	cliNS, entryNS, exitNS, tgtNS string
-	internet                      bool
-	dir                           string
-	entryConfig, exitConfig       string
-	keys                          map[string]string
-	cleanups                      []func()
+	cliNS, cli2NS, entryNS, exitNS, tgtNS string
+	internet                              bool
+	dir                                   string
+	entryConfig, exitConfig               string
+	keys                                  map[string]string
+	cleanups                              []func()
 }
 
 func (e *gatewayEnv) cleanup() {
@@ -84,6 +104,7 @@ func setupGatewayEnv(examplesDir string, internet bool) (*gatewayEnv, error) {
 	suffix := time.Now().UnixNano() % 100000
 	env := &gatewayEnv{
 		cliNS:    fmt.Sprintf("gwcli-%d", suffix),
+		cli2NS:   fmt.Sprintf("gwcl2-%d", suffix),
 		entryNS:  fmt.Sprintf("gwent-%d", suffix),
 		exitNS:   fmt.Sprintf("gwext-%d", suffix),
 		tgtNS:    fmt.Sprintf("gwtgt-%d", suffix),
@@ -104,7 +125,7 @@ func setupGatewayEnv(examplesDir string, internet bool) (*gatewayEnv, error) {
 	env.dir = dir
 	env.cleanups = append(env.cleanups, func() { _ = os.RemoveAll(dir) })
 
-	for _, ns := range []string{env.cliNS, env.entryNS, env.exitNS, env.tgtNS} {
+	for _, ns := range []string{env.cliNS, env.cli2NS, env.entryNS, env.exitNS, env.tgtNS} {
 		if err := runCommand("ip", "netns", "add", ns); err != nil {
 			return nil, err
 		}
@@ -116,6 +137,7 @@ func setupGatewayEnv(examplesDir string, internet bool) (*gatewayEnv, error) {
 
 	links := []struct{ ns1, if1, ip1, ns2, if2, ip2 string }{
 		{env.cliNS, "c0", gwCliIP, env.entryNS, "e0", gwEntryIP},
+		{env.cli2NS, "c0", gwCli2IP, env.entryNS, "e3", gwEntryIP2},
 		{env.entryNS, "e1", gwEntryLineA, env.exitNS, "x0", gwExitLineA},
 		{env.entryNS, "e2", gwEntryLineB, env.exitNS, "x2", gwExitLineB},
 		{env.exitNS, "x1", gwExitTgtIP, env.tgtNS, "t0", gwTgtIP},
@@ -127,8 +149,10 @@ func setupGatewayEnv(examplesDir string, internet bool) (*gatewayEnv, error) {
 	}
 	// A default route lets openvpn find the gateway for redirect-gateway. The
 	// entry has no default route, so nothing reaches tgt outside the tunnel.
-	if err := runCommand("ip", "-n", env.cliNS, "route", "add", "default", "via", gwEntryIP); err != nil {
-		return nil, err
+	for _, c := range env.clients() {
+		if err := runCommand("ip", "-n", c.ns, "route", "add", "default", "via", c.entryIP); err != nil {
+			return nil, err
+		}
 	}
 	if internet {
 		if err := env.connectExitToHost(suffix); err != nil {
@@ -143,6 +167,10 @@ func setupGatewayEnv(examplesDir string, internet bool) (*gatewayEnv, error) {
 	}
 	ok = true
 	return env, nil
+}
+
+func (e *gatewayEnv) clients() []gatewayClient {
+	return []gatewayClient{{e.cliNS, gwEntryIP, 0}, {e.cli2NS, gwEntryIP2, 1}}
 }
 
 func gatewayLink(ns1, if1, addr1, ns2, if2, addr2 string) error {
@@ -218,16 +246,21 @@ func (e *gatewayEnv) connectExitToHost(suffix int64) error {
 	}
 
 	// ip netns exec bind mounts /etc/netns/<ns>/resolv.conf over /etc/resolv.conf.
-	resolvDir := filepath.Join("/etc/netns", e.cliNS)
-	if err := os.MkdirAll(resolvDir, 0o755); err != nil {
-		return err
+	for _, c := range e.clients() {
+		resolvDir := filepath.Join("/etc/netns", c.ns)
+		if err := os.MkdirAll(resolvDir, 0o755); err != nil {
+			return err
+		}
+		e.cleanups = append(e.cleanups, func() { _ = os.RemoveAll(resolvDir) })
+		if err := os.WriteFile(filepath.Join(resolvDir, "resolv.conf"), []byte("nameserver 1.1.1.1\n"), 0o644); err != nil {
+			return err
+		}
 	}
-	e.cleanups = append(e.cleanups, func() { _ = os.RemoveAll(resolvDir) })
-	return os.WriteFile(filepath.Join(resolvDir, "resolv.conf"), []byte("nameserver 1.1.1.1\n"), 0o644)
+	return nil
 }
 
 func (e *gatewayEnv) renderConfigs(examplesDir string) error {
-	for _, name := range []string{"entry_inner", "exit_inner", "access", "client"} {
+	for _, name := range []string{"access", "client0", "client1"} {
 		priv, pub, err := gatewayKeyPair()
 		if err != nil {
 			return err
@@ -238,13 +271,11 @@ func (e *gatewayEnv) renderConfigs(examplesDir string) error {
 	if err := writeGatewayPKI(pkiDir); err != nil {
 		return err
 	}
+	// The example has one WireGuard client; the second one is added after it.
 	replacer := strings.NewReplacer(
-		"ENTRY_INNER_PRIVATE_KEY", e.keys["entry_inner_priv"],
-		"ENTRY_INNER_PUBLIC_KEY", e.keys["entry_inner_pub"],
-		"EXIT_INNER_PRIVATE_KEY", e.keys["exit_inner_priv"],
-		"EXIT_INNER_PUBLIC_KEY", e.keys["exit_inner_pub"],
 		"ACCESS_PRIVATE_KEY", e.keys["access_priv"],
-		"CLIENT_PUBLIC_KEY", e.keys["client_pub"],
+		"CLIENT_PUBLIC_KEY", e.keys["client0_pub"],
+		"allowed_ips: [10.8.0.2/32]", "allowed_ips: [10.8.0.2/32]\n      - public_key: "+e.keys["client1_pub"]+"\n        allowed_ips: [10.8.0.3/32]",
 		"EXIT_HOST_1", gwExitLineA,
 		"EXIT_HOST_2", gwExitLineB,
 		"CHANGE_ME", "gateway-integration",
@@ -329,8 +360,10 @@ func writeGatewayPKI(dir string) error {
 	if err := issue("server", 2, x509.ExtKeyUsageServerAuth); err != nil {
 		return err
 	}
-	if err := issue("client", 3, x509.ExtKeyUsageClientAuth); err != nil {
-		return err
+	for i := range 2 {
+		if err := issue(fmt.Sprintf("client%d", i), int64(3+i), x509.ExtKeyUsageClientAuth); err != nil {
+			return err
+		}
 	}
 
 	secret := make([]byte, 256)
@@ -351,7 +384,7 @@ func writePEM(path, blockType string, der []byte) error {
 	return os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der}), 0o600)
 }
 
-// start runs the exit and the entry and waits for the inner tunnel.
+// start runs the exit and the entry; the clients wait for their handshakes.
 func (e *gatewayEnv) start(projectRoot string) (entry, exit *exec.Cmd, err error) {
 	exit = startUDPlexProcessInNamespace(projectRoot, e.exitConfig, e.exitNS, newNamespaceProfileTarget("exit", e.exitNS))
 	if exit == nil {
@@ -362,37 +395,28 @@ func (e *gatewayEnv) start(projectRoot string) (entry, exit *exec.Cmd, err error
 		stopProcess(exit)
 		return nil, nil, fmt.Errorf("failed to start the entry")
 	}
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		if exec.Command("ip", "netns", "exec", e.entryNS, "ping", "-c", "1", "-W", "1", gwInnerExitIP).Run() == nil {
-			return entry, exit, nil
-		}
-		if time.Now().After(deadline) {
-			stopProcess(entry)
-			stopProcess(exit)
-			return nil, nil, fmt.Errorf("inner tunnel to %s did not come up", gwInnerExitIP)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
+	return entry, exit, nil
 }
 
 // startWireGuardClient sets up a kernel WireGuard interface in the client
-// namespace that sends all traffic through the entry.
-func (e *gatewayEnv) startWireGuardClient() (func(), error) {
-	keyPath := filepath.Join(e.dir, "client.key")
-	if err := os.WriteFile(keyPath, []byte(e.keys["client_priv"]+"\n"), 0o600); err != nil {
+// namespace that sends all traffic through the entry, and waits until the
+// exit answers through it.
+func (e *gatewayEnv) startWireGuardClient(c gatewayClient) (func(), error) {
+	keyPath := filepath.Join(e.dir, fmt.Sprintf("client%d.wgkey", c.index))
+	if err := os.WriteFile(keyPath, []byte(e.keys[fmt.Sprintf("client%d_priv", c.index)]+"\n"), 0o600); err != nil {
 		return nil, err
 	}
-	stop := func() { _ = runCommand("ip", "-n", e.cliNS, "link", "del", "wgc") }
+	clientIP := fmt.Sprintf("10.8.0.%d", 2+c.index)
+	stop := func() { _ = runCommand("ip", "-n", c.ns, "link", "del", "wgc") }
 	commands := [][]string{
-		{"ip", "-n", e.cliNS, "link", "add", "wgc", "type", "wireguard"},
-		{"ip", "netns", "exec", e.cliNS, "wg", "set", "wgc", "private-key", keyPath,
-			"peer", e.keys["access_pub"], "endpoint", fmt.Sprintf("%s:%d", gwEntryIP, gwWGPort),
+		{"ip", "-n", c.ns, "link", "add", "wgc", "type", "wireguard"},
+		{"ip", "netns", "exec", c.ns, "wg", "set", "wgc", "private-key", keyPath,
+			"peer", e.keys["access_pub"], "endpoint", fmt.Sprintf("%s:%d", c.entryIP, gwWGPort),
 			"allowed-ips", "0.0.0.0/0", "persistent-keepalive", "25"},
-		{"ip", "-n", e.cliNS, "addr", "add", gwWGClientIP + "/32", "dev", "wgc"},
-		{"ip", "-n", e.cliNS, "link", "set", "wgc", "mtu", "1420", "up"},
-		{"ip", "-n", e.cliNS, "route", "add", "0.0.0.0/1", "dev", "wgc"},
-		{"ip", "-n", e.cliNS, "route", "add", "128.0.0.0/1", "dev", "wgc"},
+		{"ip", "-n", c.ns, "addr", "add", clientIP + "/32", "dev", "wgc"},
+		{"ip", "-n", c.ns, "link", "set", "wgc", "mtu", "1420", "up"},
+		{"ip", "-n", c.ns, "route", "add", "0.0.0.0/1", "dev", "wgc"},
+		{"ip", "-n", c.ns, "route", "add", "128.0.0.0/1", "dev", "wgc"},
 	}
 	for _, cmd := range commands {
 		if err := runCommand(cmd[0], cmd[1:]...); err != nil {
@@ -400,17 +424,25 @@ func (e *gatewayEnv) startWireGuardClient() (func(), error) {
 			return nil, fmt.Errorf("kernel WireGuard client: %w", err)
 		}
 	}
+	deadline := time.Now().Add(15 * time.Second)
+	for exec.Command("ip", "netns", "exec", c.ns, "ping", "-c", "1", "-W", "1", gwWGServerIP).Run() != nil {
+		if time.Now().After(deadline) {
+			stop()
+			return nil, fmt.Errorf("WireGuard client %d: no handshake through the entry", c.index)
+		}
+	}
 	return stop, nil
 }
 
 // startOpenVPNClient runs the openvpn client with an inline profile and waits
 // for the tunnel; the server pushes redirect-gateway.
-func (e *gatewayEnv) startOpenVPNClient() (func(), error) {
+func (e *gatewayEnv) startOpenVPNClient(c gatewayClient) (func(), error) {
 	pkiDir := filepath.Join(e.dir, "pki")
+	name := fmt.Sprintf("client%d", c.index)
 	var profile strings.Builder
-	fmt.Fprintf(&profile, "client\ndev tun\nproto udp\nremote %s %d\nnobind\nremote-cert-tls server\ntun-mtu 1420\nverb 3\n", gwEntryIP, gwOpenVPNPort)
+	fmt.Fprintf(&profile, "client\ndev tun\nproto udp\nremote %s %d\nnobind\nremote-cert-tls server\ntun-mtu 1420\nverb 3\n", c.entryIP, gwOpenVPNPort)
 	for _, block := range []struct{ tag, file string }{
-		{"ca", "ca.crt"}, {"cert", "client.crt"}, {"key", "client.key"}, {"tls-crypt", "tc.key"},
+		{"ca", "ca.crt"}, {"cert", name + ".crt"}, {"key", name + ".key"}, {"tls-crypt", "tc.key"},
 	} {
 		content, err := os.ReadFile(filepath.Join(pkiDir, block.file))
 		if err != nil {
@@ -418,13 +450,13 @@ func (e *gatewayEnv) startOpenVPNClient() (func(), error) {
 		}
 		fmt.Fprintf(&profile, "<%s>\n%s</%s>\n", block.tag, content, block.tag)
 	}
-	profilePath := filepath.Join(e.dir, "client.ovpn")
-	logPath := filepath.Join(e.dir, "openvpn.log")
+	profilePath := filepath.Join(e.dir, name+".ovpn")
+	logPath := filepath.Join(e.dir, name+".log")
 	if err := os.WriteFile(profilePath, []byte(profile.String()), 0o600); err != nil {
 		return nil, err
 	}
 
-	cmd := exec.Command("ip", "netns", "exec", e.cliNS, "openvpn", "--config", profilePath, "--log", logPath)
+	cmd := exec.Command("ip", "netns", "exec", c.ns, "openvpn", "--config", profilePath, "--log", logPath)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -437,7 +469,7 @@ func (e *gatewayEnv) startOpenVPNClient() (func(), error) {
 		}
 		if time.Now().After(deadline) {
 			stop()
-			return nil, fmt.Errorf("openvpn client did not connect:\n%s", gatewayTail(string(log), 20))
+			return nil, fmt.Errorf("openvpn client %d did not connect:\n%s", c.index, gatewayTail(string(log), 20))
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
@@ -460,8 +492,9 @@ func runGatewayOpenVPNIntegration(projectRoot, examplesDir string, config TestCo
 }
 
 // runGatewayTargetIntegration streams TCP data from a client to tgt. The
-// integrity run also checks that stopping UDPlex removes its kernel config.
-func runGatewayTargetIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool, startClient func(*gatewayEnv) (func(), error)) TestResult {
+// integrity run also sends numbered UDP datagrams from two clients at once
+// and checks that stopping UDPlex removes its kernel config.
+func runGatewayTargetIntegration(projectRoot, examplesDir string, config TestConfig, label string, withSleep bool, startClient func(*gatewayEnv, gatewayClient) (func(), error)) TestResult {
 	result := TestResult{ConfigName: fmt.Sprintf("%s %s", config.Name, label), TotalDuration: config.Duration}
 
 	env, err := setupGatewayEnv(examplesDir, false)
@@ -478,6 +511,13 @@ func runGatewayTargetIntegration(projectRoot, examplesDir string, config TestCon
 		return result
 	}
 	defer stopProcess(target)
+	echoAddr := fmt.Sprintf("%s:%d", gwTgtIP, gwUDPEchoPort)
+	echo := startWGEchoServerInNamespace(env.tgtNS, echoAddr)
+	if echo == nil {
+		result.Error = "failed to start UDP echo server"
+		return result
+	}
+	defer stopProcess(echo)
 
 	entry, exit, err := env.start(projectRoot)
 	if err != nil {
@@ -487,12 +527,18 @@ func runGatewayTargetIntegration(projectRoot, examplesDir string, config TestCon
 	defer stopProcess(entry)
 	defer stopProcess(exit)
 
-	stopClient, err := startClient(env)
-	if err != nil {
-		result.Error = err.Error()
-		return result
+	clients := env.clients()
+	if !withSleep {
+		clients = clients[:1]
 	}
-	defer stopClient()
+	for _, c := range clients {
+		stopClient, err := startClient(env, c)
+		if err != nil {
+			result.Error = err.Error()
+			return result
+		}
+		defer stopClient()
+	}
 
 	mode := "perf"
 	if withSleep {
@@ -508,6 +554,10 @@ func runGatewayTargetIntegration(projectRoot, examplesDir string, config TestCon
 		return result
 	}
 
+	if err := env.checkDuplicates(echoAddr); err != nil {
+		result.Success, result.Error = false, err.Error()
+		return result
+	}
 	if err := stopGatewayGracefully(entry, exit); err != nil {
 		result.Success, result.Error = false, err.Error()
 		return result
@@ -516,6 +566,154 @@ func runGatewayTargetIntegration(projectRoot, examplesDir string, config TestCon
 		result.Success, result.Error = false, "kernel config left after stop: "+leftover
 	}
 	return result
+}
+
+// gatewayUDPCount is what the UDP check reports: how many datagrams came back
+// once, more than once and not at all.
+type gatewayUDPCount struct {
+	Sent       int `json:"sent"`
+	Once       int `json:"once"`
+	Duplicates int `json:"duplicates"`
+	Lost       int `json:"lost"`
+}
+
+// checkDuplicates sends numbered datagrams from both clients at once to the
+// echo server. At this rate the load balancer sends every packet over both
+// lines, so each datagram crosses each line in both directions; it must still
+// come back exactly once, to the client that sent it.
+func (e *gatewayEnv) checkDuplicates(echoAddr string) error {
+	// The load balancer measures bandwidth over its 3-second window; let the
+	// TCP test before this one drop out of it.
+	time.Sleep(4 * time.Second)
+	lineA, lineB := interfaceRxBytes(e.exitNS, "x0"), interfaceRxBytes(e.exitNS, "x2")
+	clients := e.clients()
+	counts := make([]*gatewayUDPCount, len(clients))
+	errs := make([]error, len(clients))
+	var wg sync.WaitGroup
+	for i, c := range clients {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			counts[i], errs[i] = runGatewayUDPCountInNamespace(c.ns, echoAddr, c.index)
+		}()
+	}
+	wg.Wait()
+	for i, count := range counts {
+		if errs[i] != nil {
+			return fmt.Errorf("UDP check from client %d: %v", i, errs[i])
+		}
+		fmt.Printf("client %d UDP check: %+v\n", i, *count)
+		if count.Duplicates > 0 || count.Lost > count.Sent/100 {
+			return fmt.Errorf("client %d: %d datagrams back once, %d more than once, %d lost of %d",
+				i, count.Once, count.Duplicates, count.Lost, count.Sent)
+		}
+	}
+	// Both lines carried every datagram of both clients.
+	minBytes := int64(len(clients) * gwDupDatagrams * gwDupSize)
+	gotA, gotB := interfaceRxBytes(e.exitNS, "x0")-lineA, interfaceRxBytes(e.exitNS, "x2")-lineB
+	if gotA < minBytes || gotB < minBytes {
+		return fmt.Errorf("lines carried %d and %d bytes, want at least %d each (redundant sending)", gotA, gotB, minBytes)
+	}
+	return nil
+}
+
+func interfaceRxBytes(netns, ifName string) int64 {
+	out, err := exec.Command("ip", "netns", "exec", netns, "cat", "/sys/class/net/"+ifName+"/statistics/rx_bytes").Output()
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	return n
+}
+
+func runGatewayUDPCountInNamespace(netns, target string, client int) (*gatewayUDPCount, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.Command("ip", "netns", "exec", netns, executable, "-gw-udp-count", target, strconv.Itoa(client)).Output()
+	if err != nil {
+		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	var count gatewayUDPCount
+	if err := json.Unmarshal(out, &count); err != nil {
+		return nil, fmt.Errorf("parse %q: %w", out, err)
+	}
+	return &count, nil
+}
+
+func handleGatewayHelperCommand() bool {
+	if len(os.Args) < 4 || os.Args[1] != "-gw-udp-count" {
+		return false
+	}
+	client, _ := strconv.Atoi(os.Args[3])
+	count, err := runGatewayUDPCount(os.Args[2], byte(client))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(count)
+	return true
+}
+
+// runGatewayUDPCount sends numbered datagrams tagged with the client and
+// counts the copies of each that come back.
+func runGatewayUDPCount(target string, client byte) (*gatewayUDPCount, error) {
+	conn, err := net.Dial("udp", target)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	copies := make([]int, gwDupDatagrams)
+	var foreign int
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 2048)
+		for ctx.Err() == nil {
+			_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			n, err := conn.Read(buf)
+			if err != nil {
+				continue
+			}
+			if n != gwDupSize || buf[0] != client {
+				foreign++
+				continue
+			}
+			if seq := int(buf[1])<<8 | int(buf[2]); seq < len(copies) {
+				copies[seq]++
+			}
+		}
+	}()
+	payload := make([]byte, gwDupSize)
+	payload[0] = client
+	for seq := range gwDupDatagrams {
+		payload[1], payload[2] = byte(seq>>8), byte(seq)
+		if _, err := conn.Write(payload); err != nil {
+			cancel()
+			return nil, err
+		}
+		time.Sleep(gwDupInterval)
+	}
+	time.Sleep(2 * time.Second)
+	cancel()
+	<-done
+	if foreign > 0 {
+		return nil, fmt.Errorf("%d datagrams of another client arrived", foreign)
+	}
+	count := &gatewayUDPCount{Sent: gwDupDatagrams}
+	for _, n := range copies {
+		switch {
+		case n == 0:
+			count.Lost++
+		case n == 1:
+			count.Once++
+		default:
+			count.Duplicates++
+		}
+	}
+	return count, nil
 }
 
 func stopGatewayGracefully(cmds ...*exec.Cmd) error {
@@ -530,16 +728,10 @@ func stopGatewayGracefully(cmds ...*exec.Cmd) error {
 	return nil
 }
 
-// leftoverKernelConfig reports policy routing and iptables rules that are
-// still present after UDPlex stopped.
+// leftoverKernelConfig reports iptables rules that are still present after
+// UDPlex stopped. The entry only relays, so it must have none at all.
 func (e *gatewayEnv) leftoverKernelConfig() string {
 	var leftovers []string
-	if out, _ := exec.Command("ip", "-n", e.entryNS, "rule", "show").Output(); strings.Contains(string(out), "lookup "+gwPolicyTable) {
-		leftovers = append(leftovers, "entry ip rule")
-	}
-	if out, _ := exec.Command("ip", "-n", e.entryNS, "route", "show", "table", gwPolicyTable).Output(); strings.TrimSpace(string(out)) != "" {
-		leftovers = append(leftovers, "entry routes in table "+gwPolicyTable)
-	}
 	for _, ns := range []string{e.entryNS, e.exitNS} {
 		for _, save := range []string{"iptables-legacy-save", "iptables-nft-save", "iptables-save"} {
 			if _, err := exec.LookPath(save); err != nil {
@@ -580,17 +772,17 @@ func runGatewayInternetIntegration(projectRoot, examplesDir string, config TestC
 	var mbps []float64
 	for _, client := range []struct {
 		name  string
-		start func(*gatewayEnv) (func(), error)
+		start func(*gatewayEnv, gatewayClient) (func(), error)
 	}{
 		{"wireguard", (*gatewayEnv).startWireGuardClient},
 		{"openvpn", (*gatewayEnv).startOpenVPNClient},
 	} {
-		stopClient, err := client.start(env)
+		stopClient, err := client.start(env, env.clients()[0])
 		if err != nil {
 			result.Error = err.Error()
 			return result
 		}
-		before := interfaceTxBytes(env.exitNS, "wg_gw")
+		before := interfaceRxBytes(env.exitNS, "x0") + interfaceRxBytes(env.exitNS, "x2")
 		if withSleep {
 			for _, url := range []string{gwInternetTraceURL, gwInternetDNSTraceURL} {
 				out, err := gatewayCurl(env.cliNS, "-sS", url)
@@ -615,10 +807,10 @@ func runGatewayInternetIntegration(projectRoot, examplesDir string, config TestC
 			fmt.Printf("%s via the gateway: download %.2f Mbits/s\n", client.name, speed*8/1e6)
 		}
 		stopClient()
-		// The exit's inner tunnel carried the replies, so the traffic did not
-		// leave some other way.
-		if sent := interfaceTxBytes(env.exitNS, "wg_gw") - before; sent <= 0 {
-			result.Error = fmt.Sprintf("%s: no traffic through the inner tunnel", client.name)
+		// The lines carried the requests, so the traffic did not leave some
+		// other way.
+		if carried := interfaceRxBytes(env.exitNS, "x0") + interfaceRxBytes(env.exitNS, "x2") - before; carried <= 0 {
+			result.Error = fmt.Sprintf("%s: no traffic over the lines", client.name)
 			return result
 		}
 	}
@@ -630,7 +822,7 @@ func runGatewayInternetIntegration(projectRoot, examplesDir string, config TestC
 }
 
 func gatewayCurl(netns string, args ...string) (string, error) {
-	args = append([]string{"netns", "exec", netns, "curl", "--max-time", "30"}, args...)
+	args = append([]string{"netns", "exec", netns, "curl", "--max-time", "60"}, args...)
 	out, err := exec.Command("ip", args...).CombinedOutput()
 	return string(out), err
 }

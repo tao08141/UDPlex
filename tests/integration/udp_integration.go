@@ -256,7 +256,7 @@ const (
 )
 
 func main() {
-	if handleWGHelperCommand() || handleTCPHelperCommand() {
+	if handleWGHelperCommand() || handleTCPHelperCommand() || handleGatewayHelperCommand() {
 		return
 	}
 
