@@ -13,8 +13,10 @@ tests/
 │   ├── auth/               # 认证功能测试
 │   └── filter/             # 过滤器测试
 ├── integration/            # 集成测试
-│   ├── udp_test.go         # UDP性能测试工具
+│   ├── udp_integration.go  # UDP / WireGuard 集成测试
+│   ├── tcp_integration.go  # TCP 转发（tcp_listen / tcp_forward）集成测试
 │   ├── run_integration_tests.sh # 集成测试运行脚本
+│   ├── run_in_docker.sh    # 在特权 Docker 容器中运行集成测试
 │   └── go.mod              # 集成测试Go模块
 ├── run_tests.sh            # 主测试运行脚本
 ├── go.mod                  # 测试Go模块
@@ -47,6 +49,10 @@ make all
 
 # 仅运行集成测试
 ./tests/integration/run_integration_tests.sh
+
+# 在 Docker 中运行（macOS 等非 Linux 环境也能跑 WireGuard / 多线路场景）
+./tests/integration/run_in_docker.sh
+./tests/integration/run_in_docker.sh -tests tcp_forward,tcp_forward_multiline,wg_tcp_listen
 ```
 
 ### 手动运行
@@ -58,7 +64,7 @@ go test -v
 
 # 运行集成测试
 cd tests/integration
-go run udp_test.go
+go run . -tests tcp_forward
 ```
 
 ## 测试类型
@@ -82,6 +88,11 @@ go run udp_test.go
 - **Basic**: 基础转发测试
 - **Auth Client-Server**: 认证和加密测试
 - **Load Balancer**: 负载均衡测试
+- **TCP Forward**: `examples/tcp_forward_{client,server}.yaml`，两条 TCP 隧道线路轮流承载 TCP 流；线路 A 经过测试内置代理，完整性测试中途切断它 2 秒
+- **TCP Forward Multiline**（需要 root）: 同一组示例运行在两个网络命名空间中，两条独立 veth 线路带 10ms netem 时延，完整性测试中途关闭线路 A 的网卡 2 秒，并通过网卡计数确认流量切换到了线路 B
+- **WireGuard TCP Listen**（需要 root）: `examples/tcp_over_wg_{client,server}.yaml`，`tcp_listen` 直连模式经 wg 网卡转发
+
+TCP 场景中，“Packet Loss Test” 是完整性测试：4 条连接持续发送伪随机数据并逐字节校验回显，要求零差错、零丢失；“Performance Test” 测量单连接上传吞吐，同时用另一条连接测量小请求的往返延迟。
 
 #### 测试指标
 

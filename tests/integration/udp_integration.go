@@ -256,7 +256,7 @@ const (
 )
 
 func main() {
-	if handled := handleWGHelperCommand(); handled {
+	if handleWGHelperCommand() || handleTCPHelperCommand() {
 		return
 	}
 
@@ -268,6 +268,7 @@ func main() {
 		fmt.Println("Use '-tests' to run a subset, for example:")
 		fmt.Println("  go run udp_integration.go -tests wg_forward,wg_tcp_tunnel")
 		fmt.Println("  go run udp_integration.go -tests basic,tcp_tunnel")
+		fmt.Println("  go run . -tests tcp_forward,tcp_forward_multiline,wg_tcp_listen")
 		fmt.Println("Optional profiling flags:")
 		fmt.Println("  go run udp_integration.go -build-tags dev -profile-dir ./profiles -profile-tests tcp_tunnel,wg_tcp_tunnel -profile-seconds 10")
 		return
@@ -335,6 +336,11 @@ func main() {
 			Duration:    TEST_DURATION,
 			IperfRunner: runLocalIperfIntegration,
 		},
+		{
+			Name:     "TCP Forward",
+			Duration: TEST_DURATION,
+			Runner:   runTCPForwardLocalIntegration,
+		},
 	}
 
 	var testConfigs []TestConfig
@@ -357,6 +363,18 @@ func main() {
 				IperfRunner: runWireGuardTCPTunnelIperfIntegration,
 			},
 		)
+		testConfigs = append(testConfigs, TestConfig{
+			Name:     "WireGuard TCP Listen",
+			Duration: TEST_DURATION,
+			Runner:   runWireGuardTCPListenIntegration,
+		})
+		if selection.Suite == "all" {
+			testConfigs = append(testConfigs, TestConfig{
+				Name:     "TCP Forward Multiline",
+				Duration: TEST_DURATION,
+				Runner:   runTCPForwardMultilineIntegration,
+			})
+		}
 		if integrationModeExplicitlySelected("WireGuard Load Balancer", selection.SelectedTests) {
 			testConfigs = append(testConfigs, TestConfig{
 				Name:        "WireGuard Load Balancer",
@@ -618,6 +636,12 @@ func normalizeIntegrationTestName(value string) string {
 		return "wireguard_load_balancer"
 	case "wg_tcp_tunnel", "wireguard_tcp_tunnel", "wg_tcptunnel":
 		return "wireguard_tcp_tunnel"
+	case "tcp_forward", "tcpforward", "tcp_listen":
+		return "tcp_forward"
+	case "tcp_forward_multiline", "tcp_multiline":
+		return "tcp_forward_multiline"
+	case "wg_tcp_listen", "wireguard_tcp_listen", "wg_tcp":
+		return "wireguard_tcp_listen"
 	}
 
 	return value
@@ -870,6 +894,19 @@ func startManagedProcess(cmd *exec.Cmd, label, readyNeedle string, timeout time.
 	readyCh := make(chan struct{}, 1)
 	failCh := make(chan string, 1)
 
+	// UDPLEX_TEST_LOG_DIR keeps the full output of every process for debugging.
+	var logFile *os.File
+	if dir := os.Getenv("UDPLEX_TEST_LOG_DIR"); dir != "" {
+		name := strings.Map(func(r rune) rune {
+			if r == '/' || r == ' ' || r == '[' || r == ']' {
+				return '_'
+			}
+			return r
+		}, label)
+		_ = os.MkdirAll(dir, 0o755)
+		logFile, _ = os.Create(filepath.Join(dir, fmt.Sprintf("%d-%s.log", time.Now().UnixNano(), strings.Trim(name, "_"))))
+	}
+
 	// Start the process
 	if err := cmd.Start(); err != nil {
 		fmt.Printf("Failed to start process %s: %v\n", label, err)
@@ -884,6 +921,9 @@ func startManagedProcess(cmd *exec.Cmd, label, readyNeedle string, timeout time.
 			logMu.Lock()
 			logBuf.WriteString(line)
 			logBuf.WriteByte('\n')
+			if logFile != nil {
+				_, _ = logFile.WriteString(line + "\n")
+			}
 			logMu.Unlock()
 
 			// Detect healthy start
