@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,45 @@ type WireGuardComponent struct {
 	tunDevice wgtun.Device
 	wgDevice  *wgdevice.Device
 	bind      *WireGuardBind
+
+	handshakes wireGuardHandshakeDedup
+}
+
+// wireGuardHandshakeDedup drops copies of handshake messages. With redundant
+// lines a handshake initiation arrives once per line; wireguard-go may answer
+// each copy, and the second response replaces the session the peer already
+// accepted, leaving the tunnel dead until the next handshake.
+type wireGuardHandshakeDedup struct {
+	mu   sync.Mutex
+	seen map[[32]byte]time.Time
+}
+
+const wireGuardHandshakeDedupWindow = 10 * time.Second
+
+// duplicate reports whether msg is a handshake message seen recently.
+func (d *wireGuardHandshakeDedup) duplicate(msg []byte, now time.Time) bool {
+	// Message types 1-3 (initiation, response, cookie reply); 4 is data.
+	if len(msg) < 4 || msg[0] < 1 || msg[0] > 3 {
+		return false
+	}
+	sum := sha256.Sum256(msg)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.seen == nil {
+		d.seen = make(map[[32]byte]time.Time)
+	}
+	if at, ok := d.seen[sum]; ok && now.Sub(at) < wireGuardHandshakeDedupWindow {
+		return true
+	}
+	if len(d.seen) >= 256 {
+		for k, at := range d.seen {
+			if now.Sub(at) >= wireGuardHandshakeDedupWindow {
+				delete(d.seen, k)
+			}
+		}
+	}
+	d.seen[sum] = now
+	return false
 }
 
 type WireGuardBind struct {
@@ -201,6 +241,10 @@ func (w *WireGuardComponent) HandlePacket(packet *Packet) error {
 
 	if w.bind == nil {
 		return fmt.Errorf("%s: wireguard bind is not initialized", w.tag)
+	}
+
+	if w.handshakes.duplicate(packet.GetData(), time.Now()) {
+		return nil
 	}
 
 	endpoint := w.endpointFromPacket(packet)

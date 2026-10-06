@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWireGuardBuildIPCConfig(t *testing.T) {
@@ -83,5 +84,24 @@ func TestNormalizeWGKeyAcceptsBase64(t *testing.T) {
 
 	if got := normalizeWGKey(base64Key); got != expected {
 		t.Fatalf("unexpected normalized key: got %s want %s", got, expected)
+	}
+}
+
+func TestWireGuardHandshakeDedup(t *testing.T) {
+	var d wireGuardHandshakeDedup
+	now := time.Unix(0, 0)
+	initiation := append([]byte{1, 0, 0, 0}, make([]byte, 144)...)
+	data := append([]byte{4, 0, 0, 0}, make([]byte, 32)...)
+	if d.duplicate(initiation, now) {
+		t.Fatal("first initiation dropped")
+	}
+	if !d.duplicate(initiation, now.Add(time.Millisecond)) {
+		t.Fatal("copy of the initiation from another line was not dropped")
+	}
+	if d.duplicate(initiation, now.Add(wireGuardHandshakeDedupWindow+time.Second)) {
+		t.Fatal("initiation dropped after the dedup window")
+	}
+	if d.duplicate(data, now) || d.duplicate(data, now) {
+		t.Fatal("data messages must never be deduplicated")
 	}
 }
