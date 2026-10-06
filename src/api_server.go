@@ -468,6 +468,31 @@ func addShaperStats(result map[string]interface{}, settings *shaperSettings, sta
 	return shaper
 }
 
+// addTcpQueueStats reports the send queue counters of a TCP tunnel component.
+func addTcpQueueStats(result map[string]interface{}, stats *tcpQueueStats, queueDelay time.Duration) {
+	result["queue"] = map[string]interface{}{
+		"priority_packets":   stats.priorityPkts.Load(),
+		"codel_drops":        stats.codelDrops.Load(),
+		"overflow_drops":     stats.overflowDrops.Load(),
+		"queued_bytes":       stats.queuedBytes.Load(),
+		"max_queue_delay_ms": float64(stats.maxDelay.Swap(0)) / 1e6,
+		"queue_delay_ms":     float64(queueDelay) / 1e6,
+	}
+}
+
+// addTcpConnStats adds the queue backlog and the kernel's TCP_INFO of one connection.
+func addTcpConnStats(connection map[string]interface{}, conn *TcpTunnelConn) {
+	connection["queue_bytes"] = conn.queue.backlog()
+	if info, ok := getTCPInfo(conn.conn); ok {
+		connection["rtt_ms"] = float64(info.RTT) / 1e6
+		connection["min_rtt_ms"] = float64(info.MinRTT) / 1e6
+		connection["cwnd"] = info.Cwnd
+		connection["retrans"] = info.Retrans
+		connection["notsent_bytes"] = info.NotsentBytes
+		connection["pacing_rate_mbps"] = float64(info.PacingRate) * 8 / 1e6
+	}
+}
+
 // autorateStats describes the autorate state of one path.
 func autorateStats(path string, ctl *autorate) map[string]interface{} {
 	snap := ctl.snapshot()
@@ -739,6 +764,7 @@ func (a *APIServer) handleGetTcpTunnelListenConnections(w http.ResponseWriter, r
 						"is_authenticated": conn.authState != nil && conn.authState.IsAuthenticated(),
 						"last_active":      conn.lastActive.Format(time.RFC3339),
 					}
+					addTcpConnStats(connection, conn)
 					connections = append(connections, connection)
 				}
 			}
@@ -758,6 +784,7 @@ func (a *APIServer) handleGetTcpTunnelListenConnections(w http.ResponseWriter, r
 	result["pools"] = pools
 	result["total_connections"] = totalConnections
 	addHeartbeatStats(result, tcpTunnelListenComponent.HeartbeatStatsSnapshot(), tcpTunnelListenComponent.LastHeartbeatSent())
+	addTcpQueueStats(result, &tcpTunnelListenComponent.queueStats, tcpTunnelListenComponent.QueueDelay())
 
 	// Get average delay if auth is configured
 	if tcpTunnelListenComponent.authManager != nil {
@@ -818,6 +845,7 @@ func (a *APIServer) handleGetTcpTunnelForwardConnections(w http.ResponseWriter, 
 					"is_authenticated": conn.authState != nil && conn.authState.IsAuthenticated(),
 					"last_active":      conn.lastActive.Format(time.RFC3339),
 				}
+				addTcpConnStats(connection, conn)
 				connections = append(connections, connection)
 			}
 		}
@@ -838,6 +866,7 @@ func (a *APIServer) handleGetTcpTunnelForwardConnections(w http.ResponseWriter, 
 	result["pools"] = pools
 	result["total_connections"] = totalConnections
 	addHeartbeatStats(result, tcpTunnelForwardComponent.HeartbeatStatsSnapshot(), tcpTunnelForwardComponent.LastHeartbeatSent())
+	addTcpQueueStats(result, &tcpTunnelForwardComponent.queueStats, tcpTunnelForwardComponent.QueueDelay())
 
 	// Get average delay if auth is configured
 	if tcpTunnelForwardComponent.authManager != nil {

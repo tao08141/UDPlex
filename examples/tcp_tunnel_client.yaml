@@ -19,6 +19,10 @@ services:
     enable_write_batch: true
     write_batch_size: 64
     connection_check_time: 10
+    # pacing_rate: 38          # Mbit/s, ~95% of the upload bandwidth (Linux)
+    # congestion: bbr          # Linux, needs the tcp_bbr module
+    # queue:
+    #   priority_conn: true    # reserve one connection for small packets
     detour: [client_listen]
     auth:
       secret: your-secret-key-here

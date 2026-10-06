@@ -100,6 +100,6 @@ Autorate requires `auth` on both ends, and both ends must run a version that sup
 
 - Authentication and heartbeat messages bypass the rate limit and are never delayed.
 - Shaping is per path. In a load-balancer or redundant setup, set the shaper on every line with that line's own bandwidth. The load balancer can then pick the less busy line with `qdelay_<tag>` (see [Load Balancer](load_balancer_en.md#switching-lines-by-queue-delay)).
-- The shaper only covers UDP `listen`/`forward`. `tcp_tunnel_*` components are not shaped.
+- The shaper only covers UDP `listen`/`forward`. `tcp_tunnel_*` components have their own queue management and a `pacing_rate` option, see [TCP Tunnel Tuning](tcp_tunnel_tuning_en.md).
 - CPU cost is small: on a single core, peak TCP-over-WireGuard throughput with the shaper enabled (but not limiting) was 1–10% lower, and latency was unchanged. When disabled (the default) there is no cost.
 - Statistics (queue delay, drops, priority packets, and the current rate and one-way delay of each path with autorate) are shown under `shaper` in the `/api/listen/<tag>` and `/api/forward/<tag>` responses.

@@ -9,9 +9,10 @@ TCP Tunnel Forward 组件负责建立到 TCP 隧道服务器的连接，将 UDP 
 |------|------|
 | `type` | 组件类型: `tcp_tunnel_forward`，表示TCP隧道转发端 |
 | `tag` | 组件唯一标识，用于在detour中引用 |
-| `forwarders` | 目标服务器地址列表，格式为"IP:端口[:连接数]"，如"1.2.3.4:9001:4"，使用多连接时会造成UDP乱序，部分场景下可能会导致一些未知的问题 |
+| `forwarders` | 目标服务器地址列表，格式为"IP:端口[:连接数]"，如"1.2.3.4:9001:4"，多连接时数据保持在同一条连接上，出现积压才切换到最空闲的连接，乱序很少发生 |
 | `connection_check_time` | 连接检查间隔（秒），定期检查并重连断开的连接 |
 | `no_delay` | 是否启用TCP Nagle算法，true表示禁用Nagle算法以减少延迟 |
+| `pacing_rate`、`congestion`、`queue` | 满载时的延迟优化：发送限速、拥塞控制和发送队列选项，参见 [TCP 隧道调优](tcp_tunnel_tuning_zh.md) |
 | `detour` | 转发路径，指定接收返回数据的组件标识列表 |
 | `auth` | 鉴权配置，详见鉴权部分 |
 

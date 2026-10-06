@@ -13,6 +13,9 @@ services:
     enable_write_batch: true
     write_batch_size: 64
     replace_old_mapping: true
+    # pacing_rate: 190         # Mbit/s, ~95% of the client's download bandwidth (Linux)
+    # queue:
+    #   priority_conn: true
     detour: [server_forward]
     auth:
       secret: your-secret-key-here

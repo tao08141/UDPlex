@@ -12,6 +12,7 @@ TCP Tunnel Listen 组件负责监听 TCP 连接，接收通过 TCP 隧道传输�
 | `listen_addr` | 监听地址和端口，格式为"IP:端口"，如"0.0.0.0:9001" |
 | `timeout` | 连接超时时间（秒），超过此时间无数据传输则断开连接 |
 | `no_delay` | 是否启用TCP Nagle算法，true表示禁用Nagle算法以减少延迟 |
+| `pacing_rate`、`congestion`、`queue` | 满载时的延迟优化：发送限速、拥塞控制和发送队列选项，参见 [TCP 隧道调优](tcp_tunnel_tuning_zh.md) |
 | `detour` | 转发路径，指定接收数据的组件标识列表 |
 | `auth` | 鉴权配置，详见鉴权部分 |
 

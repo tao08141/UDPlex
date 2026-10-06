@@ -25,6 +25,8 @@ type TcpTunnelForwardComponent struct {
 	sendBufferSize   int
 	enableWriteBatch bool
 	writeBatchSize   int
+	queueSettings    *tcpQueueSettings
+	queueStats       tcpQueueStats
 	connIndex        sync.Map
 }
 
@@ -104,6 +106,7 @@ func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunne
 		sendBufferSize:      sendBufferSize,
 		enableWriteBatch:    enableWriteBatch,
 		writeBatchSize:      writeBatchSize,
+		queueSettings:       newTcpTunnelSettings(cfg, router),
 	}
 }
 
@@ -280,7 +283,7 @@ func (f *TcpTunnelForwardComponent) setupConnection(pool *TcpTunnelConnPool) (*T
 		}
 	}
 
-	ttc := NewTcpTunnelConn(conn, f.forwardID, pool.poolID, f, f.router.config.QueueSize, f.enableWriteBatch, f.writeBatchSize, TcpTunnelForwardMode)
+	ttc := NewTcpTunnelConn(conn, f.forwardID, pool.poolID, f, f.queueSettings, &f.queueStats, f.enableWriteBatch, f.writeBatchSize, TcpTunnelForwardMode)
 
 	packet := f.router.GetPacket(f.GetTag())
 	defer packet.Release(1)
@@ -317,6 +320,18 @@ func (f *TcpTunnelForwardComponent) GetAuthManager() *AuthManager {
 }
 
 // IsAvailable checks if the component has at least one valid connection
+// QueueDelay returns how long the oldest packet waits in a send queue.
+func (f *TcpTunnelForwardComponent) QueueDelay() time.Duration {
+	now := time.Now()
+	var d time.Duration
+	for _, pool := range f.pools {
+		if q := pool.queueDelay(now); q > d {
+			d = q
+		}
+	}
+	return d
+}
+
 func (f *TcpTunnelForwardComponent) IsAvailable() bool {
 	for _, pool := range f.pools {
 		if pool == nil {
@@ -480,7 +495,7 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 			return err
 		}
 
-		conn := pool.GetNextConn()
+		conn := pool.PickConn(packet.Length(), f.queueSettings.prioritySize, f.queueSettings.priorityConn)
 		if conn == nil {
 			logger.Debugf("%s: No available TCP tunnel connection in selected pool for connection ID %x", f.tag, packet.ConnID())
 			return nil
@@ -496,7 +511,7 @@ func (f *TcpTunnelForwardComponent) HandlePacket(packet *Packet) error {
 
 	if f.broadcastMode {
 		for _, pool := range f.pools {
-			c := pool.GetNextConn()
+			c := pool.PickConn(packet.Length(), f.queueSettings.prioritySize, f.queueSettings.priorityConn)
 			if c == nil {
 				logger.Debugf("%s: No available connections in pool %s", f.tag, pool.RouteLabel())
 				continue

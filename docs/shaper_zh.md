@@ -100,6 +100,6 @@ Autorate 要求两端都启用 `auth`，并且两端都是支持该功能的版�
 
 - 鉴权与心跳消息不受限速影响，不会被延迟。
 - 限速按路径生效。负载均衡或冗余模式下，请在每条线路上分别按该线路的带宽设置。负载均衡可以用 `qdelay_<tag>` 选择更空闲的线路（参见[负载均衡](load_balancer_zh.md#按排队时延切换线路)）。
-- Shaper 只作用于 UDP 的 `listen`/`forward`，`tcp_tunnel_*` 组件不受影响。
+- Shaper 只作用于 UDP 的 `listen`/`forward`。`tcp_tunnel_*` 组件有自己的队列管理和 `pacing_rate` 选项，参见 [TCP 隧道调优](tcp_tunnel_tuning_zh.md)。
 - CPU 开销很小：单核环境下启用 shaper（速率不构成限制）时，WireGuard 隧道内 TCP 的峰值吞吐下降 1–10%，延迟不变。未启用时（默认）没有任何开销。
 - 统计信息（队列时延、丢包、优先包数，以及启用 autorate 时每条路径的当前速率和单向时延）在 `/api/listen/<tag>`、`/api/forward/<tag>` 的返回结果中的 `shaper` 字段。

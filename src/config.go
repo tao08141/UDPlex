@@ -16,27 +16,30 @@ type Config struct {
 
 // ComponentConfig represents the common configuration for all components
 type ComponentConfig struct {
-	Type                string        `json:"type" yaml:"type"`
-	Tag                 string        `json:"tag" yaml:"tag"`
-	ListenAddr          string        `json:"listen_addr" yaml:"listen_addr"`
-	Timeout             int           `json:"timeout" yaml:"timeout"`
-	ReplaceOldMapping   bool          `json:"replace_old_mapping" yaml:"replace_old_mapping"`
-	Forwarders          []string      `json:"forwarders" yaml:"forwarders"`
-	InterfaceName       string        `json:"interface_name" yaml:"interface_name"` // Default outbound interface, can be overridden per forwarder with addr@iface
-	ReconnectInterval   int           `json:"reconnect_interval" yaml:"reconnect_interval"`
-	ConnectionCheckTime int           `json:"connection_check_time" yaml:"connection_check_time"`
-	Detour              []string      `json:"detour" yaml:"detour"`
-	SendKeepalive       *bool         `json:"send_keepalive" yaml:"send_keepalive"`
-	Auth                *AuthConfig   `json:"auth,omitempty" yaml:"auth,omitempty"`
-	BroadcastMode       *bool         `json:"broadcast_mode" yaml:"broadcast_mode"`             // When false, only send to the specific connection ID
-	ConnectionPoolSize  int           `json:"connection_pool_size" yaml:"connection_pool_size"` // Number of connections in the pool
-	NoDelay             *bool         `json:"no_delay" yaml:"no_delay"`
-	SendTimeout         int           `json:"send_timeout" yaml:"send_timeout"`         // ms
-	RecvBufferSize      int           `json:"recv_buffer_size" yaml:"recv_buffer_size"` // UDP socket receive buffer size in bytes
-	SendBufferSize      int           `json:"send_buffer_size" yaml:"send_buffer_size"` // UDP socket send buffer size in bytes
-	EnableWriteBatch    *bool         `json:"enable_write_batch" yaml:"enable_write_batch"`
-	WriteBatchSize      int           `json:"write_batch_size" yaml:"write_batch_size"` // TCP tunnel writev batch size
-	Shaper              *ShaperConfig `json:"shaper,omitempty" yaml:"shaper,omitempty"` // Send rate shaping with small-packet priority (listen/forward)
+	Type                string          `json:"type" yaml:"type"`
+	Tag                 string          `json:"tag" yaml:"tag"`
+	ListenAddr          string          `json:"listen_addr" yaml:"listen_addr"`
+	Timeout             int             `json:"timeout" yaml:"timeout"`
+	ReplaceOldMapping   bool            `json:"replace_old_mapping" yaml:"replace_old_mapping"`
+	Forwarders          []string        `json:"forwarders" yaml:"forwarders"`
+	InterfaceName       string          `json:"interface_name" yaml:"interface_name"` // Default outbound interface, can be overridden per forwarder with addr@iface
+	ReconnectInterval   int             `json:"reconnect_interval" yaml:"reconnect_interval"`
+	ConnectionCheckTime int             `json:"connection_check_time" yaml:"connection_check_time"`
+	Detour              []string        `json:"detour" yaml:"detour"`
+	SendKeepalive       *bool           `json:"send_keepalive" yaml:"send_keepalive"`
+	Auth                *AuthConfig     `json:"auth,omitempty" yaml:"auth,omitempty"`
+	BroadcastMode       *bool           `json:"broadcast_mode" yaml:"broadcast_mode"`             // When false, only send to the specific connection ID
+	ConnectionPoolSize  int             `json:"connection_pool_size" yaml:"connection_pool_size"` // Number of connections in the pool
+	NoDelay             *bool           `json:"no_delay" yaml:"no_delay"`
+	SendTimeout         int             `json:"send_timeout" yaml:"send_timeout"`         // ms
+	RecvBufferSize      int             `json:"recv_buffer_size" yaml:"recv_buffer_size"` // UDP socket receive buffer size in bytes
+	SendBufferSize      int             `json:"send_buffer_size" yaml:"send_buffer_size"` // UDP socket send buffer size in bytes
+	EnableWriteBatch    *bool           `json:"enable_write_batch" yaml:"enable_write_batch"`
+	WriteBatchSize      int             `json:"write_batch_size" yaml:"write_batch_size"` // TCP tunnel writev batch size
+	Shaper              *ShaperConfig   `json:"shaper,omitempty" yaml:"shaper,omitempty"` // Send rate shaping with small-packet priority (listen/forward)
+	Queue               *TcpQueueConfig `json:"queue,omitempty" yaml:"queue,omitempty"`   // Send queue of TCP tunnel connections
+	Congestion          string          `json:"congestion" yaml:"congestion"`             // TCP tunnel congestion control, e.g. bbr (Linux)
+	PacingRate          float64         `json:"pacing_rate" yaml:"pacing_rate"`           // TCP tunnel send rate cap in Mbit/s (Linux)
 }
 
 // AuthConfig represents authentication and encryption settings

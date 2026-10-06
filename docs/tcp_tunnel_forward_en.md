@@ -9,12 +9,13 @@ The TCP Tunnel Forward component is responsible for establishing connections to 
 |-----------|-------------|
 | `type` | Component type: `tcp_tunnel_forward`, indicates a TCP tunnel forwarding end |
 | `tag` | Unique component identifier, used for reference in detour |
-| `forwarders` | List of target server addresses, format `IP:port[:connection_count][@interface_name]`, e.g. `1.2.3.4:9001:4@eth0`. Using multiple connections may cause UDP packet reordering, which might lead to unknown issues in some scenarios |
+| `forwarders` | List of target server addresses, format `IP:port[:connection_count][@interface_name]`, e.g. `1.2.3.4:9001:4@eth0`. Packets stay on one connection and move to the least loaded one only when it backs up, which keeps reordering rare |
 | `interface_name` | Optional default outbound interface for forwarders that do not explicitly use `@interface_name` |
 | `connection_check_time` | Connection check interval (seconds), regularly checks and reconnects broken connections |
 | `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
 | `enable_write_batch` | Whether to aggregate multiple packets into one write cycle; defaults to `true` |
 | `write_batch_size` | Maximum number of packets grouped into a single TCP write batch; defaults to `64` |
+| `pacing_rate`, `congestion`, `queue` | Latency under load: send rate cap, congestion control and send queue options. See [TCP Tunnel Tuning](tcp_tunnel_tuning_en.md) |
 | `detour` | Forwarding path, specifies the component identifiers that receive return data |
 | `auth` | Authentication configuration, see the authentication section |
 

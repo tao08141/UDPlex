@@ -18,6 +18,10 @@ const (
 	TcpTunnelForwardMode
 	defaultTcpTunnelWriteBatchSize = 64
 	tcpTunnelReadBufferSize        = 64 * 1024
+	// A pool keeps sending on one connection until its backlog exceeds the
+	// least loaded connection by this much, so packets are reordered only at
+	// these switches instead of on every packet.
+	tcpTunnelSwitchBacklog = 16 << 10
 )
 
 func max(a, b int) int {
@@ -37,6 +41,7 @@ type TcpTunnelConnPool struct {
 	poolID        PoolID
 	connCount     int
 	connecting    atomic.Int32
+	current       atomic.Pointer[TcpTunnelConn]
 }
 
 func NewTcpTunnelConnPool(addr string, poolID PoolID, count int) *TcpTunnelConnPool {
@@ -141,6 +146,61 @@ func (p *TcpTunnelConnPool) GetNextConn() *TcpTunnelConn {
 	return nil
 }
 
+// usable reports whether conn can carry data.
+func (c *TcpTunnelConn) usable() bool {
+	if c == nil || c.conn == nil || !c.authState.IsAuthenticated() {
+		return false
+	}
+	select {
+	case <-c.closed:
+		return false
+	default:
+		return true
+	}
+}
+
+// PickConn chooses the connection for a data packet of the given size. With
+// priorityConn and at least two connections, the first one carries only
+// packets up to prioritySize, so they never wait behind bulk data or its
+// retransmissions.
+func (p *TcpTunnelConnPool) PickConn(size, prioritySize int, priorityConn bool) *TcpTunnelConn {
+	conns := *p.conns.Load()
+	var reserved *TcpTunnelConn
+	if priorityConn && prioritySize > 0 && len(conns) >= 2 {
+		if size <= prioritySize && conns[0].usable() {
+			return conns[0]
+		}
+		reserved, conns = conns[0], conns[1:]
+	}
+	cur := p.current.Load()
+	var best *TcpTunnelConn
+	var bestBacklog int64
+	curOK := false
+	for _, c := range conns {
+		if !c.usable() {
+			continue
+		}
+		b := c.queue.backlog()
+		if best == nil || b < bestBacklog {
+			best, bestBacklog = c, b
+		}
+		if c == cur {
+			curOK = true
+		}
+	}
+	if best == nil {
+		if reserved.usable() {
+			return reserved
+		}
+		return nil
+	}
+	if curOK && cur.queue.backlog() <= bestBacklog+tcpTunnelSwitchBacklog {
+		return cur
+	}
+	p.current.Store(best)
+	return best
+}
+
 type TcpTunnelConn struct {
 	connID     ConnID
 	forwardID  ForwardID
@@ -152,8 +212,7 @@ type TcpTunnelConn struct {
 
 	heartbeatTracker
 
-	writeQueue       chan *Packet
-	writePrio        chan *Packet
+	queue            *tcpTunnelQueue
 	enableWriteBatch bool
 	writeBatchSize   int
 	writeWg          sync.WaitGroup
@@ -168,7 +227,7 @@ func normalizeTcpTunnelWriteBatchSize(size int) int {
 	return size
 }
 
-func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, queueSize int, enableWriteBatch bool, writeBatchSize int, mode int) *TcpTunnelConn {
+func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTunnelComponent, qs *tcpQueueSettings, qstats *tcpQueueStats, enableWriteBatch bool, writeBatchSize int, mode int) *TcpTunnelConn {
 	connID := ConnID{}
 	if _, err := rand.Read(connID[:]); err != nil {
 		connID = ConnID{}
@@ -177,16 +236,13 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 	writeBatchSize = normalizeTcpTunnelWriteBatchSize(writeBatchSize)
 
 	c := &TcpTunnelConn{
-		connID:     connID,
-		forwardID:  forwardID,
-		poolID:     poolID,
-		conn:       conn,
-		authState:  &AuthState{},
-		lastActive: time.Now(),
-		// Split write queue into priority (heartbeat/control) and normal (data).
-		// Priority queue is small but always preferred by the writer.
-		writePrio:        make(chan *Packet, max(4, queueSize/16)),
-		writeQueue:       make(chan *Packet, queueSize), // Buffered channel for normal packets
+		connID:           connID,
+		forwardID:        forwardID,
+		poolID:           poolID,
+		conn:             conn,
+		authState:        &AuthState{},
+		lastActive:       time.Now(),
+		queue:            newTcpTunnelQueue(qs, qstats),
 		enableWriteBatch: enableWriteBatch,
 		writeBatchSize:   writeBatchSize,
 		closed:           make(chan struct{}),
@@ -195,6 +251,7 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 		t:                &t,
 	}
 	c.SetHeartbeatStatsTracker(t.GetHeartbeatStatsTracker())
+	qs.applySocketOptions(conn, t.GetTag())
 
 	// Start to write goroutine
 	c.writeWg.Add(1)
@@ -203,6 +260,19 @@ func NewTcpTunnelConn(conn net.Conn, forwardID ForwardID, poolID PoolID, t TcpTu
 	go c.readLoop(mode)
 
 	return c
+}
+
+// queueDelay returns the largest send queue delay over the pool's connections.
+func (p *TcpTunnelConnPool) queueDelay(now time.Time) time.Duration {
+	var d time.Duration
+	for _, c := range *p.conns.Load() {
+		if c != nil && c.queue != nil {
+			if q := c.queue.delay(now); q > d {
+				d = q
+			}
+		}
+	}
+	return d
 }
 
 func (c *TcpTunnelConn) ConnID() ConnID {
@@ -216,20 +286,8 @@ func (c *TcpTunnelConn) Close() {
 		if c.conn != nil {
 			_ = c.conn.Close()
 		}
-		// Close the queue and drain any pending packets to avoid refcount leaks.
-		// Writers may still attempt to enqueue; Write() guards against panics.
-		close(c.writePrio)
-		for pkt := range c.writePrio {
-			if pkt != nil {
-				pkt.Release(1)
-			}
-		}
-		close(c.writeQueue)
-		for pkt := range c.writeQueue {
-			if pkt != nil {
-				pkt.Release(1)
-			}
-		}
+		// Release pending packets; later writes are dropped by the closed queue.
+		c.queue.close()
 	})
 }
 
@@ -405,42 +463,31 @@ func (c *TcpTunnelConn) writeLoop() {
 		return true
 	}
 
-	drainBatch := func(first *Packet, preferPriority bool) bool {
-		batch = batch[:0]
-		if first != nil {
-			batch = append(batch, first)
-		}
-
-		if !c.enableWriteBatch {
-			return sendPacketBatch()
-		}
-
-		drain := func(ch <-chan *Packet) {
-			for len(batch) < c.writeBatchSize {
-				select {
-				case packet, ok := <-ch:
-					if !ok {
-						return
-					}
-					batch = append(batch, packet)
-				default:
-					return
-				}
-			}
-		}
-
-		if preferPriority {
-			drain(c.writePrio)
-			drain(c.writeQueue)
-		} else {
-			drain(c.writeQueue)
-			drain(c.writePrio)
-		}
-
-		return sendPacketBatch()
+	limit := 1
+	if c.enableWriteBatch {
+		limit = c.writeBatchSize
 	}
+	lowat := c.queue.s.notsentLowat
+	var lastTune time.Time
 
 	for {
+		now := time.Now()
+		batch = c.queue.pop(now, batch[:0], limit)
+		if len(batch) > 0 {
+			if !sendPacketBatch() {
+				return
+			}
+			// Keep about tcpAutoLowatTime of unsent data in the kernel.
+			if c.queue.s.autoLowat && now.Sub(lastTune) >= tcpAutoLowatTune {
+				lastTune = now
+				if info, ok := getTCPInfo(c.conn); ok {
+					if want := c.queue.s.tunedLowat(info.DeliveryRate, lowat); want > 0 && setTCPNotsentLowat(c.conn, want) == nil {
+						lowat = want
+					}
+				}
+			}
+			continue
+		}
 		select {
 		case <-c.closed:
 			logger.Infof("Write loop for %s closed", remote)
@@ -448,22 +495,7 @@ func (c *TcpTunnelConn) writeLoop() {
 		case <-(*c.t).GetStopChannel():
 			logger.Infof("%s: Stopping connection handling for %s", (*c.t).GetTag(), remote)
 			return
-		case packet, ok := <-c.writePrio:
-			if !ok {
-				logger.Infof("Write queue for %s closed", remote)
-				return
-			}
-			if !drainBatch(packet, true) {
-				return
-			}
-		case packet, ok := <-c.writeQueue:
-			if !ok {
-				logger.Infof("Write queue for %s closed", remote)
-				return
-			}
-			if !drainBatch(packet, false) {
-				return
-			}
+		case <-c.queue.ready:
 		}
 	}
 }
@@ -482,66 +514,28 @@ func isTimeoutError(err error) bool {
 }
 
 func (c *TcpTunnelConn) Write(packet *Packet) error {
-
-	if c.conn == nil {
-		return net.ErrClosed
-	}
-	packet.AddRef(1)
-
-	select {
-	case <-c.closed:
-		packet.Release(1)
-		return net.ErrClosed
-	default:
-	}
-
-	defer func() {
-		if recover() != nil {
-			packet.Release(1)
-		}
-	}()
-
-	select {
-	case c.writeQueue <- packet:
-		return nil
-	default:
-		packet.Release(1)
-		return fmt.Errorf("write queue full, dropping packet")
-	}
+	return c.enqueue(packet, false)
 }
 
+// WriteHighPriority queues a control message ahead of all data.
 func (c *TcpTunnelConn) WriteHighPriority(packet *Packet) error {
+	return c.enqueue(packet, true)
+}
+
+func (c *TcpTunnelConn) enqueue(packet *Packet, control bool) error {
 	if c.conn == nil {
 		return net.ErrClosed
 	}
-	packet.AddRef(1)
-
 	select {
 	case <-c.closed:
-		packet.Release(1)
 		return net.ErrClosed
 	default:
 	}
-
-	defer func() {
-		if recover() != nil {
-			packet.Release(1)
-		}
-	}()
-
-	select {
-	case c.writePrio <- packet:
-		return nil
-	default:
-		// Priority queue is full. As a fallback, try normal queue.
-		select {
-		case c.writeQueue <- packet:
-			return nil
-		default:
-			packet.Release(1)
-			return fmt.Errorf("write priority queue full, dropping packet")
-		}
+	packet.AddRef(1)
+	if !c.queue.push(packet, control, time.Now()) {
+		return fmt.Errorf("write queue full, dropping packet")
 	}
+	return nil
 }
 
 func (c *TcpTunnelConn) readLoop(mode int) {

@@ -141,6 +141,10 @@ docker-compose down
 
 下载或上传跑满线路时，数据包会在光猫或运营商设备里排队，游戏延迟可能上涨几百毫秒。在经过瓶颈发送数据的组件上设置 `shaper`（客户端 `forward` 对应上行，服务端 `listen` 对应下行）。在我们的测试中，速率设为线路带宽的 90–95% 时，满载下游戏延迟基本保持在空闲水平（约 200 ms → 约 21 ms）。对于带宽会变化的线路（4G/5G、晚高峰拥塞），`autorate: true` 可以自动跟随线路带宽。详见 [Shaper](docs/shaper_zh.md)。
 
+### TCP 隧道
+
+TCP 隧道会保持自身的队列很短，并让小包优先发送。在光猫缓冲很深的线路上，建议同时把 `pacing_rate` 设为带宽的 95% 左右（或使用 `congestion: bbr`）：在我们的测试中，上传跑满时的游戏延迟从 569 ms 降到 39 ms。详见 [TCP 隧道调优](docs/tcp_tunnel_tuning_zh.md)。
+
 ### 负载均衡
 
 使用 `seq % 2 == 0` 这类规则在多条线路间分流时，建议开启 `batch_decision: true`（见 [Load Balancer](docs/load_balancer_zh.md#批量决策)）。它让每个突发完整、有序地走同一条线路。在我们的测试中，WireGuard 隧道内的 TCP 吞吐比逐包轮换高约 25–35%，接近单线路的吞吐。
@@ -157,6 +161,7 @@ UDPlex 支持多种组件类型，每种组件都有特定的功能和配置参�
 - [TCP Tunnel Forward 组件](docs/tcp_tunnel_forward_zh.md) - TCP 隧道转发端
 - [Load Balancer 组件](docs/load_balancer_zh.md) - 负载均衡组件
 - [IP Router 组件](docs/ip_router_zh.md) - 基于来源 IP/CIDR 与 GeoIP2 的路由
+- [TCP 隧道调优](docs/tcp_tunnel_tuning_zh.md) - TCP 隧道满载时的延迟优化
 - [Shaper](docs/shaper_zh.md) - `listen`/`forward` 的限速与小包优先，用于对抗 bufferbloat
 
 ### 鉴权配置

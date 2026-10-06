@@ -25,6 +25,8 @@ type TcpTunnelListenComponent struct {
 	sendBufferSize    int
 	enableWriteBatch  bool
 	writeBatchSize    int
+	queueSettings     *tcpQueueSettings
+	queueStats        tcpQueueStats
 	connIndex         sync.Map
 }
 
@@ -79,6 +81,7 @@ func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnel
 		sendBufferSize:    sendBufferSize,
 		enableWriteBatch:  enableWriteBatch,
 		writeBatchSize:    writeBatchSize,
+		queueSettings:     newTcpTunnelSettings(cfg, router),
 	}
 
 	emptyConnections := make(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
@@ -129,7 +132,7 @@ func (l *TcpTunnelListenComponent) Start() error {
 			}
 
 			logger.Infof("%s: Accepted connection from %s", l.tag, conn.RemoteAddr())
-			NewTcpTunnelConn(conn, ForwardID{}, PoolID{}, l, l.router.config.QueueSize, l.enableWriteBatch, l.writeBatchSize, TcpTunnelListenMode)
+			NewTcpTunnelConn(conn, ForwardID{}, PoolID{}, l, l.queueSettings, &l.queueStats, l.enableWriteBatch, l.writeBatchSize, TcpTunnelListenMode)
 
 			if l.noDelay {
 				if tcpConn, ok := conn.(*net.TCPConn); ok {
@@ -155,7 +158,7 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 
 	if !l.broadcastMode && packet.ConnID() != (ConnID{}) {
 		if pool := l.getPoolByID(packet.ConnID()); pool != nil {
-			conn := pool.GetNextConn()
+			conn := pool.PickConn(packet.Length(), l.queueSettings.prioritySize, l.queueSettings.priorityConn)
 			if conn == nil {
 				logger.Debugf("%s: No available TCP tunnel connection in selected pool for connection ID %x", l.tag, packet.ConnID())
 				return nil
@@ -171,7 +174,7 @@ func (l *TcpTunnelListenComponent) HandlePacket(packet *Packet) error {
 		connections := l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool)
 		for _, pools := range connections {
 			for _, pool := range pools {
-				c := pool.GetNextConn()
+				c := pool.PickConn(packet.Length(), l.queueSettings.prioritySize, l.queueSettings.priorityConn)
 
 				if c == nil {
 					logger.Debugf("%s: No available connections in pool %s", l.tag, pool.remoteAddr)
@@ -215,6 +218,20 @@ func (l *TcpTunnelListenComponent) GetAuthManager() *AuthManager {
 }
 
 // IsAvailable checks if the component has any established connections
+// QueueDelay returns how long the oldest packet waits in a send queue.
+func (l *TcpTunnelListenComponent) QueueDelay() time.Duration {
+	now := time.Now()
+	var d time.Duration
+	for _, pools := range l.connections.Load().(map[ForwardID]map[PoolID]*TcpTunnelConnPool) {
+		for _, pool := range pools {
+			if q := pool.queueDelay(now); q > d {
+				d = q
+			}
+		}
+	}
+	return d
+}
+
 func (l *TcpTunnelListenComponent) IsAvailable() bool {
 	// First check if the listener is active
 	if l.listener == nil {

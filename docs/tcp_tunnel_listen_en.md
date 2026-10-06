@@ -14,6 +14,7 @@ The TCP Tunnel Listen component is responsible for listening for TCP connections
 | `no_delay` | Whether to enable TCP Nagle algorithm, true means disable Nagle algorithm to reduce latency |
 | `enable_write_batch` | Whether to aggregate multiple packets into one write cycle; defaults to `true` |
 | `write_batch_size` | Maximum number of packets grouped into a single TCP write batch; defaults to `64` |
+| `pacing_rate`, `congestion`, `queue` | Latency under load: send rate cap, congestion control and send queue options. See [TCP Tunnel Tuning](tcp_tunnel_tuning_en.md) |
 | `detour` | Forwarding path, specifies the component identifiers that receive data |
 | `auth` | Authentication configuration, see the authentication section |
 

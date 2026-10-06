@@ -58,7 +58,7 @@ func TestTcpTunnelConn_CloseDoesNotDeadlock(t *testing.T) {
 
 	comp := &testTcpTunnelComponent{tag: "test", stop: make(chan struct{}), r: router, a: auth}
 
-	conn := NewTcpTunnelConn(c1, ForwardID{}, PoolID{}, comp, 16, true, 64, TcpTunnelListenMode)
+	conn := NewTcpTunnelConn(c1, ForwardID{}, PoolID{}, comp, newTcpQueueSettings(nil, 16, 2048), nil, true, 64, TcpTunnelListenMode)
 
 	// Close immediately; prior implementation could deadlock because readLoop deferred Close()
 	// and Close waited for the readLoop goroutine.
@@ -244,7 +244,25 @@ func TestTcpTunnelConn_WriteBatchToggle(t *testing.T) {
 
 			comp := &testTcpTunnelComponent{tag: "test", stop: make(chan struct{}), r: router, a: auth}
 			mockConn := newBlockingTestConn()
-			conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, 16, tc.enableWriteBatch, 64, TcpTunnelListenMode)
+			conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, newTcpQueueSettings(nil, 16, 2048), nil, tc.enableWriteBatch, 64, TcpTunnelListenMode)
+
+			waitWrite := func() {
+				t.Helper()
+				select {
+				case <-mockConn.writeStarted:
+				case <-time.After(2 * time.Second):
+					t.Fatalf("timed out waiting for writer to start")
+				}
+			}
+
+			// Park the writer on a first packet so the next two are queued together.
+			warm := router.GetPacket("test")
+			warm.SetLength(copy(warm.BufAtOffset(), []byte("warm")))
+			defer warm.Release(1)
+			if err := conn.Write(&warm); err != nil {
+				t.Fatalf("warm write failed: %v", err)
+			}
+			waitWrite()
 
 			pkt1 := router.GetPacket("test")
 			pkt1.SetLength(copy(pkt1.BufAtOffset(), []byte("one")))
@@ -261,13 +279,10 @@ func TestTcpTunnelConn_WriteBatchToggle(t *testing.T) {
 				t.Fatalf("second write failed: %v", err)
 			}
 
-			select {
-			case <-mockConn.writeStarted:
-			case <-time.After(2 * time.Second):
-				t.Fatalf("timed out waiting for writer to start")
-			}
+			mockConn.releaseWrite <- struct{}{}
+			waitWrite()
 
-			if got := len(conn.writeQueue); got != tc.wantQueued {
+			if got := conn.queue.len(); got != tc.wantQueued {
 				t.Fatalf("unexpected queued packet count: got %d want %d", got, tc.wantQueued)
 			}
 
@@ -290,7 +305,7 @@ func TestTcpTunnelConn_WriteTimeoutWithProgressKeepsConnection(t *testing.T) {
 		scriptedWriteResult{n: 2, err: nil},
 		scriptedWriteResult{n: 3, err: nil},
 	)
-	conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, 16, true, 64, TcpTunnelListenMode)
+	conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, newTcpQueueSettings(nil, 16, 2048), nil, true, 64, TcpTunnelListenMode)
 
 	pkt1 := router.GetPacket("test")
 	pkt1.SetLength(copy(pkt1.BufAtOffset(), []byte("one")))
@@ -309,7 +324,7 @@ func TestTcpTunnelConn_WriteTimeoutWithProgressKeepsConnection(t *testing.T) {
 
 	waitForWriteStarts(t, mockConn.writeStarted, 3)
 	waitForCondition(t, func() bool {
-		return comp.disconnects.Load() == 0 && len(conn.writeQueue) == 0
+		return comp.disconnects.Load() == 0 && conn.queue.len() == 0
 	})
 
 	select {
@@ -333,7 +348,7 @@ func TestTcpTunnelConn_WriteTimeoutWithoutProgressDisconnects(t *testing.T) {
 	mockConn := newScriptedWriteConn(
 		scriptedWriteResult{n: 0, err: timeoutTestError{}},
 	)
-	conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, 16, false, 64, TcpTunnelListenMode)
+	conn := NewTcpTunnelConn(mockConn, ForwardID{}, PoolID{}, comp, newTcpQueueSettings(nil, 16, 2048), nil, false, 64, TcpTunnelListenMode)
 
 	pkt := router.GetPacket("test")
 	pkt.SetLength(copy(pkt.BufAtOffset(), []byte("one")))
