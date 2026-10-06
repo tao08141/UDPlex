@@ -58,6 +58,7 @@ Matching rules for the load balancer use the [expr-lang/expr](https://github.com
 | `size`        | Current packet size                      |
 | `available_<tag>` | Component availability status, where tag is the component identifier |
 | `delay_<tag>` | Average delay (milliseconds) of the current route for the corresponding component, where tag is the component identifier |
+| `qdelay_<tag>` | Current [shaper](shaper_en.md) queue delay (milliseconds) of the component: how long a packet sent now waits in UDPlex. 0 without a shaper |
 
 - **Supported Operators**
 
@@ -160,6 +161,27 @@ For components that do not support availability checking, the LoadBalancerCompon
 ### Example Configuration
 
 See the `examples/load_balancer_test.yaml` file to learn how to use the availability checking feature in your configuration.
+
+## Switching Lines by Queue Delay
+
+When the lines have a [shaper](shaper_en.md), `qdelay_<tag>` tells how busy each line is right now: it is the time a packet sent now would wait in that line's shaper queue. Unlike `delay_<tag>` (averaged heartbeat round trips, updated every few seconds), it reacts within a millisecond.
+
+Send to the less loaded line, and keep a line once it is clearly better to avoid flapping:
+
+```yaml
+type: load_balancer
+tag: load_balancer
+batch_decision: true
+detour:
+  - rule: "qdelay_line_a <= qdelay_line_b + 2 && available_line_a"
+    targets: [line_a]
+  - rule: "qdelay_line_a > qdelay_line_b + 2 || !available_line_a"
+    targets: [line_b]
+```
+
+With the shaper on, an idle line has a queue delay of 0, so traffic stays on `line_a` until it is saturated, then overflows to `line_b`.
+
+In our test (WireGuard over two lines, each shaped to 20 Mbit/s up and 100 Mbit/s down), these rules carried 36 Mbit/s up and 182 Mbit/s down, versus 18 and 91 on a single line. The latency of a game-like stream stayed at the idle level (~20.5 ms) the whole time.
 
 ## Miss Mechanism
 

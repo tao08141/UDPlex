@@ -47,6 +47,11 @@ type AvailabilityChecker interface {
 	IsAvailable() bool
 }
 
+// QueueDelayReporter is implemented by components that queue packets in a shaper.
+type QueueDelayReporter interface {
+	QueueDelay() time.Duration
+}
+
 type PostStarter interface {
 	PostStart() error
 }

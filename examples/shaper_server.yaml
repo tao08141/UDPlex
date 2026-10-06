@@ -15,6 +15,7 @@ services:
     shaper:
       enabled: true
       rate: 190           # Mbit/s, ~95% of the client's download bandwidth
+      # autorate: true    # follow lines whose bandwidth changes (needs auth on both ends)
     auth:
       secret: your-secret-key-here
       enabled: true

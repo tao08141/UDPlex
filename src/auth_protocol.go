@@ -25,6 +25,8 @@ const (
 	MsgTypeData          = 5 // Data packet
 	MsgTypeDisconnect    = 6 // Disconnect packet
 	MsgTypeHeartbeatAck  = 7 // Heartbeat response
+	MsgTypeProbe         = 8 // Autorate delay probe
+	MsgTypeProbeAck      = 9 // Autorate delay probe response
 )
 
 // Protocol header and authentication message sizes

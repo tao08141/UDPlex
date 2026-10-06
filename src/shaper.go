@@ -33,6 +33,15 @@ type ShaperConfig struct {
 	TargetDelay   float64 `json:"target_delay" yaml:"target_delay"`     // ms, CoDel target for the bulk queue, default 5
 	Interval      int     `json:"interval" yaml:"interval"`             // ms, CoDel interval, default 100
 	QueueLimit    int     `json:"queue_limit" yaml:"queue_limit"`       // bytes, default 100ms at rate (256KB-4MB)
+
+	// Autorate follows a link whose bandwidth varies (LTE/5G, evening
+	// congestion) by measuring the one-way delay to the peer. Requires auth
+	// on both ends.
+	Autorate       bool    `json:"autorate" yaml:"autorate"`
+	MinRate        float64 `json:"min_rate" yaml:"min_rate"`               // Mbit/s, default rate/5
+	MaxRate        float64 `json:"max_rate" yaml:"max_rate"`               // Mbit/s, default rate
+	BloatThreshold float64 `json:"bloat_threshold" yaml:"bloat_threshold"` // ms of extra one-way delay that counts as bufferbloat, default 15
+	ProbeInterval  int     `json:"probe_interval" yaml:"probe_interval"`   // ms between delay probes while busy, default 50
 }
 
 // shaperSettings is the resolved, immutable shaper configuration.
@@ -46,6 +55,7 @@ type shaperSettings struct {
 	target        time.Duration
 	interval      time.Duration
 	queueLimit    int
+	autorate      *autorateSettings
 }
 
 func newShaperSettings(cfg *ShaperConfig) (*shaperSettings, error) {
@@ -84,7 +94,23 @@ func newShaperSettings(cfg *ShaperConfig) (*shaperSettings, error) {
 	if s.queueLimit <= 0 {
 		s.queueLimit = min(max(int(s.rate*0.1), shaperMinQueueLimit), shaperMaxQueueLimit)
 	}
+	s.autorate = newAutorateSettings(cfg, s.rate)
 	return s, nil
+}
+
+// pathRate is the token bucket of one path at its current rate.
+type pathRate struct {
+	rate          float64
+	burst         float64
+	priorityRate  float64
+	priorityBurst float64
+}
+
+func (s *shaperSettings) pathRate(rate float64) pathRate {
+	share := s.priorityRate / s.rate
+	r := pathRate{rate: rate, burst: math.Max(rate*0.002, 3000), priorityRate: rate * share}
+	r.priorityBurst = math.Max(r.burst*share, 3000)
+	return r
 }
 
 // shaperStats aggregates all paths of a component for the API.
@@ -152,6 +178,8 @@ func (q *shaperQueue) pop() shaperItem {
 type pathShaper struct {
 	s              *shaperSettings
 	stats          *shaperStats
+	r              pathRate
+	sent           uint64 // wire bytes sent by this path
 	tokens         float64
 	priorityTokens float64
 	last           time.Time
@@ -167,6 +195,7 @@ func newPathShaper(s *shaperSettings, stats *shaperStats, now time.Time) *pathSh
 	return &pathShaper{
 		s:              s,
 		stats:          stats,
+		r:              s.pathRate(s.rate),
 		tokens:         s.burst,
 		priorityTokens: s.priorityBurst,
 		last:           now,
@@ -188,7 +217,6 @@ func udpWireOverhead(addr net.Addr) int {
 func (p *pathShaper) enqueue(pkt *Packet, addr net.Addr, control bool, now time.Time) {
 	size := pkt.Length()
 	it := shaperItem{pkt: pkt, addr: addr, enq: now, wire: size + udpWireOverhead(addr) + p.s.overhead}
-	p.lastActive = now
 	if control {
 		if p.control.len() >= shaperMaxControlQueue {
 			p.drop(it, &p.stats.overflowDrops)
@@ -209,6 +237,7 @@ func (p *pathShaper) enqueue(pkt *Packet, addr net.Addr, control bool, now time.
 		p.drop(it, &p.stats.overflowDrops)
 		return
 	}
+	p.lastActive = now
 	if p.s.prioritySize > 0 && size <= p.s.prioritySize {
 		p.priority.push(it)
 	} else {
@@ -228,8 +257,24 @@ func (p *pathShaper) refill(now time.Time) {
 		return
 	}
 	p.last = now
-	p.tokens = math.Min(p.tokens+p.s.rate*dt, p.s.burst)
-	p.priorityTokens = math.Min(p.priorityTokens+p.s.priorityRate*dt, p.s.priorityBurst)
+	p.tokens = math.Min(p.tokens+p.r.rate*dt, p.r.burst)
+	p.priorityTokens = math.Min(p.priorityTokens+p.r.priorityRate*dt, p.r.priorityBurst)
+}
+
+// setRate changes the rate of the path, in bytes per second.
+func (p *pathShaper) setRate(now time.Time, rate float64) {
+	if rate == p.r.rate {
+		return
+	}
+	p.refill(now)
+	p.r = p.s.pathRate(rate)
+	p.tokens = math.Min(p.tokens, p.r.burst)
+	p.priorityTokens = math.Min(p.priorityTokens, p.r.priorityBurst)
+}
+
+// queueDelay estimates how long a packet queued now would wait.
+func (p *pathShaper) queueDelay() time.Duration {
+	return time.Duration(float64(p.priority.bytes+p.bulk.bytes) / p.r.rate * float64(time.Second))
 }
 
 // dequeue appends the packets that may be sent now to out, up to limit items.
@@ -255,7 +300,7 @@ func (p *pathShaper) dequeue(now time.Time, out []shaperItem, limit int) []shape
 				continue
 			}
 			p.tokens -= float64(it.wire)
-			p.priorityTokens = math.Max(p.priorityTokens-float64(it.wire), -p.s.priorityBurst)
+			p.priorityTokens = math.Max(p.priorityTokens-float64(it.wire), -p.r.priorityBurst)
 			p.stats.priorityPkts.Add(1)
 			out = p.take(out, it)
 			continue
@@ -280,6 +325,7 @@ func (p *pathShaper) dequeue(now time.Time, out []shaperItem, limit int) []shape
 func (p *pathShaper) take(out []shaperItem, it shaperItem) []shaperItem {
 	p.stats.queuedBytes.Add(-int64(it.wire))
 	p.stats.sentBytes.Add(uint64(it.wire))
+	p.sent += uint64(it.wire)
 	return append(out, it)
 }
 
@@ -297,11 +343,12 @@ func (p *pathShaper) wait(now time.Time) time.Duration {
 	if p.tokens > 0 {
 		return 0
 	}
-	need := -p.tokens + p.s.burst/2
-	return time.Duration(need / p.s.rate * float64(time.Second))
+	need := -p.tokens + p.r.burst/2
+	return time.Duration(need / p.r.rate * float64(time.Second))
 }
 
-// idle reports whether the path has nothing queued and has been quiet for d.
+// idle reports whether the path has nothing queued and has carried no data
+// (control messages aside) for d.
 func (p *pathShaper) idle(now time.Time, d time.Duration) bool {
 	return p.control.len()+p.priority.len()+p.bulk.len() == 0 && now.Sub(p.lastActive) >= d
 }

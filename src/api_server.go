@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -449,11 +450,11 @@ func parseIntOrZero(value string) int {
 
 // addShaperStats reports shaper counters when shaping is enabled. The max
 // queue delay covers the time since the previous API read.
-func addShaperStats(result map[string]interface{}, settings *shaperSettings, stats *shaperStats) {
+func addShaperStats(result map[string]interface{}, settings *shaperSettings, stats *shaperStats, queueDelay time.Duration) map[string]interface{} {
 	if settings == nil {
-		return
+		return nil
 	}
-	result["shaper"] = map[string]interface{}{
+	shaper := map[string]interface{}{
 		"rate_mbps":          settings.rate * 8 / 1e6,
 		"sent_bytes":         stats.sentBytes.Load(),
 		"priority_packets":   stats.priorityPkts.Load(),
@@ -461,6 +462,21 @@ func addShaperStats(result map[string]interface{}, settings *shaperSettings, sta
 		"overflow_drops":     stats.overflowDrops.Load(),
 		"queued_bytes":       stats.queuedBytes.Load(),
 		"max_queue_delay_ms": float64(stats.maxDelay.Swap(0)) / 1e6,
+		"queue_delay_ms":     float64(queueDelay) / 1e6,
+	}
+	result["shaper"] = shaper
+	return shaper
+}
+
+// autorateStats describes the autorate state of one path.
+func autorateStats(path string, ctl *autorate) map[string]interface{} {
+	snap := ctl.snapshot()
+	return map[string]interface{}{
+		"path":          path,
+		"rate_mbps":     snap.Rate * 8 / 1e6,
+		"achieved_mbps": snap.Achieved * 8 / 1e6,
+		"owd_delta_ms":  float64(snap.Delta) / 1e6,
+		"rtt_ms":        float64(snap.RTT) / 1e6,
 	}
 }
 
@@ -571,7 +587,14 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 		"count":       len(connections),
 	}
 	addHeartbeatStats(result, listenComponent.HeartbeatStatsSnapshot(), listenComponent.LastHeartbeatSent())
-	addShaperStats(result, listenComponent.shaper, &listenComponent.shaperStats)
+	if shaper := addShaperStats(result, listenComponent.shaper, &listenComponent.shaperStats, listenComponent.QueueDelay()); shaper != nil && listenComponent.shaper.autorate != nil {
+		paths := []map[string]interface{}{}
+		listenComponent.autorates.Range(func(k, v any) bool {
+			paths = append(paths, autorateStats(k.(netip.AddrPort).String(), v.(*autorate)))
+			return len(paths) < 64
+		})
+		shaper["autorate"] = paths
+	}
 
 	// Only include average_delay if auth is configured
 	if hasAuth {
@@ -647,7 +670,15 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 		"count":       len(connections),
 	}
 	addHeartbeatStats(result, forwardComponent.HeartbeatStatsSnapshot(), forwardComponent.LastHeartbeatSent())
-	addShaperStats(result, forwardComponent.shaper, &forwardComponent.shaperStats)
+	if shaper := addShaperStats(result, forwardComponent.shaper, &forwardComponent.shaperStats, forwardComponent.QueueDelay()); shaper != nil && forwardComponent.shaper.autorate != nil {
+		paths := []map[string]interface{}{}
+		for _, conn := range forwardComponent.forwardConnList {
+			if ctl := conn.autorate.Load(); ctl != nil {
+				paths = append(paths, autorateStats(conn.RouteLabel(), ctl))
+			}
+		}
+		shaper["autorate"] = paths
+	}
 
 	// Only include average_delay if auth is configured
 	if hasAuth {

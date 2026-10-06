@@ -31,6 +31,10 @@ type ForwardConn struct {
 	// Guards against concurrent reconnect attempts and auth goroutine pile-up.
 	reconnecting   atomic.Int32
 	authInProgress atomic.Int32
+
+	// Shaper state published by the send loop.
+	autorate   atomic.Pointer[autorate]
+	queueDelay atomic.Int64 // ns
 }
 
 // Address returns the remote address string for this forward connection
@@ -272,7 +276,30 @@ func (f *ForwardComponent) forwardConnShapedLoop(conn *ForwardConn) {
 
 	shaper := newPathShaper(f.shaper, &f.shaperStats, time.Now())
 	defer shaper.reset()
+	defer conn.queueDelay.Store(0)
 	addr := net.Addr(conn.UDPAddr())
+	var ctl *autorate
+	var nextProbe time.Time
+	if f.shaper.autorate != nil {
+		ctl = newAutorate(f.shaper.autorate, time.Now())
+		conn.autorate.Store(ctl)
+		defer conn.autorate.Store(nil)
+	}
+
+	// probe updates the rate from the latest delay samples and sends the next probe when due.
+	probe := func(now time.Time) {
+		if ctl == nil || now.Before(nextProbe) {
+			return
+		}
+		shaper.setRate(now, ctl.tick(now, shaper.sent))
+		nextProbe = now.Add(ctl.probeInterval(now, shaper.lastActive))
+		if !conn.IsAuthenticated() {
+			return
+		}
+		pkt := f.router.GetPacket(f.tag)
+		pkt.SetLength(createProbe(pkt.BufAtOffset(), now))
+		shaper.enqueue(&pkt, addr, true, now)
+	}
 	writer := newUDPBatchWriter(f.router, f.tag)
 	out := make([]shaperItem, 0, writer.MaxBatch())
 	data := make([][]byte, 0, writer.MaxBatch())
@@ -347,10 +374,21 @@ func (f *ForwardComponent) forwardConnShapedLoop(conn *ForwardConn) {
 			f.drainForwardQueue(conn)
 			return
 		}
+		probe(now)
 		if !send(now) {
 			return
 		}
-		wait := shaper.wait(time.Now())
+		conn.queueDelay.Store(int64(shaper.queueDelay()))
+		now = time.Now()
+		wait := shaper.wait(now)
+		if ctl != nil {
+			if until := nextProbe.Sub(now); wait < 0 || until < wait {
+				wait = until
+			}
+			if wait < 0 {
+				wait = 0
+			}
+		}
 		if wait == 0 {
 			continue
 		}
@@ -527,6 +565,10 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 	if shaper, err := newShaperSettings(cfg.Shaper); err != nil {
 		logger.Errorf("%s: Shaper disabled: %v", cfg.Tag, err)
 	} else {
+		if shaper != nil && shaper.autorate != nil && authManager == nil {
+			logger.Warnf("%s: Shaper autorate needs auth, using the fixed rate", cfg.Tag)
+			shaper.autorate = nil
+		}
 		fc.shaper = shaper
 	}
 	return fc
@@ -566,6 +608,17 @@ func (f *ForwardComponent) GetTag() string {
 }
 
 // IsAvailable checks if any of the component's connections are available
+// QueueDelay returns the largest shaper queue delay over the forwarder connections.
+func (f *ForwardComponent) QueueDelay() time.Duration {
+	var d time.Duration
+	for _, conn := range f.forwardConnList {
+		if q := time.Duration(conn.queueDelay.Load()); q > d {
+			d = q
+		}
+	}
+	return d
+}
+
 func (f *ForwardComponent) IsAvailable() bool {
 	for _, conn := range f.forwardConnList {
 		if conn != nil && conn.IsAvailable() {
@@ -949,6 +1002,25 @@ func (f *ForwardComponent) handleAuthMessage(header *ProtocolHeader, buffer []by
 		conn.authRetryCount = 0
 
 		logger.Infof("%s: Authentication successful for %s", f.tag, conn.RouteLabel())
+
+	case MsgTypeProbe:
+		if !conn.IsAuthenticated() {
+			return
+		}
+		pkt := f.router.GetPacket(f.tag)
+		if n := createProbeAck(pkt.BufAtOffset(), buffer, time.Now()); n > 0 {
+			pkt.SetLength(n)
+			f.enqueuePacketHigh(conn, &pkt)
+		}
+		pkt.Release(1)
+
+	case MsgTypeProbeAck:
+		if ctl := conn.autorate.Load(); ctl != nil {
+			now := time.Now()
+			if owd, rtt, ok := parseProbeAck(buffer, now); ok {
+				ctl.addSample(owd, rtt, now)
+			}
+		}
 
 	case MsgTypeHeartbeat:
 		conn.MarkHeartbeatResponse()

@@ -58,6 +58,7 @@
 | `size`  | 当前包大小              |
 | `available_<tag>` | 组件可用性状态，其中tag为组件标识 |
 | `delay_<tag>` | 对应组件当前线路的“平均延迟”（毫秒），其中tag为组件标识 |
+| `qdelay_<tag>` | 组件 [shaper](shaper_zh.md) 当前的排队时延（毫秒），即此刻发出的包在 UDPlex 内要等多久。未启用 shaper 时为 0 |
 
 - **支持的运算符**
 
@@ -160,6 +161,27 @@ detour:
 ### 示例配置
 
 查看 `examples/load_balancer_test.yaml` 文件，了解如何在配置中使用可用性检查功能。
+
+## 按排队时延切换线路
+
+线路启用 [shaper](shaper_zh.md) 后，`qdelay_<tag>` 反映每条线路此刻的繁忙程度：现在发出的包要在该线路的 shaper 队列里等多久。它和 `delay_<tag>`（心跳往返的平均值，几秒更新一次）不同，能在一毫秒内反映变化。
+
+把流量发往更空闲的线路，并留一点余量避免来回切换：
+
+```yaml
+type: load_balancer
+tag: load_balancer
+batch_decision: true
+detour:
+  - rule: "qdelay_line_a <= qdelay_line_b + 2 && available_line_a"
+    targets: [line_a]
+  - rule: "qdelay_line_a > qdelay_line_b + 2 || !available_line_a"
+    targets: [line_b]
+```
+
+启用 shaper 后，空闲线路的排队时延为 0，所以流量会一直走 `line_a`，直到它跑满，才溢出到 `line_b`。
+
+实测（WireGuard 经两条线路，每条限速上行 20 Mbit/s、下行 100 Mbit/s）：使用上面的规则，上行跑到 36 Mbit/s、下行 182 Mbit/s，单条线路为 18 和 91；类游戏流的延迟全程保持在空闲水平（约 20.5 ms）。
 
 ## Miss 机制
 

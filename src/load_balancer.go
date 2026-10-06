@@ -148,6 +148,9 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 		if len(varKey) > 6 && varKey[:6] == "delay_" {
 			env[varKey] = uint64(0) // default delay value (ms)
 		}
+		if strings.HasPrefix(varKey, "qdelay_") {
+			env[varKey] = float64(0) // shaper queue delay (ms)
+		}
 	}
 
 	program, err := expr.Compile(exprStr, expr.Env(env))
@@ -164,7 +167,7 @@ func (lb *LoadBalancerComponent) compileExpression(exprStr string) (*CompiledExp
 		}
 
 		// Expressions with seq, size, availability, or delay variables cannot be cached
-		if varKey == "seq" || varKey == "size" || (len(varKey) > 10 && varKey[:10] == "available_") || (len(varKey) > 6 && varKey[:6] == "delay_") {
+		if varKey == "seq" || varKey == "size" || (len(varKey) > 10 && varKey[:10] == "available_") || (len(varKey) > 6 && varKey[:6] == "delay_") || strings.HasPrefix(varKey, "qdelay_") {
 			canCache = false
 			break
 		}
@@ -202,7 +205,7 @@ func (lb *LoadBalancerComponent) findVariables(exprStr string) []string {
 		for _, component := range components {
 			tag := component.GetTag()
 			availableVar := "available_" + tag
-			if strings.Contains(exprStr, availableVar) {
+			if containsIdent(exprStr, availableVar) {
 				vars = append(vars, availableVar)
 			}
 		}
@@ -214,13 +217,42 @@ func (lb *LoadBalancerComponent) findVariables(exprStr string) []string {
 		for _, component := range components {
 			tag := component.GetTag()
 			delayVar := "delay_" + tag
-			if strings.Contains(exprStr, delayVar) {
+			if containsIdent(exprStr, delayVar) {
 				vars = append(vars, delayVar)
 			}
 		}
 	}
 
+	// Check for shaper queue delay variables (qdelay_tag)
+	if strings.Contains(exprStr, "qdelay_") {
+		for _, component := range lb.router.GetComponents() {
+			if qdelayVar := "qdelay_" + component.GetTag(); containsIdent(exprStr, qdelayVar) {
+				vars = append(vars, qdelayVar)
+			}
+		}
+	}
+
 	return vars
+}
+
+// containsIdent reports whether name occurs in expr as a whole identifier.
+func containsIdent(expr, name string) bool {
+	isIdent := func(c byte) bool {
+		return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	}
+	for i := 0; i < len(expr); {
+		j := strings.Index(expr[i:], name)
+		if j < 0 {
+			return false
+		}
+		j += i
+		end := j + len(name)
+		if (j == 0 || !isIdent(expr[j-1])) && (end == len(expr) || !isIdent(expr[end])) {
+			return true
+		}
+		i = j + 1
+	}
+	return false
 }
 
 // Stop stops the load balancer component
@@ -330,6 +362,21 @@ func (lb *LoadBalancerComponent) checkTagDelay(tag string) float64 {
 
 	// Without auth or without valid delay data, treat as very high delay to fail conservative comparisons
 	return math.MaxFloat64
+}
+
+// checkTagQueueDelay returns the shaper queue delay (in milliseconds) of the
+// component with the given tag: how long a packet sent now would wait in
+// UDPlex before reaching the wire. It is 0 without a shaper or when the
+// component is not found.
+func (lb *LoadBalancerComponent) checkTagQueueDelay(tag string) float64 {
+	component, found := lb.router.GetComponent(tag)
+	if !found {
+		return 0
+	}
+	if r, ok := component.(QueueDelayReporter); ok {
+		return float64(r.QueueDelay()) / float64(time.Millisecond)
+	}
+	return 0
 }
 
 // getCurrentStats returns average bps (bits per second) and pps values across the window
@@ -463,6 +510,9 @@ func (lb *LoadBalancerComponent) evaluateExpressionDirect(compiled *CompiledExpr
 			if len(varKey) > 6 && varKey[:6] == "delay_" {
 				tag := varKey[6:]
 				env[varKey] = lb.checkTagDelay(tag)
+			}
+			if tag, ok := strings.CutPrefix(varKey, "qdelay_"); ok {
+				env[varKey] = lb.checkTagQueueDelay(tag)
 			}
 		}
 	}

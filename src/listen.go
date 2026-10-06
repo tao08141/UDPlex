@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -82,6 +83,10 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	if shaper, err := newShaperSettings(cfg.Shaper); err != nil {
 		logger.Errorf("%s: Shaper disabled: %v", cfg.Tag, err)
 	} else {
+		if shaper != nil && shaper.autorate != nil && authManager == nil {
+			logger.Warnf("%s: Shaper autorate needs auth, using the fixed rate", cfg.Tag)
+			shaper.autorate = nil
+		}
 		component.shaper = shaper
 	}
 	return component
@@ -108,6 +113,26 @@ type ListenComponent struct {
 	sendQueuePrio     chan listenSendJob
 	shaper            *shaperSettings
 	shaperStats       shaperStats
+	autorates         sync.Map     // netip.AddrPort -> *autorate, published by the shaped send loop
+	queueDelay        atomic.Int64 // ns, largest shaper queue delay over all clients
+}
+
+// listenPath is the shaper state of one client address.
+type listenPath struct {
+	*pathShaper
+	addr      net.Addr
+	ctl       *autorate
+	nextProbe time.Time
+}
+
+// addrPortKey returns the unmapped address of a UDP address.
+func addrPortKey(addr net.Addr) (netip.AddrPort, bool) {
+	ua, ok := addr.(*net.UDPAddr)
+	if !ok || ua == nil {
+		return netip.AddrPort{}, false
+	}
+	key := ua.AddrPort()
+	return netip.AddrPortFrom(key.Addr().Unmap(), key.Port()), true
 }
 
 func (l *ListenComponent) runSendLoop() {
@@ -268,11 +293,13 @@ func (l *ListenComponent) runShapedSendLoop(udpConn *net.UDPConn) {
 		refreshInterval = l.sendTimeout
 	}
 
-	shapers := make(map[netip.AddrPort]*pathShaper)
+	shapers := make(map[netip.AddrPort]*listenPath)
 	defer func() {
-		for _, s := range shapers {
+		for key, s := range shapers {
 			s.reset()
+			l.autorates.Delete(key)
 		}
+		l.queueDelay.Store(0)
 	}()
 	writer := newUDPBatchWriter(l.router, l.tag)
 	out := make([]shaperItem, 0, writer.MaxBatch())
@@ -287,16 +314,18 @@ func (l *ListenComponent) runShapedSendLoop(udpConn *net.UDPConn) {
 		if job.packet == nil {
 			return
 		}
-		ua, ok := job.addr.(*net.UDPAddr)
-		if !ok || ua == nil {
+		key, ok := addrPortKey(job.addr)
+		if !ok {
 			job.packet.Release(1)
 			return
 		}
-		key := ua.AddrPort()
-		key = netip.AddrPortFrom(key.Addr().Unmap(), key.Port())
 		s := shapers[key]
 		if s == nil {
-			s = newPathShaper(l.shaper, &l.shaperStats, now)
+			s = &listenPath{pathShaper: newPathShaper(l.shaper, &l.shaperStats, now), addr: job.addr}
+			if l.shaper.autorate != nil {
+				s.ctl = newAutorate(l.shaper.autorate, now)
+				l.autorates.Store(key, s.ctl)
+			}
 			shapers[key] = s
 		}
 		s.enqueue(job.packet, job.addr, control, now)
@@ -360,14 +389,41 @@ func (l *ListenComponent) runShapedSendLoop(udpConn *net.UDPConn) {
 		}
 	}
 
-	// wait returns the earliest time any shaper can send, or -1 if all are empty.
+	// probe updates the rate of a path from its latest delay samples and sends the next probe when due.
+	probe := func(s *listenPath, now time.Time) {
+		if s.ctl == nil || now.Before(s.nextProbe) {
+			return
+		}
+		s.setRate(now, s.ctl.tick(now, s.sent))
+		s.nextProbe = now.Add(s.ctl.probeInterval(now, s.lastActive))
+		pkt := l.router.GetPacket(l.tag)
+		pkt.SetLength(createProbe(pkt.BufAtOffset(), now))
+		s.enqueue(&pkt, s.addr, true, now)
+	}
+
+	// wait returns the earliest time any shaper can send or probe, or -1 if
+	// there is nothing to do. It also publishes the largest queue delay.
 	wait := func(now time.Time) time.Duration {
 		next := time.Duration(-1)
+		var qdelay time.Duration
 		for _, s := range shapers {
-			if w := s.wait(now); w >= 0 && (next < 0 || w < next) {
+			w := s.wait(now)
+			if s.ctl != nil {
+				if until := s.nextProbe.Sub(now); w < 0 || until < w {
+					w = until
+				}
+				if w < 0 {
+					w = 0
+				}
+			}
+			if w >= 0 && (next < 0 || w < next) {
 				next = w
 			}
+			if d := s.queueDelay(); d > qdelay {
+				qdelay = d
+			}
 		}
+		l.queueDelay.Store(int64(qdelay))
 		return next
 	}
 
@@ -377,11 +433,18 @@ func (l *ListenComponent) runShapedSendLoop(udpConn *net.UDPConn) {
 			l.drainSendQueue()
 			return
 		}
+		if l.shaper.autorate != nil {
+			for _, s := range shapers {
+				probe(s, now)
+			}
+		}
 		send(now)
 		if now.Sub(lastSweep) >= shaperIdleTimeout {
 			for key, s := range shapers {
 				if s.idle(now, shaperIdleTimeout) {
+					s.reset()
 					delete(shapers, key)
+					l.autorates.Delete(key)
 				}
 			}
 			lastSweep = now
@@ -535,6 +598,11 @@ func (l *ListenComponent) Stop() error {
 }
 
 // IsAvailable checks if the component has any established connections
+// QueueDelay returns the largest shaper queue delay over the clients.
+func (l *ListenComponent) QueueDelay() time.Duration {
+	return time.Duration(l.queueDelay.Load())
+}
+
 func (l *ListenComponent) IsAvailable() bool {
 	// First check if the listener is active
 	if l.conn == nil {
@@ -663,6 +731,26 @@ func (l *ListenComponent) handleAuthMessage(header *ProtocolHeader, buffer []byt
 
 		mapping.lastActive = time.Now()
 		logger.Infof("%s: Authentication successful for %s", l.tag, addr.String())
+
+	case MsgTypeProbe:
+		if mapping, exists := l.mappings[addrKey]; exists && mapping.authState != nil && mapping.authState.IsAuthenticated() {
+			pkt := l.router.GetPacket(l.tag)
+			if n := createProbeAck(pkt.BufAtOffset(), buffer, time.Now()); n > 0 {
+				pkt.SetLength(n)
+				l.queueSendHigh(addr, &pkt)
+			}
+			pkt.Release(1)
+		}
+
+	case MsgTypeProbeAck:
+		if key, ok := addrPortKey(addr); ok {
+			if v, ok := l.autorates.Load(key); ok {
+				now := time.Now()
+				if owd, rtt, ok := parseProbeAck(buffer, now); ok {
+					v.(*autorate).addSample(owd, rtt, now)
+				}
+			}
+		}
 
 	case MsgTypeHeartbeat:
 

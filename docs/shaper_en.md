@@ -58,10 +58,48 @@ Add `shaper` to the component that sends over the bottleneck:
 | `interval` | `100` | ms, CoDel interval. Roughly the typical RTT of the traffic |
 | `queue_limit` | 100 ms at `rate` (256 KB – 4 MB) | Maximum queued bytes per path. When full, the oldest bulk packets are dropped |
 
-Notes:
+## Autorate: lines whose bandwidth changes
+
+A fixed `rate` only helps while the line really delivers it. On LTE/5G, Wi-Fi bridges, or lines that are congested in the evening, the bandwidth drops below `rate` and the queue moves back into the modem. With `autorate: true` the shaper follows the line:
+
+- Every `probe_interval` it sends a small probe to the peer. The peer measures the one-way delay and reports it back, so each direction is measured separately: the client tunes the upload and the server tunes the download of that client. The clocks of the two hosts do not need to be synchronized.
+- When the one-way delay rises more than `bloat_threshold` above its baseline, the queue is growing in the line, and the rate drops to 90% of what is actually sent.
+- While the line is busy and the delay stays low, the rate creeps back up to `max_rate`. When the line is idle, it returns to `rate`.
+
+```yaml
+    shaper:
+      enabled: true
+      rate: 38          # Mbit/s, normal bandwidth (starting point)
+      autorate: true
+      min_rate: 8       # never go below this
+      max_rate: 38      # never go above this; set higher on lines that are sometimes faster
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `autorate` | `false` | Adjust the rate automatically |
+| `min_rate` | `rate`/5 | Mbit/s, lower bound |
+| `max_rate` | `rate` | Mbit/s, upper bound |
+| `bloat_threshold` | `15` | ms of extra one-way delay that counts as a growing queue. Lower keeps latency tighter but costs more bandwidth |
+| `probe_interval` | `50` | ms between probes while the path is busy (one probe per second when idle) |
+
+Measured with an upload or download running when the line bandwidth halves mid-transfer (40 → 20 Mbit/s up, 200 → 100 Mbit/s down; idle latency ~22 ms):
+
+| | Game latency after the drop (p50 / p99) | Bulk throughput after the drop |
+|---|---|---|
+| Fixed rate, upload | 181 / 233 ms | 18.6 Mbit/s |
+| Autorate, upload | **20.6 / 37 ms** | 16.5 Mbit/s |
+| Fixed rate, download | 75 / 196 ms | 90.5 Mbit/s |
+| Autorate, download | **20.7 / 36 ms** | 84.7 Mbit/s |
+
+When the bandwidth comes back, the rate climbs back within several seconds.
+
+Autorate requires `auth` on both ends, and both ends must run a version that supports it. An older peer does not answer the probes, so the shaper stays at `rate`.
+
+## Notes
 
 - Authentication and heartbeat messages bypass the rate limit and are never delayed.
-- Shaping is per path. In a load-balancer or redundant setup, set the shaper on every line with that line's own bandwidth.
+- Shaping is per path. In a load-balancer or redundant setup, set the shaper on every line with that line's own bandwidth. The load balancer can then pick the less busy line with `qdelay_<tag>` (see [Load Balancer](load_balancer_en.md#switching-lines-by-queue-delay)).
 - The shaper only covers UDP `listen`/`forward`. `tcp_tunnel_*` components are not shaped.
 - CPU cost is small: on a single core, peak TCP-over-WireGuard throughput with the shaper enabled (but not limiting) was 1–10% lower, and latency was unchanged. When disabled (the default) there is no cost.
-- Statistics (queue delay, drops, priority packets) are shown under `shaper` in the `/api/listen/<tag>` and `/api/forward/<tag>` responses.
+- Statistics (queue delay, drops, priority packets, and the current rate and one-way delay of each path with autorate) are shown under `shaper` in the `/api/listen/<tag>` and `/api/forward/<tag>` responses.
