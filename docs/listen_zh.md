@@ -16,6 +16,7 @@ Listen 组件负责监听指定的 UDP 端口，接收来自客户端的数据�
 | `auth` | 鉴权配置，详见鉴权部分 |
 | `recv_buffer_size` | 可选，UDP 套接字接收缓冲区大小（字节，`SO_RCVBUF`），参见[性能调优](../README_ZH.md#性能调优) |
 | `send_buffer_size` | 可选，UDP 套接字发送缓冲区大小（字节，`SO_SNDBUF`） |
+| `shaper` | 可选，对发往客户端的流量限速并让小包优先（按客户端地址分别限速），参见 [Shaper](shaper_zh.md) |
 
 ## 配置示例
 

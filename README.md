@@ -136,6 +136,10 @@ Recommendations:
     send_buffer_size: 1048576
 ```
 
+### Bufferbloat: keeping game latency low while the line is busy
+
+When downloads or uploads saturate the line, packets queue in the modem or ISP equipment and game latency can jump by hundreds of milliseconds. Set a `shaper` on the components that send over the bottleneck (client `forward` for upload, server `listen` for download). With the rate set to 90–95% of the line bandwidth, game packets kept close to idle latency under full load in our tests (about 200 ms → about 21 ms). See [Shaper](docs/shaper_en.md).
+
 ### Load balancer
 
 When splitting traffic across lines with rules such as `seq % 2 == 0`, enable `batch_decision: true` (see [Load Balancer](docs/load_balancer_en.md#batch-decision)). It keeps each burst on one line in order, In our tests this raised TCP throughput through a WireGuard tunnel by about 25–35% over per-packet alternation, close to the throughput of a single line.
@@ -152,6 +156,7 @@ UDPlex supports multiple component types, each with specific functions and confi
 - [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding endpoint
 - [Load Balancer Component](docs/load_balancer_en.md) - Load balancing component
 - [IP Router Component](docs/ip_router_en.md) - Route by source IP/CIDR and GeoIP2
+- [Shaper](docs/shaper_en.md) - Rate limiting with small-packet priority for `listen`/`forward`, against bufferbloat
 
 ### Authentication Configuration
 

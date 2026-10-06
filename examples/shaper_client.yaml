@@ -1,0 +1,30 @@
+# Client side of a tunnel whose line is 40 Mbit/s up / 200 Mbit/s down.
+# The forward shapes the upload; see shaper_server.yaml for the download.
+buffer_size: 1600
+queue_size: 10240
+logging:
+  level: info
+  format: console
+  output_path: stdout
+services:
+  - type: listen
+    tag: client_listen
+    listen_addr: 0.0.0.0:5202
+    timeout: 120
+    replace_old_mapping: true
+    detour: [client_forward]
+  - type: forward
+    tag: client_forward
+    forwarders: [127.0.0.1:5203]
+    reconnect_interval: 5
+    connection_check_time: 10
+    send_keepalive: true
+    detour: [client_listen]
+    shaper:
+      enabled: true
+      rate: 38            # Mbit/s, ~95% of the upload bandwidth
+    auth:
+      secret: your-secret-key-here
+      enabled: true
+      enable_encryption: true
+      heartbeat_interval: 30

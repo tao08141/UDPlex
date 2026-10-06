@@ -18,6 +18,7 @@ The Forward component is responsible for forwarding packets to one or more targe
 | `auth` | Authentication configuration, see the authentication section |
 | `recv_buffer_size` | Optional UDP socket receive buffer size in bytes (`SO_RCVBUF`). See [Performance Tuning](../README.md#performance-tuning) |
 | `send_buffer_size` | Optional UDP socket send buffer size in bytes (`SO_SNDBUF`) |
+| `shaper` | Optional rate limiting with small-packet priority for traffic sent to each forwarder. See [Shaper](shaper_en.md) |
 
 ## Configuration Example
 

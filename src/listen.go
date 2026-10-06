@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"time"
 )
@@ -78,6 +79,11 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		component.connIDIndex.Store(make(map[ConnID]*ListenConn))
 	}
 
+	if shaper, err := newShaperSettings(cfg.Shaper); err != nil {
+		logger.Errorf("%s: Shaper disabled: %v", cfg.Tag, err)
+	} else {
+		component.shaper = shaper
+	}
 	return component
 }
 
@@ -100,9 +106,17 @@ type ListenComponent struct {
 	sendBufferSize    int
 	sendQueue         chan listenSendJob
 	sendQueuePrio     chan listenSendJob
+	shaper            *shaperSettings
+	shaperStats       shaperStats
 }
 
 func (l *ListenComponent) runSendLoop() {
+	if l.shaper != nil {
+		if udpConn, ok := l.conn.(*net.UDPConn); ok {
+			l.runShapedSendLoop(udpConn)
+			return
+		}
+	}
 	var lastDeadlineUpdate time.Time
 	refreshInterval := l.sendTimeout / 4
 	if refreshInterval <= 0 {
@@ -241,6 +255,165 @@ func (l *ListenComponent) runSendLoop() {
 			l.drainSendQueue()
 			return
 		}
+	}
+}
+
+// runShapedSendLoop is runSendLoop with a rate shaper per client address, so
+// each client's downlink is paced separately, small packets first.
+func (l *ListenComponent) runShapedSendLoop(udpConn *net.UDPConn) {
+	const shaperIdleTimeout = 30 * time.Second
+	var lastDeadlineUpdate time.Time
+	refreshInterval := l.sendTimeout / 4
+	if refreshInterval <= 0 {
+		refreshInterval = l.sendTimeout
+	}
+
+	shapers := make(map[netip.AddrPort]*pathShaper)
+	defer func() {
+		for _, s := range shapers {
+			s.reset()
+		}
+	}()
+	writer := newUDPBatchWriter(l.router, l.tag)
+	out := make([]shaperItem, 0, writer.MaxBatch())
+	data := make([][]byte, 0, writer.MaxBatch())
+	addrs := make([]net.Addr, 0, writer.MaxBatch())
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
+	lastSweep := time.Now()
+
+	enqueue := func(job listenSendJob, control bool, now time.Time) {
+		if job.packet == nil {
+			return
+		}
+		ua, ok := job.addr.(*net.UDPAddr)
+		if !ok || ua == nil {
+			job.packet.Release(1)
+			return
+		}
+		key := ua.AddrPort()
+		key = netip.AddrPortFrom(key.Addr().Unmap(), key.Port())
+		s := shapers[key]
+		if s == nil {
+			s = newPathShaper(l.shaper, &l.shaperStats, now)
+			shapers[key] = s
+		}
+		s.enqueue(job.packet, job.addr, control, now)
+	}
+
+	// drain moves already queued jobs into the shapers; false if a queue was closed.
+	drain := func(now time.Time) bool {
+		for range 4096 {
+			select {
+			case job, ok := <-l.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				enqueue(job, true, now)
+			case job, ok := <-l.sendQueue:
+				if !ok {
+					return false
+				}
+				enqueue(job, false, now)
+			default:
+				return true
+			}
+		}
+		return true
+	}
+
+	send := func(now time.Time) {
+		out = out[:0]
+		for _, s := range shapers {
+			if len(out) >= cap(out) {
+				break
+			}
+			out = s.dequeue(now, out, cap(out))
+		}
+		if len(out) == 0 {
+			return
+		}
+		if l.sendTimeout > 0 && (lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= refreshInterval) {
+			if err := l.conn.SetWriteDeadline(now.Add(l.sendTimeout)); err != nil {
+				logger.Infof("%s: Failed to set write deadline: %v", l.tag, err)
+			}
+			lastDeadlineUpdate = now
+		}
+		data, addrs = data[:0], addrs[:0]
+		for _, it := range out {
+			data = append(data, it.pkt.GetData())
+			addrs = append(addrs, it.addr)
+		}
+		for sent := 0; sent < len(data); {
+			n, err := writer.Write(udpConn, data[sent:], addrs[sent:])
+			sent += n
+			if err != nil {
+				// Skip the datagram that failed, like a single WriteTo would.
+				logger.Infof("%s: Failed to send packet: %v", l.tag, err)
+				sent++
+			}
+		}
+		for i := range out {
+			out[i].pkt.Release(1)
+			out[i] = shaperItem{}
+		}
+	}
+
+	// wait returns the earliest time any shaper can send, or -1 if all are empty.
+	wait := func(now time.Time) time.Duration {
+		next := time.Duration(-1)
+		for _, s := range shapers {
+			if w := s.wait(now); w >= 0 && (next < 0 || w < next) {
+				next = w
+			}
+		}
+		return next
+	}
+
+	for {
+		now := time.Now()
+		if !drain(now) {
+			l.drainSendQueue()
+			return
+		}
+		send(now)
+		if now.Sub(lastSweep) >= shaperIdleTimeout {
+			for key, s := range shapers {
+				if s.idle(now, shaperIdleTimeout) {
+					delete(shapers, key)
+				}
+			}
+			lastSweep = now
+		}
+		w := wait(time.Now())
+		if w == 0 {
+			continue
+		}
+		var tick <-chan time.Time
+		if w > 0 {
+			timer.Reset(w)
+			tick = timer.C
+		}
+		select {
+		case <-l.GetStopChannel():
+			l.drainSendQueue()
+			return
+		case job, ok := <-l.sendQueuePrio:
+			if !ok {
+				l.drainSendQueue()
+				return
+			}
+			enqueue(job, true, time.Now())
+		case job, ok := <-l.sendQueue:
+			if !ok {
+				l.drainSendQueue()
+				return
+			}
+			enqueue(job, false, time.Now())
+		case <-tick:
+		}
+		timer.Stop()
 	}
 }
 

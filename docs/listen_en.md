@@ -16,6 +16,7 @@ The Listen component is responsible for listening on a specified UDP port, recei
 | `auth` | Authentication configuration, see the authentication section |
 | `recv_buffer_size` | Optional UDP socket receive buffer size in bytes (`SO_RCVBUF`). See [Performance Tuning](../README.md#performance-tuning) |
 | `send_buffer_size` | Optional UDP socket send buffer size in bytes (`SO_SNDBUF`) |
+| `shaper` | Optional rate limiting with small-packet priority for traffic sent to clients (per client address). See [Shaper](shaper_en.md) |
 
 ## Configuration Example
 

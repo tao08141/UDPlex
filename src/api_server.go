@@ -447,6 +447,23 @@ func parseIntOrZero(value string) int {
 	return parsed
 }
 
+// addShaperStats reports shaper counters when shaping is enabled. The max
+// queue delay covers the time since the previous API read.
+func addShaperStats(result map[string]interface{}, settings *shaperSettings, stats *shaperStats) {
+	if settings == nil {
+		return
+	}
+	result["shaper"] = map[string]interface{}{
+		"rate_mbps":          settings.rate * 8 / 1e6,
+		"sent_bytes":         stats.sentBytes.Load(),
+		"priority_packets":   stats.priorityPkts.Load(),
+		"codel_drops":        stats.codelDrops.Load(),
+		"overflow_drops":     stats.overflowDrops.Load(),
+		"queued_bytes":       stats.queuedBytes.Load(),
+		"max_queue_delay_ms": float64(stats.maxDelay.Swap(0)) / 1e6,
+	}
+}
+
 func addHeartbeatStats(result map[string]interface{}, stats heartbeatStatsSnapshot, lastHeartbeatSent time.Time) {
 	result["heartbeat_sent"] = stats.Last24h.Sent
 	result["heartbeat_lost"] = stats.Last24h.Lost
@@ -554,6 +571,7 @@ func (a *APIServer) handleGetListenConnections(w http.ResponseWriter, r *http.Re
 		"count":       len(connections),
 	}
 	addHeartbeatStats(result, listenComponent.HeartbeatStatsSnapshot(), listenComponent.LastHeartbeatSent())
+	addShaperStats(result, listenComponent.shaper, &listenComponent.shaperStats)
 
 	// Only include average_delay if auth is configured
 	if hasAuth {
@@ -629,6 +647,7 @@ func (a *APIServer) handleGetForwardConnections(w http.ResponseWriter, r *http.R
 		"count":       len(connections),
 	}
 	addHeartbeatStats(result, forwardComponent.HeartbeatStatsSnapshot(), forwardComponent.LastHeartbeatSent())
+	addShaperStats(result, forwardComponent.shaper, &forwardComponent.shaperStats)
 
 	// Only include average_delay if auth is configured
 	if hasAuth {

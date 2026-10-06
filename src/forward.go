@@ -103,6 +103,9 @@ type ForwardComponent struct {
 	sendBufferSize int // UDP socket send buffer size
 	recvBufferSize int // UDP socket receive buffer size
 	connQueueSize  int
+
+	shaper      *shaperSettings
+	shaperStats shaperStats
 }
 
 func (f *ForwardComponent) initSendQueue(conn *ForwardConn) {
@@ -121,6 +124,10 @@ func (f *ForwardComponent) initSendQueue(conn *ForwardConn) {
 
 func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 	if conn == nil || conn.sendQueue == nil {
+		return
+	}
+	if f.shaper != nil {
+		f.forwardConnShapedLoop(conn)
 		return
 	}
 
@@ -254,6 +261,129 @@ func (f *ForwardComponent) forwardConnSendLoop(conn *ForwardConn) {
 	}
 }
 
+// forwardConnShapedLoop is forwardConnSendLoop with a rate shaper: queued
+// packets are paced to the configured rate, small packets first.
+func (f *ForwardComponent) forwardConnShapedLoop(conn *ForwardConn) {
+	var lastDeadlineUpdate time.Time
+	refreshInterval := f.sendTimeout / 4
+	if refreshInterval <= 0 {
+		refreshInterval = f.sendTimeout
+	}
+
+	shaper := newPathShaper(f.shaper, &f.shaperStats, time.Now())
+	defer shaper.reset()
+	addr := net.Addr(conn.UDPAddr())
+	writer := newUDPBatchWriter(f.router, f.tag)
+	out := make([]shaperItem, 0, writer.MaxBatch())
+	data := make([][]byte, 0, writer.MaxBatch())
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
+
+	enqueue := func(pkt *Packet, control bool, now time.Time) {
+		if pkt != nil {
+			shaper.enqueue(pkt, addr, control, now)
+		}
+	}
+
+	// drain moves already queued packets into the shaper; false if a queue was closed.
+	drain := func(now time.Time) bool {
+		for range 4096 {
+			select {
+			case pkt, ok := <-conn.sendQueuePrio:
+				if !ok {
+					return false
+				}
+				enqueue(pkt, true, now)
+			case pkt, ok := <-conn.sendQueue:
+				if !ok {
+					return false
+				}
+				enqueue(pkt, false, now)
+			default:
+				return true
+			}
+		}
+		return true
+	}
+
+	// send writes what the shaper releases and reports whether the loop should keep running.
+	send := func(now time.Time) bool {
+		out = shaper.dequeue(now, out[:0], cap(out))
+		if len(out) == 0 {
+			return true
+		}
+		defer func() {
+			for i := range out {
+				out[i].pkt.Release(1)
+				out[i] = shaperItem{}
+			}
+		}()
+		udpConn := conn.conn
+		if !conn.IsConnected() || udpConn == nil {
+			return true
+		}
+		if f.sendTimeout > 0 && (lastDeadlineUpdate.IsZero() || now.Sub(lastDeadlineUpdate) >= refreshInterval) {
+			if err := udpConn.SetWriteDeadline(now.Add(f.sendTimeout)); err != nil {
+				logger.Infof("%s: Failed to set write deadline for %s: %v", f.tag, conn.RouteLabel(), err)
+			}
+			lastDeadlineUpdate = now
+		}
+		data = data[:0]
+		for _, it := range out {
+			data = append(data, it.pkt.GetData())
+		}
+		if _, err := writer.Write(udpConn, data, nil); err != nil {
+			logger.Infof("%s: Error writing to %s: %v", f.tag, conn.RouteLabel(), err)
+			conn.SetDisconnected()
+			return false
+		}
+		return true
+	}
+
+	for {
+		now := time.Now()
+		if !drain(now) {
+			f.drainForwardQueue(conn)
+			return
+		}
+		if !send(now) {
+			return
+		}
+		wait := shaper.wait(time.Now())
+		if wait == 0 {
+			continue
+		}
+		var tick <-chan time.Time
+		if wait > 0 {
+			timer.Reset(wait)
+			tick = timer.C
+		}
+		select {
+		case <-f.GetStopChannel():
+			f.drainForwardQueue(conn)
+			return
+		case <-conn.closeCh:
+			f.drainForwardQueue(conn)
+			return
+		case pkt, ok := <-conn.sendQueuePrio:
+			if !ok {
+				f.drainForwardQueue(conn)
+				return
+			}
+			enqueue(pkt, true, time.Now())
+		case pkt, ok := <-conn.sendQueue:
+			if !ok {
+				f.drainForwardQueue(conn)
+				return
+			}
+			enqueue(pkt, false, time.Now())
+		case <-tick:
+		}
+		timer.Stop()
+	}
+}
+
 func (f *ForwardComponent) drainForwardQueue(conn *ForwardConn) {
 	if conn == nil || conn.sendQueue == nil {
 		return
@@ -377,7 +507,7 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		return nil
 	}
 
-	return &ForwardComponent{
+	fc := &ForwardComponent{
 		BaseComponent: NewBaseComponent(cfg.Tag, router, sendTimeout),
 
 		forwarders:          cfg.Forwarders,
@@ -394,6 +524,12 @@ func NewForwardComponent(cfg ComponentConfig, router *Router) *ForwardComponent 
 		sendBufferSize:      cfg.SendBufferSize,
 		connQueueSize:       queueSize,
 	}
+	if shaper, err := newShaperSettings(cfg.Shaper); err != nil {
+		logger.Errorf("%s: Shaper disabled: %v", cfg.Tag, err)
+	} else {
+		fc.shaper = shaper
+	}
+	return fc
 }
 
 func (f *ForwardConn) Close() {

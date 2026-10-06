@@ -1,0 +1,29 @@
+# Server side of shaper_client.yaml. The listen shapes the download of each client.
+buffer_size: 1600
+queue_size: 10240
+logging:
+  level: info
+  format: console
+  output_path: stdout
+services:
+  - type: listen
+    tag: server_listen
+    listen_addr: 0.0.0.0:5203
+    timeout: 120
+    replace_old_mapping: true
+    detour: [server_forward]
+    shaper:
+      enabled: true
+      rate: 190           # Mbit/s, ~95% of the client's download bandwidth
+    auth:
+      secret: your-secret-key-here
+      enabled: true
+      enable_encryption: true
+      heartbeat_interval: 30
+  - type: forward
+    tag: server_forward
+    forwarders: [127.0.0.1:5201]
+    reconnect_interval: 5
+    connection_check_time: 30
+    send_keepalive: false
+    detour: [server_listen]

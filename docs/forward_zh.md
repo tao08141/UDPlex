@@ -17,6 +17,7 @@ Forward 组件负责将数据包转发到一个或多个目标服务器，并处
 | `auth` | 鉴权配置，详见鉴权部分 |
 | `recv_buffer_size` | 可选，UDP 套接字接收缓冲区大小（字节，`SO_RCVBUF`），参见[性能调优](../README_ZH.md#性能调优) |
 | `send_buffer_size` | 可选，UDP 套接字发送缓冲区大小（字节，`SO_SNDBUF`） |
+| `shaper` | 可选，对发往各转发目标的流量限速并让小包优先，参见 [Shaper](shaper_zh.md) |
 
 ## 配置示例
 
