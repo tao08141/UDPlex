@@ -29,6 +29,7 @@ type ComponentConfig struct {
 	SendKeepalive       *bool           `json:"send_keepalive" yaml:"send_keepalive"`
 	Auth                *AuthConfig     `json:"auth,omitempty" yaml:"auth,omitempty"`
 	BroadcastMode       *bool           `json:"broadcast_mode" yaml:"broadcast_mode"`             // When false, only send to the specific connection ID
+	PreserveConnID      bool            `json:"preserve_conn_id" yaml:"preserve_conn_id"`         // listen with auth: keep the connection ID the peer sent instead of the line's
 	ConnectionPoolSize  int             `json:"connection_pool_size" yaml:"connection_pool_size"` // Number of connections in the pool
 	NoDelay             *bool           `json:"no_delay" yaml:"no_delay"`
 	SendTimeout         int             `json:"send_timeout" yaml:"send_timeout"`         // ms

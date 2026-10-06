@@ -46,6 +46,13 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 	if cfg.BroadcastMode != nil && !*cfg.BroadcastMode {
 		broadcastMode = false
 	}
+	preserveConnID := cfg.PreserveConnID
+	if preserveConnID && (authManager == nil || !broadcastMode) {
+		// Replies are looked up by the line's connection ID in non-broadcast
+		// mode, and only auth carries the peer's ID.
+		logger.Warnf("%s: preserve_conn_id needs auth and broadcast_mode, ignoring it", cfg.Tag)
+		preserveConnID = false
+	}
 
 	sendTimeout := time.Duration(cfg.SendTimeout) * time.Millisecond
 	if sendTimeout == 0 {
@@ -66,6 +73,7 @@ func NewListenComponent(cfg ComponentConfig, router *Router) *ListenComponent {
 		mappings:          make(map[string]*ListenConn),
 		authManager:       authManager,
 		broadcastMode:     broadcastMode,
+		preserveConnID:    preserveConnID,
 		sendTimeout:       sendTimeout,
 		recvBufferSize:    cfg.RecvBufferSize,
 		sendBufferSize:    cfg.SendBufferSize,
@@ -101,6 +109,7 @@ type ListenComponent struct {
 	replaceOldMapping bool
 	detour            []string
 	broadcastMode     bool
+	preserveConnID    bool // keep the connection ID carried by auth data messages
 	conn              net.PacketConn
 	mappings          map[string]*ListenConn
 	mappingsAtomic    atomic.Value
@@ -886,7 +895,12 @@ func (l *ListenComponent) handleIncoming(packet *Packet, addr net.Addr) {
 		}
 
 		mapping.lastActive = time.Now()
-		packet.SetConnID(mapping.connID)
+		// With preserve_conn_id a relay's per-client IDs survive the line, so
+		// the receiver can tell its clients apart and see one client as the
+		// same connection on every line.
+		if !l.preserveConnID || packet.ConnID() == (ConnID{}) {
+			packet.SetConnID(mapping.connID)
+		}
 	}
 
 	// Handle address mapping for non-auth mode

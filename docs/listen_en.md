@@ -14,6 +14,8 @@ The Listen component is responsible for listening on a specified UDP port, recei
 | `replace_old_mapping` | Whether to replace old mappings, when true new mappings replace old mappings with the same address |
 | `detour` | Forwarding path, specifies the component identifiers that receive data |
 | `auth` | Authentication configuration, see the authentication section |
+| `broadcast_mode` | Default `true`: packets from other components go to every client. `false`: only to the client whose connection ID the packet carries |
+| `preserve_conn_id` | With `auth`: keep the connection ID the sender put in each packet instead of the line's own ID, default `false`. A relay in front (e.g. the [access gateway](udplex_gateway_en.md) entry) gives every client its own ID, so the receiver can tell its clients apart and sees a client as the same connection on every line. Needs `broadcast_mode: true` |
 | `recv_buffer_size` | Optional UDP socket receive buffer size in bytes (`SO_RCVBUF`). See [Performance Tuning](../README.md#performance-tuning) |
 | `send_buffer_size` | Optional UDP socket send buffer size in bytes (`SO_SNDBUF`) |
 | `shaper` | Optional rate limiting with small-packet priority for traffic sent to clients (per client address). See [Shaper](shaper_en.md) |

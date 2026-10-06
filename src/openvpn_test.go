@@ -115,7 +115,6 @@ func testIPv4Packet(src, dst netip.Addr, payload string) []byte {
 // exchanges against each transport. In udplex bind mode the client reaches the
 // server through a listen component: client -> UDP -> listen -> openvpn.
 func TestOpenVPNServerHandshakeAndData(t *testing.T) {
-	initLogger(LoggingConfig{Level: "error", Format: "console", OutputPath: "stdout"})
 	t.Run("udplex", func(t *testing.T) { testOpenVPNServer(t, "udplex", "udp") })
 	t.Run("native-udp", func(t *testing.T) { testOpenVPNServer(t, "native", "udp") })
 	t.Run("native-tcp", func(t *testing.T) { testOpenVPNServer(t, "native", "tcp") })

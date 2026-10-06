@@ -12,6 +12,8 @@ Listen 组件负责监听指定的 UDP 端口，接收来自客户端的数据�
 | `listen_addr` | 监听地址和端口，格式为"IP:端口"，如"0.0.0.0:9000" |
 | `timeout` | 连接超时时间（秒），超过此时间无数据传输则清除映射 |
 | `replace_old_mapping` | 是否替换旧映射，当为true时新映射会替换同地址的旧映射 |
+| `broadcast_mode` | 默认 `true`：其他组件发来的数据包发给所有客户端。`false`：只发给数据包连接 ID 对应的客户端 |
+| `preserve_conn_id` | 配合 `auth` 使用：保留发送端写在每个数据包中的连接 ID，而不是换成线路自身的 ID，默认 `false`。前面的中继（例如[接入网关](udplex_gateway_zh.md)的入口）为每个客户端分配独立 ID，接收端因此能区分各个客户端，同一客户端在每条线路上也是同一个连接。需要 `broadcast_mode: true` |
 | `detour` | 转发路径，指定接收数据的组件标识列表 |
 | `auth` | 鉴权配置，详见鉴权部分 |
 | `recv_buffer_size` | 可选，UDP 套接字接收缓冲区大小（字节，`SO_RCVBUF`），参见[性能调优](../README_ZH.md#性能调优) |
