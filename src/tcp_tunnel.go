@@ -310,6 +310,8 @@ type TcpTunnelComponent interface {
 
 type TcpTunnelConnIDTracker interface {
 	RememberConnID(connID ConnID, c *TcpTunnelConn)
+	// ConnIDGeneration changes whenever remembered connection IDs are forgotten.
+	ConnIDGeneration() uint64
 }
 
 func (c *TcpTunnelConn) writeLoop() {
@@ -577,6 +579,7 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 	var lastDeadlineTimeout time.Duration
 	var lastDeadlineUpdate time.Time
 	var lastTrackedConnID ConnID
+	var lastTrackedGen uint64
 	lastTrackedConnIDSet := false
 
 	refreshReadDeadline := func(timeout time.Duration) error {
@@ -705,9 +708,12 @@ func (c *TcpTunnelConn) readLoop(mode int) {
 								packet.SetConnID(c.connID)
 							}
 							if tracker, ok := (*c.t).(TcpTunnelConnIDTracker); ok && packet.ConnID() != (ConnID{}) {
-								if !lastTrackedConnIDSet || packet.ConnID() != lastTrackedConnID {
+								// Remember again after the ID was forgotten with another
+								// pool, so replies move to this connection when a line fails.
+								if gen := tracker.ConnIDGeneration(); !lastTrackedConnIDSet || packet.ConnID() != lastTrackedConnID || gen != lastTrackedGen {
 									tracker.RememberConnID(packet.ConnID(), c)
 									lastTrackedConnID = packet.ConnID()
+									lastTrackedGen = gen
 									lastTrackedConnIDSet = true
 								}
 							}

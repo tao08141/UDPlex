@@ -28,6 +28,7 @@ type TcpTunnelListenComponent struct {
 	queueSettings     *tcpQueueSettings
 	queueStats        tcpQueueStats
 	connIndex         sync.Map
+	connIndexGen      atomic.Uint64 // bumped when connIndex entries are forgotten
 }
 
 func NewTcpTunnelListenComponent(cfg ComponentConfig, router *Router) *TcpTunnelListenComponent {
@@ -381,6 +382,7 @@ func (l *TcpTunnelListenComponent) getPoolByID(connID ConnID) *TcpTunnelConnPool
 	}
 	if pool.ConnectionCount() == 0 {
 		l.connIndex.Delete(connID)
+		l.connIndexGen.Add(1)
 		return nil
 	}
 	return pool
@@ -397,6 +399,11 @@ func (l *TcpTunnelListenComponent) forgetPool(target *TcpTunnelConnPool) {
 		}
 		return true
 	})
+	l.connIndexGen.Add(1)
+}
+
+func (l *TcpTunnelListenComponent) ConnIDGeneration() uint64 {
+	return l.connIndexGen.Load()
 }
 
 func cloneConnections(src map[ForwardID]map[PoolID]*TcpTunnelConnPool) map[ForwardID]map[PoolID]*TcpTunnelConnPool {

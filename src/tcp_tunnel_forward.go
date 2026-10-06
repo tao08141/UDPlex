@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,7 @@ type TcpTunnelForwardComponent struct {
 	queueSettings    *tcpQueueSettings
 	queueStats       tcpQueueStats
 	connIndex        sync.Map
+	connIndexGen     atomic.Uint64 // bumped when connIndex entries are forgotten
 }
 
 func NewTcpTunnelForwardComponent(cfg ComponentConfig, router *Router) *TcpTunnelForwardComponent {
@@ -583,6 +585,7 @@ func (f *TcpTunnelForwardComponent) getPoolByID(connID ConnID) *TcpTunnelConnPoo
 	}
 	if pool.ConnectionCount() == 0 {
 		f.connIndex.Delete(connID)
+		f.connIndexGen.Add(1)
 		return nil
 	}
 	return pool
@@ -610,6 +613,11 @@ func (f *TcpTunnelForwardComponent) forgetPool(target *TcpTunnelConnPool) {
 		}
 		return true
 	})
+	f.connIndexGen.Add(1)
+}
+
+func (f *TcpTunnelForwardComponent) ConnIDGeneration() uint64 {
+	return f.connIndexGen.Load()
 }
 
 func (f *TcpTunnelForwardComponent) getConnByID(connID ConnID) *TcpTunnelConn {
