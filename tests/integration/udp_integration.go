@@ -269,6 +269,8 @@ func main() {
 		fmt.Println("  go run udp_integration.go -tests wg_forward,wg_tcp_tunnel")
 		fmt.Println("  go run udp_integration.go -tests basic,tcp_tunnel")
 		fmt.Println("  go run . -tests tcp_forward,tcp_forward_multiline,wg_tcp_listen")
+		fmt.Println("  go run . -tests gateway                   # access gateway with WireGuard and OpenVPN clients")
+		fmt.Println("  go run . -tests gateway_internet          # real internet through the gateway (changes host NAT)")
 		fmt.Println("Optional profiling flags:")
 		fmt.Println("  go run udp_integration.go -build-tags dev -profile-dir ./profiles -profile-tests tcp_tunnel,wg_tcp_tunnel -profile-seconds 10")
 		return
@@ -374,6 +376,18 @@ func main() {
 				Duration: TEST_DURATION,
 				Runner:   runTCPForwardMultilineIntegration,
 			})
+		}
+		if ok, reason := supportsGatewayIntegration(); ok {
+			testConfigs = append(testConfigs,
+				TestConfig{Name: "Gateway WireGuard", Duration: TEST_DURATION, Runner: runGatewayWireGuardIntegration},
+				TestConfig{Name: "Gateway OpenVPN", Duration: TEST_DURATION, Runner: runGatewayOpenVPNIntegration},
+			)
+			// Needs internet access and changes the host's NAT rules.
+			if integrationModeExplicitlySelected("Gateway Internet", selection.SelectedTests) {
+				testConfigs = append(testConfigs, TestConfig{Name: "Gateway Internet", Duration: TEST_DURATION, Runner: runGatewayInternetIntegration})
+			}
+		} else {
+			fmt.Printf("Skipping access gateway integration tests: %s\n", reason)
 		}
 		if integrationModeExplicitlySelected("WireGuard Load Balancer", selection.SelectedTests) {
 			testConfigs = append(testConfigs, TestConfig{
@@ -600,6 +614,11 @@ func integrationConfigSelected(name string, selected map[string]struct{}) bool {
 	if _, ok := selected[normalized]; ok {
 		return true
 	}
+	if strings.HasPrefix(normalized, "gateway_") && normalized != "gateway_internet" {
+		if _, ok := selected["gateway"]; ok {
+			return true
+		}
+	}
 	if strings.HasPrefix(normalized, "wireguard_") {
 		if _, ok := selected["wg"]; ok {
 			return true
@@ -642,6 +661,14 @@ func normalizeIntegrationTestName(value string) string {
 		return "tcp_forward_multiline"
 	case "wg_tcp_listen", "wireguard_tcp_listen", "wg_tcp":
 		return "wireguard_tcp_listen"
+	case "gateway_wireguard", "gateway_wg", "gw_wg":
+		return "gateway_wireguard"
+	case "gateway_openvpn", "gateway_ovpn", "gw_ovpn":
+		return "gateway_openvpn"
+	case "gateway_internet", "gw_internet", "internet":
+		return "gateway_internet"
+	case "gateway", "gw":
+		return "gateway"
 	}
 
 	return value
@@ -1929,7 +1956,7 @@ func parseIperf3JSON(data []byte) (*iperf3JSON, error) {
 		return nil, fmt.Errorf("%w, output=%s", err, strings.TrimSpace(string(data)))
 	}
 	if strings.TrimSpace(result.Error) != "" {
-		return nil, fmt.Errorf(result.Error)
+		return nil, fmt.Errorf("%s", result.Error)
 	}
 	if !strings.EqualFold(result.Start.TestStart.Protocol, "UDP") {
 		return nil, fmt.Errorf("unexpected iperf3 protocol %q", result.Start.TestStart.Protocol)

@@ -75,7 +75,7 @@ jobs:
       - name: Install Integration Test Dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y iperf3
+          sudo apt-get install -y iperf3 iptables iputils-ping wireguard-tools openvpn curl
 
       - name: Run Integration Tests
         env:

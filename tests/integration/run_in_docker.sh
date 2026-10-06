@@ -22,4 +22,4 @@ exec docker run --rm --privileged --platform "$PLATFORM" \
     -e GOFLAGS=-buildvcs=false \
     -w /src/tests/integration \
     "$IMAGE" \
-    bash -c 'apt-get update -qq && apt-get install -y -qq iperf3 iproute2 >/dev/null && bash ./run_integration_tests.sh "$@"' _ "$@"
+    bash -c 'apt-get update -qq && apt-get install -y -qq iperf3 iproute2 iptables iputils-ping wireguard-tools openvpn curl >/dev/null && bash ./run_integration_tests.sh "$@"' _ "$@"
