@@ -1,0 +1,50 @@
+# Access gateway exit: terminates the inner tunnel from gateway_entry.yaml and
+# sends the clients' traffic to the internet. Linux only, needs NET_ADMIN.
+buffer_size: 1500
+queue_size: 10240
+logging:
+  level: info
+  format: console
+  output_path: stdout
+services:
+  - type: wg
+    tag: wg_gw
+    interface_name: wg_gw
+    mtu: 1420
+    addresses: [10.0.0.2/24]
+    private_key: EXIT_INNER_PRIVATE_KEY
+    detour: [load_balancer]
+    ip_forward: true
+    mss_clamp: true
+    masquerade:
+      # auto: the interface of the default route.
+      - {source: 10.0.0.0/24, out_interface: auto}
+    peers:
+      - public_key: ENTRY_INNER_PUBLIC_KEY
+        allowed_ips: [10.0.0.1/32]
+
+  - type: listen
+    tag: line1
+    listen_addr: 0.0.0.0:9100
+    timeout: 120
+    detour: [wg_gw]
+    auth: {enabled: true, secret: CHANGE_ME, heartbeat_interval: 30}
+
+  - type: listen
+    tag: line2
+    listen_addr: 0.0.0.0:9101
+    timeout: 120
+    detour: [wg_gw]
+    auth: {enabled: true, secret: CHANGE_ME, heartbeat_interval: 30}
+
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 3
+    batch_decision: true
+    detour:
+      - rule: "bps <= 50000000 || !available_line1 || !available_line2"
+        targets: [line1, line2]
+      - rule: "(bps > 50000000) && (seq % 2 == 0) && available_line1 && available_line2"
+        targets: [line1]
+      - rule: "(bps > 50000000) && (seq % 2 == 1) && available_line2 && available_line1"
+        targets: [line2]

@@ -94,6 +94,12 @@ docker-compose down
   按包序号在两条线路间均衡分流，或固定走一条首选线路
 - 让 WireGuard 数据继续通过 `forward` 或 `tcp_tunnel_*` 组件进行转发
 
+## 接入网关（WireGuard / OpenVPN 客户端）
+
+- 部署指南: [docs/udplex_gateway_zh.md](docs/udplex_gateway_zh.md)
+
+`udplex-gateway-manager.sh` 部署入口和出口两台服务器。手机和电脑用官方 WireGuard 或 OpenVPN 客户端连接入口，流量经 UDPlex 双线路内部隧道到达出口后访问互联网。OpenVPN 内嵌在 UDPlex 中运行。该脚本与 `udplex-wg-manager.sh` 相互独立，支持客户端管理、证书签发与吊销。
+
 # UDPlex 参数详解
 
 ## 全局配置
@@ -156,7 +162,8 @@ UDPlex 支持多种组件类型，每种组件都有特定的功能和配置参�
 - [Listen 组件](docs/listen_zh.md) - 监听 UDP 端口并接收数据包
 - [Forward 组件](docs/forward_zh.md) - 将数据包转发到目标服务器
 - [Filter 组件](docs/filter_zh.md) - 根据协议特征过滤和分类数据包
-- [WireGuard 组件](docs/wg_component_zh.md) - 内嵌 `wireguard-go` 并让 WireGuard 数据通过 UDPlex 转发
+- [WireGuard 组件](docs/wg_component_zh.md) - 内嵌 `wireguard-go` 并让 WireGuard 数据通过 UDPlex 转发，或接入外部 WireGuard 客户端
+- [OpenVPN 组件](docs/openvpn_component_zh.md) - 内嵌 OpenVPN 服务端，接入外部 OpenVPN 客户端
 - [TCP Tunnel Listen 组件](docs/tcp_tunnel_listen_zh.md) - TCP 隧道监听端
 - [TCP Tunnel Forward 组件](docs/tcp_tunnel_forward_zh.md) - TCP 隧道转发端
 - [TCP Listen 组件](docs/tcp_listen_zh.md) - TCP 转发入口：经 TCP 隧道多线路传输 TCP 连接，或直连（配合 wg）
@@ -210,6 +217,8 @@ examples 目录包含多种使用场景的配置示例：
 - [**wg_component_load_balancer_server.yaml**](examples/wg_component_load_balancer_server.yaml) - 内嵌 WireGuard + 双线路负载均衡服务端配置
 - [**wg_component_tcp_tunnel_client.yaml**](examples/wg_component_tcp_tunnel_client.yaml) - 内嵌 WireGuard + TCP Tunnel 客户端配置
 - [**wg_component_tcp_tunnel_server.yaml**](examples/wg_component_tcp_tunnel_server.yaml) - 内嵌 WireGuard + TCP Tunnel 服务端配置
+- [**gateway_entry.yaml**](examples/gateway_entry.yaml) - 接入网关入口：WireGuard 和 OpenVPN 客户端经内部隧道转发
+- [**gateway_exit.yaml**](examples/gateway_exit.yaml) - 接入网关出口：终结内部隧道并 NAT 到互联网
 - [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP隧道服务端配置，监听TCP连接并转发UDP流量
 - [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP隧道客户端配置，连接TCP隧道服务并转发UDP流量
 - [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - 基于带宽阈值的负载均衡配置，当流量小于等于100M时向两个服务器转发，大于100M时只向一个服务器转发

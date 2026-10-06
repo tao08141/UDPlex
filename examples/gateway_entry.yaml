@@ -1,0 +1,94 @@
+# Access gateway entry: WireGuard and OpenVPN clients connect here and their
+# traffic goes through the inner tunnel (wg_gw over two UDPlex lines) to the
+# exit. See docs/udplex_gateway_en.md. Linux only, needs NET_ADMIN.
+buffer_size: 1500
+queue_size: 10240
+logging:
+  level: info
+  format: console
+  output_path: stdout
+services:
+  # Inner tunnel to the exit.
+  - type: wg
+    tag: wg_gw
+    interface_name: wg_gw
+    mtu: 1420
+    addresses: [10.0.0.1/24]
+    private_key: ENTRY_INNER_PRIVATE_KEY
+    detour: [load_balancer]
+    reuse_incoming_detour: true
+    peers:
+      - public_key: EXIT_INNER_PUBLIC_KEY
+        endpoint: udplex-peer
+        persistent_keepalive: 25
+        # Accept return traffic for any destination; routing into wg_gw is
+        # done by the policy routes below, not by allowed_ips.
+        allowed_ips: [0.0.0.0/0]
+
+  - type: forward
+    tag: line1
+    forwarders: [EXIT_HOST_1:9100]
+    reconnect_interval: 5
+    connection_check_time: 30
+    detour: [wg_gw]
+    auth: {enabled: true, secret: CHANGE_ME, heartbeat_interval: 30}
+
+  - type: forward
+    tag: line2
+    forwarders: [EXIT_HOST_2:9101]
+    reconnect_interval: 5
+    connection_check_time: 30
+    detour: [wg_gw]
+    auth: {enabled: true, secret: CHANGE_ME, heartbeat_interval: 30}
+
+  - type: load_balancer
+    tag: load_balancer
+    window_size: 3
+    batch_decision: true
+    detour:
+      - rule: "bps <= 50000000 || !available_line1 || !available_line2"
+        targets: [line1, line2]
+      - rule: "(bps > 50000000) && (seq % 2 == 0) && available_line1 && available_line2"
+        targets: [line1]
+      - rule: "(bps > 50000000) && (seq % 2 == 1) && available_line2 && available_line1"
+        targets: [line2]
+
+  # WireGuard clients, official apps connect to UDP 51821.
+  - type: wg
+    tag: wg_access
+    bind_mode: native
+    interface_name: wg_access
+    mtu: 1420
+    listen_port: 51821
+    addresses: [10.8.0.1/24]
+    private_key: ACCESS_PRIVATE_KEY
+    ip_forward: true
+    mss_clamp: true
+    policy_routes:
+      - {from: [10.8.0.0/24], table: 7100, priority: 7100, dev: wg_gw}
+    masquerade:
+      - {source: 10.8.0.0/24, out_interface: wg_gw}
+    peers:
+      - public_key: CLIENT_PUBLIC_KEY
+        allowed_ips: [10.8.0.2/32]
+
+  # OpenVPN clients connect to UDP 1194.
+  - type: openvpn
+    tag: ovpn_access
+    listen_addr: 0.0.0.0:1194
+    proto: udp
+    interface_name: ovpn_access
+    mtu: 1420
+    addresses: [10.9.0.1/24]
+    ca: pki/ca.crt
+    cert: pki/server.crt
+    key: pki/server.key
+    tls_crypt: pki/tc.key
+    push_dns: [1.1.1.1]
+    redirect_gateway: true
+    ip_forward: true
+    mss_clamp: true
+    policy_routes:
+      - {from: [10.9.0.0/24], table: 7100, priority: 7101, dev: wg_gw}
+    masquerade:
+      - {source: 10.9.0.0/24, out_interface: wg_gw}

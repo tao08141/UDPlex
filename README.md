@@ -93,6 +93,12 @@ It supports:
   `balance` across both lines by packet sequence, or keep all high-bandwidth traffic on one preferred line
 - WireGuard traffic forwarding through `forward` or `tcp_tunnel_*` components instead of relying on a kernel WireGuard port
 
+## Access Gateway (WireGuard / OpenVPN clients)
+
+- Guide: [docs/udplex_gateway_en.md](docs/udplex_gateway_en.md)
+
+`udplex-gateway-manager.sh` sets up an entry and an exit server. Phones and computers connect to the entry with the official WireGuard or OpenVPN apps, and their traffic goes through the UDPlex dual-line inner tunnel to the exit and out to the internet. OpenVPN runs embedded in UDPlex. The script is independent of `udplex-wg-manager.sh` and manages clients, certificates and revocation.
+
 # UDPlex Parameter Details
 
 ## Global Configuration
@@ -155,7 +161,8 @@ UDPlex supports multiple component types, each with specific functions and confi
 - [Listen Component](docs/listen_en.md) - Listen on UDP ports and receive packets
 - [Forward Component](docs/forward_en.md) - Forward packets to target servers
 - [Filter Component](docs/filter_en.md) - Filter and classify packets based on protocol characteristics
-- [WireGuard Component](docs/wg_component_en.md) - Embed `wireguard-go` and route WireGuard packets through UDPlex
+- [WireGuard Component](docs/wg_component_en.md) - Embed `wireguard-go` and route WireGuard packets through UDPlex, or accept external WireGuard clients
+- [OpenVPN Component](docs/openvpn_component_en.md) - Embedded OpenVPN server for external OpenVPN clients
 - [TCP Tunnel Listen Component](docs/tcp_tunnel_listen_en.md) - TCP tunnel listening endpoint
 - [TCP Tunnel Forward Component](docs/tcp_tunnel_forward_en.md) - TCP tunnel forwarding endpoint
 - [TCP Listen Component](docs/tcp_listen_en.md) - TCP forwarding entry: carries TCP connections over TCP tunnels and multiple lines, or relays directly (with wg)
@@ -206,6 +213,8 @@ The examples directory contains configuration examples for various use cases:
 - [**wg_component_load_balancer_server.yaml**](examples/wg_component_load_balancer_server.yaml) - Embedded WireGuard server with dual-line load balancing
 - [**wg_component_tcp_tunnel_client.yaml**](examples/wg_component_tcp_tunnel_client.yaml) - Embedded WireGuard client over TCP tunnel
 - [**wg_component_tcp_tunnel_server.yaml**](examples/wg_component_tcp_tunnel_server.yaml) - Embedded WireGuard server over TCP tunnel
+- [**gateway_entry.yaml**](examples/gateway_entry.yaml) - Access gateway entry: WireGuard and OpenVPN clients forwarded through the inner tunnel
+- [**gateway_exit.yaml**](examples/gateway_exit.yaml) - Access gateway exit: terminates the inner tunnel and NATs to the internet
 - [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic
 - [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
 - [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M
