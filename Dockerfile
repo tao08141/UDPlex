@@ -1,6 +1,6 @@
 FROM alpine:latest
 
-RUN apk add --no-cache ca-certificates iproute2
+RUN apk add --no-cache ca-certificates iproute2 iptables ip6tables iptables-legacy
 
 WORKDIR /app
 COPY UDPlex /app/

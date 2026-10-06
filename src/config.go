@@ -113,4 +113,82 @@ type WireGuardComponentConfig struct {
 	Peers               []WireGuardPeerConfig `json:"peers" yaml:"peers"`
 	SetupInterface      *bool                 `json:"setup_interface" yaml:"setup_interface"`
 	ReuseIncomingDetour *bool                 `json:"reuse_incoming_detour" yaml:"reuse_incoming_detour"`
+	// BindMode selects where WireGuard datagrams come from: "udplex" (default)
+	// exchanges them with other components, "native" listens on listen_port
+	// directly so ordinary WireGuard clients can connect.
+	BindMode string `json:"bind_mode" yaml:"bind_mode"`
+	TunNetConfig
+}
+
+// TunNetConfig is the kernel network setup of a component that owns a TUN
+// interface: forwarding, policy routing and NAT. It is applied after every
+// component has started, so it can reference interfaces of other components.
+type TunNetConfig struct {
+	IPForward    bool                `json:"ip_forward" yaml:"ip_forward"`       // Enable kernel forwarding and accept forwarded traffic on the interface
+	MSSClamp     bool                `json:"mss_clamp" yaml:"mss_clamp"`         // Clamp TCP MSS to the path MTU on forwarded traffic of the interface
+	PolicyRoutes []PolicyRouteConfig `json:"policy_routes" yaml:"policy_routes"` // Source based routing, e.g. client pool into another tunnel
+	Masquerade   []MasqueradeConfig  `json:"masquerade" yaml:"masquerade"`       // Source NAT
+}
+
+type PolicyRouteConfig struct {
+	From     []string `json:"from" yaml:"from"`         // Source prefixes looked up in Table
+	Table    int      `json:"table" yaml:"table"`       // Routing table id
+	Priority int      `json:"priority" yaml:"priority"` // ip rule priority, 0 lets the kernel choose
+	Dev      string   `json:"dev" yaml:"dev"`           // Interface the table routes to, defaults to the component interface
+	Routes   []string `json:"routes" yaml:"routes"`     // Destinations sent to Dev, defaults to the default route of each From family
+}
+
+type MasqueradeConfig struct {
+	Source       string `json:"source" yaml:"source"`               // Source prefix to masquerade
+	OutInterface string `json:"out_interface" yaml:"out_interface"` // Egress interface, "auto" for the default route interface, empty for any
+}
+
+type OpenVPNUserConfig struct {
+	Username string `json:"username" yaml:"username"`
+	Password string `json:"password" yaml:"password"`
+}
+
+type OpenVPNComponentConfig struct {
+	Type string `json:"type" yaml:"type"`
+	Tag  string `json:"tag" yaml:"tag"`
+	// BindMode selects where OpenVPN datagrams come from: "native" (default)
+	// listens on listen_addr, "udplex" exchanges them with other components.
+	BindMode            string   `json:"bind_mode" yaml:"bind_mode"`
+	Proto               string   `json:"proto" yaml:"proto"`             // udp (default) or tcp, tcp needs native bind mode
+	ListenAddr          string   `json:"listen_addr" yaml:"listen_addr"` // native bind mode
+	Detour              []string `json:"detour" yaml:"detour"`           // udplex bind mode, path of replies without reuse_incoming_detour
+	ReuseIncomingDetour *bool    `json:"reuse_incoming_detour" yaml:"reuse_incoming_detour"`
+	SendTimeout         int      `json:"send_timeout" yaml:"send_timeout"`
+	InterfaceName       string   `json:"interface_name" yaml:"interface_name"`
+	MTU                 int      `json:"mtu" yaml:"mtu"`
+	Addresses           []string `json:"addresses" yaml:"addresses"` // Server address inside the client pool, e.g. 10.9.0.1/24
+	Routes              []string `json:"routes" yaml:"routes"`       // Extra routes through the interface
+	Topology            string   `json:"topology" yaml:"topology"`   // subnet (default), net30 or p2p
+	SetupInterface      *bool    `json:"setup_interface" yaml:"setup_interface"`
+	MaxClients          int      `json:"max_clients" yaml:"max_clients"`
+
+	// Certificates and keys take PEM content or a file path.
+	CA                      string              `json:"ca" yaml:"ca"`     // Verifies client certificates
+	Cert                    string              `json:"cert" yaml:"cert"` // Server certificate
+	Key                     string              `json:"key" yaml:"key"`   // Server private key
+	TLSCrypt                string              `json:"tls_crypt" yaml:"tls_crypt"`
+	TLSCryptV2              string              `json:"tls_crypt_v2" yaml:"tls_crypt_v2"`
+	TLSAuth                 string              `json:"tls_auth" yaml:"tls_auth"`
+	KeyDirection            *int                `json:"key_direction" yaml:"key_direction"`                         // tls_auth direction, omitted for bidirectional
+	VerifyClientCertificate string              `json:"verify_client_certificate" yaml:"verify_client_certificate"` // require (default with ca), optional or none
+	CRLVerify               string              `json:"crl_verify" yaml:"crl_verify"`                               // CRL file of revoked client certificates, read on every handshake
+	Users                   []OpenVPNUserConfig `json:"users" yaml:"users"`                                         // auth-user-pass accounts
+	DuplicateCN             bool                `json:"duplicate_cn" yaml:"duplicate_cn"`
+
+	DataCiphers         []string `json:"data_ciphers" yaml:"data_ciphers"`
+	DataCiphersFallback string   `json:"data_ciphers_fallback" yaml:"data_ciphers_fallback"`
+	Auth                string   `json:"auth" yaml:"auth"`
+
+	PushRoutes        []string `json:"push_routes" yaml:"push_routes"`
+	PushDNS           []string `json:"push_dns" yaml:"push_dns"`
+	RedirectGateway   bool     `json:"redirect_gateway" yaml:"redirect_gateway"`
+	KeepaliveInterval int      `json:"keepalive_interval" yaml:"keepalive_interval"` // seconds, default 10
+	KeepaliveTimeout  int      `json:"keepalive_timeout" yaml:"keepalive_timeout"`   // seconds, default 60
+
+	TunNetConfig
 }

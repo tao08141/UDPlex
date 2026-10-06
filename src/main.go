@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"flag"
 	"os"
+	ossignal "os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -245,6 +247,18 @@ func main() {
 				continue
 			}
 			component = NewWireGuardComponent(cfg, router)
+		case "openvpn":
+			var cfg OpenVPNComponentConfig
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				logger.Warnf("Failed to unmarshal openvpn config: %v", err)
+				continue
+			}
+			var err error
+			component, err = NewOpenVPNComponent(cfg, router)
+			if err != nil {
+				logger.Warnf("Failed to create openvpn component: %v", err)
+				continue
+			}
 		default:
 			logger.Warnf("Unknown component type: %s", typeVal)
 			continue
@@ -280,5 +294,11 @@ func main() {
 		}
 	}
 
-	select {}
+	// Stop components on shutdown so they remove the routes, rules and NAT
+	// they added to the kernel.
+	signals := make(chan os.Signal, 1)
+	ossignal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-signals
+	logger.Infof("Received %s, stopping", sig)
+	router.StopAll()
 }

@@ -301,6 +301,7 @@ func (a *APIServer) getComponentInfo(tag string) map[string]interface{} {
 				result["route_allowed_ips"] = wgComponent.routeAllowedIPs
 				result["setup_interface"] = wgComponent.setupInterface
 				result["reuse_incoming_detour"] = wgComponent.reuseIncomingDetour
+				result["bind_mode"] = wgComponent.bindMode
 				result["peer_count"] = len(wgComponent.peers)
 				result["send_timeout_ms"] = int(wgComponent.GetSendTimeout() / time.Millisecond)
 			}
@@ -1007,7 +1008,7 @@ func (a *APIServer) handleGetWireGuardInfo(w http.ResponseWriter, r *http.Reques
 	result := a.getComponentInfo(wgComponent.GetTag())
 	result["tag"] = wgComponent.GetTag()
 	result["type"] = "wg"
-	result["is_running"] = wgComponent.wgDevice != nil && wgComponent.bind != nil && wgComponent.tunDevice != nil
+	result["is_running"] = wgComponent.wgDevice != nil && wgComponent.tunDevice != nil
 	result["actual_interface_name"] = wgComponent.interfaceName
 	if wgComponent.actualInterfaceName != "" {
 		result["actual_interface_name"] = wgComponent.actualInterfaceName

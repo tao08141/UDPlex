@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,10 +34,13 @@ type WireGuardComponent struct {
 	routeAllowedIPs     bool
 	setupInterface      bool
 	reuseIncomingDetour bool
+	bindMode            string
+	netConfig           TunNetConfig
 
 	tunDevice wgtun.Device
 	wgDevice  *wgdevice.Device
-	bind      *WireGuardBind
+	bind      *WireGuardBind // nil in native bind mode
+	netSetup  *tunNetSetup
 
 	handshakes wireGuardHandshakeDedup
 }
@@ -79,6 +81,11 @@ func (d *wireGuardHandshakeDedup) duplicate(msg []byte, now time.Time) bool {
 	d.seen[sum] = now
 	return false
 }
+
+const (
+	wireGuardBindModeUDPlex = "udplex"
+	wireGuardBindModeNative = "native"
+)
 
 type WireGuardBind struct {
 	component *WireGuardComponent
@@ -133,6 +140,11 @@ func NewWireGuardComponent(cfg WireGuardComponentConfig, router *Router) *WireGu
 		mtu = 1420
 	}
 
+	bindMode := strings.ToLower(strings.TrimSpace(cfg.BindMode))
+	if bindMode == "" {
+		bindMode = wireGuardBindModeUDPlex
+	}
+
 	return &WireGuardComponent{
 		BaseComponent:       NewBaseComponent(cfg.Tag, router, sendTimeout),
 		interfaceName:       interfaceName,
@@ -146,6 +158,8 @@ func NewWireGuardComponent(cfg WireGuardComponentConfig, router *Router) *WireGu
 		routeAllowedIPs:     routeAllowedIPs,
 		setupInterface:      setupInterface,
 		reuseIncomingDetour: reuseIncomingDetour,
+		bindMode:            bindMode,
+		netConfig:           cfg.TunNetConfig,
 	}
 }
 
@@ -168,18 +182,32 @@ func (w *WireGuardComponent) Start() error {
 		return fmt.Errorf("%s: wireguard private_key is required", w.tag)
 	}
 
-	w.bind = NewWireGuardBind(w)
+	var bind wgconn.Bind
+	switch w.bindMode {
+	case wireGuardBindModeUDPlex:
+		w.bind = NewWireGuardBind(w)
+		bind = w.bind
+	case wireGuardBindModeNative:
+		if w.listenPort == 0 {
+			return fmt.Errorf("%s: listen_port is required in native bind mode", w.tag)
+		}
+		bind = wgconn.NewDefaultBind()
+	default:
+		return fmt.Errorf("%s: unknown bind_mode %q, expected %q or %q", w.tag, w.bindMode, wireGuardBindModeUDPlex, wireGuardBindModeNative)
+	}
 
 	tunDevice, err := wgtun.CreateTUN(w.interfaceName, w.mtu)
 	if err != nil {
-		_ = w.bind.Close()
+		_ = bind.Close()
+		w.bind = nil
 		return fmt.Errorf("%s: failed to create wireguard interface %s: %w", w.tag, w.interfaceName, err)
 	}
 
 	actualName, err := tunDevice.Name()
 	if err != nil {
 		_ = tunDevice.Close()
-		_ = w.bind.Close()
+		_ = bind.Close()
+		w.bind = nil
 		return fmt.Errorf("%s: failed to query wireguard interface name: %w", w.tag, err)
 	}
 
@@ -187,7 +215,8 @@ func (w *WireGuardComponent) Start() error {
 	w.actualInterfaceName = actualName
 
 	wgLogger := wgdevice.NewLogger(wgdevice.LogLevelError, fmt.Sprintf("%s: ", w.tag))
-	w.wgDevice = wgdevice.NewDevice(w.tunDevice, w.bind, wgLogger)
+	// The device owns bind and closes it with itself.
+	w.wgDevice = wgdevice.NewDevice(w.tunDevice, bind, wgLogger)
 
 	if err := w.wgDevice.IpcSet(w.buildIPCConfig()); err != nil {
 		w.closeRuntime()
@@ -206,17 +235,26 @@ func (w *WireGuardComponent) Start() error {
 		}
 	}
 
-	logger.Infof("%s: WireGuard interface %s started with %d peers", w.tag, w.actualInterfaceName, len(w.peers))
+	logger.Infof("%s: WireGuard interface %s started in %s bind mode with %d peers", w.tag, w.actualInterfaceName, w.bindMode, len(w.peers))
 	return nil
 }
 
 func (w *WireGuardComponent) PostStart() error {
+	// Interfaces of all components exist now, so policy routes may point at them.
+	w.netSetup = newTunNetSetup(w.tag, w.actualInterfaceName)
+	if err := w.netSetup.apply(w.netConfig, w.addresses); err != nil {
+		return err
+	}
 	w.warmPeerHandshakes(5 * time.Second)
 	return nil
 }
 
 func (w *WireGuardComponent) Stop() error {
 	close(w.GetStopChannel())
+	if w.netSetup != nil {
+		w.netSetup.teardown()
+		w.netSetup = nil
+	}
 	w.closeRuntime()
 	return nil
 }
@@ -239,6 +277,9 @@ func (w *WireGuardComponent) closeRuntime() {
 func (w *WireGuardComponent) HandlePacket(packet *Packet) error {
 	defer packet.Release(1)
 
+	if w.bindMode == wireGuardBindModeNative {
+		return fmt.Errorf("%s: native bind mode does not take packets from other components", w.tag)
+	}
 	if w.bind == nil {
 		return fmt.Errorf("%s: wireguard bind is not initialized", w.tag)
 	}
@@ -324,45 +365,7 @@ func (w *WireGuardComponent) buildIPCConfig() string {
 }
 
 func (w *WireGuardComponent) configureInterface() error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("%s: wg interface setup is only implemented on linux, set setup_interface=false to manage %s manually", w.tag, w.interfaceName)
-	}
-
-	if w.actualInterfaceName == "" {
-		return fmt.Errorf("%s: wireguard interface name is empty", w.tag)
-	}
-
-	if w.mtu > 0 {
-		if err := runIP("link", "set", "dev", w.actualInterfaceName, "mtu", strconv.Itoa(w.mtu)); err != nil {
-			return fmt.Errorf("%s: failed to set MTU on %s: %w", w.tag, w.actualInterfaceName, err)
-		}
-	}
-
-	for _, address := range w.addresses {
-		address = strings.TrimSpace(address)
-		if address == "" {
-			continue
-		}
-		if err := runIP("address", "add", address, "dev", w.actualInterfaceName); err != nil && !isIPAlreadyExists(err) {
-			return fmt.Errorf("%s: failed to add address %s to %s: %w", w.tag, address, w.actualInterfaceName, err)
-		}
-	}
-
-	if err := runIP("link", "set", "dev", w.actualInterfaceName, "up"); err != nil {
-		return fmt.Errorf("%s: failed to bring interface %s up: %w", w.tag, w.actualInterfaceName, err)
-	}
-
-	for _, route := range w.collectRoutes() {
-		args := []string{"route", "replace", route, "dev", w.actualInterfaceName}
-		if strings.Contains(route, ":") {
-			args = []string{"-6", "route", "replace", route, "dev", w.actualInterfaceName}
-		}
-		if err := runIP(args...); err != nil {
-			return fmt.Errorf("%s: failed to add route %s via %s: %w", w.tag, route, w.actualInterfaceName, err)
-		}
-	}
-
-	return nil
+	return configureTunInterface(w.tag, w.actualInterfaceName, w.mtu, w.addresses, w.collectRoutes())
 }
 
 func (w *WireGuardComponent) collectRoutes() []string {
@@ -853,17 +856,28 @@ func addrToIP(addr net.Addr) netip.Addr {
 }
 
 func runIP(args ...string) error {
-	cmd := exec.Command("ip", args...)
+	return runCommand("ip", args...)
+}
+
+func runCommand(name string, args ...string) error {
+	_, err := commandOutput(name, args...)
+	return err
+}
+
+// commandOutput runs a command and returns its output, or its output as the
+// error when it fails.
+func commandOutput(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		return nil
+		return string(output), nil
 	}
 
 	msg := strings.TrimSpace(string(output))
 	if msg == "" {
 		msg = err.Error()
 	}
-	return errors.New(msg)
+	return "", errors.New(msg)
 }
 
 func isIPAlreadyExists(err error) bool {

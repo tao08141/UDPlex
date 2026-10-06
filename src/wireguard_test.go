@@ -105,3 +105,26 @@ func TestWireGuardHandshakeDedup(t *testing.T) {
 		t.Fatal("data messages must never be deduplicated")
 	}
 }
+
+func TestWireGuardBindModeValidation(t *testing.T) {
+	router := NewRouter(Config{})
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	unknown := NewWireGuardComponent(WireGuardComponentConfig{Tag: "wg_bad", PrivateKey: key, BindMode: "bogus"}, router)
+	if err := unknown.Start(); err == nil || !strings.Contains(err.Error(), "unknown bind_mode") {
+		t.Fatalf("expected unknown bind_mode error, got %v", err)
+	}
+
+	noPort := NewWireGuardComponent(WireGuardComponentConfig{Tag: "wg_native", PrivateKey: key, BindMode: "Native"}, router)
+	if noPort.bindMode != wireGuardBindModeNative {
+		t.Fatalf("bind mode not normalized: %q", noPort.bindMode)
+	}
+	if err := noPort.Start(); err == nil || !strings.Contains(err.Error(), "listen_port") {
+		t.Fatalf("expected listen_port error, got %v", err)
+	}
+
+	packet := router.GetPacket("listen")
+	if err := noPort.HandlePacket(&packet); err == nil {
+		t.Fatal("native bind mode must reject pipeline packets")
+	}
+}
