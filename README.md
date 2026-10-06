@@ -97,7 +97,7 @@ It supports:
 
 - Guide: [docs/udplex_gateway_en.md](docs/udplex_gateway_en.md)
 
-`udplex-gateway-manager.sh` sets up an entry and an exit server. Phones and computers connect to the entry with the official WireGuard or OpenVPN apps, and their traffic goes through the UDPlex dual-line inner tunnel to the exit and out to the internet. OpenVPN runs embedded in UDPlex. The script is independent of `udplex-wg-manager.sh` and manages clients, certificates and revocation.
+`udplex-gateway-manager.sh` sets up an entry and an exit server. Phones and computers connect to the entry with the official WireGuard or OpenVPN apps. The entry relays their encrypted packets unchanged over two UDPlex lines to the exit, which runs the embedded WireGuard and OpenVPN servers and sends the traffic to the internet. The script is independent of `udplex-wg-manager.sh` and manages clients, certificates and revocation.
 
 # UDPlex Parameter Details
 
@@ -213,8 +213,8 @@ The examples directory contains configuration examples for various use cases:
 - [**wg_component_load_balancer_server.yaml**](examples/wg_component_load_balancer_server.yaml) - Embedded WireGuard server with dual-line load balancing
 - [**wg_component_tcp_tunnel_client.yaml**](examples/wg_component_tcp_tunnel_client.yaml) - Embedded WireGuard client over TCP tunnel
 - [**wg_component_tcp_tunnel_server.yaml**](examples/wg_component_tcp_tunnel_server.yaml) - Embedded WireGuard server over TCP tunnel
-- [**gateway_entry.yaml**](examples/gateway_entry.yaml) - Access gateway entry: WireGuard and OpenVPN clients forwarded through the inner tunnel
-- [**gateway_exit.yaml**](examples/gateway_exit.yaml) - Access gateway exit: terminates the inner tunnel and NATs to the internet
+- [**gateway_entry.yaml**](examples/gateway_entry.yaml) - Access gateway entry: relays WireGuard and OpenVPN clients over two lines
+- [**gateway_exit.yaml**](examples/gateway_exit.yaml) - Access gateway exit: terminates the WireGuard and OpenVPN clients and NATs to the internet
 - [**tcp_tunnel_server.yaml**](examples/tcp_tunnel_server.yaml) - TCP tunnel server configuration, listens for TCP connections and forwards UDP traffic
 - [**tcp_tunnel_client.yaml**](examples/tcp_tunnel_client.yaml) - TCP tunnel client configuration, connects to TCP tunnel service and forwards UDP traffic
 - [**load_balancer_bandwidth_threshold.yaml**](examples/load_balancer_bandwidth_threshold.yaml) - Bandwidth threshold-based load balancing configuration, forwards to two servers when traffic ≤ 100M, forwards to one server when > 100M

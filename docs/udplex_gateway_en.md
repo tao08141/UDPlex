@@ -1,53 +1,61 @@
 # UDPlex Access Gateway
 
-`udplex-gateway-manager.sh` turns two servers into an access gateway. Phones and computers connect to the **entry** with the official WireGuard or OpenVPN apps. Their traffic goes through the UDPlex inner tunnel (an embedded WireGuard over two UDPlex lines) to the **exit**, and leaves to the internet from the exit.
+`udplex-gateway-manager.sh` turns two servers into an access gateway. Phones and computers connect to the **entry** with the official WireGuard or OpenVPN apps. The entry only relays their encrypted packets, unchanged, over two UDPlex lines to the **exit**. The exit runs the WireGuard and OpenVPN servers and sends the traffic to the internet.
 
-It is independent of [`udplex-wg-manager.sh`](udplex_wireguard_en.md): it uses its own directory (`/opt/udplex-gw`), container (`udplex-gw`), interfaces and ports, so both can run on the same server.
+It is independent of [`udplex-wg-manager.sh`](udplex_wireguard_en.md): it uses its own directory (`/opt/udplex-gw`), container (`udplex-gw`) and ports, so both can run on the same server.
 
 ## Topology
 
 ```text
 WireGuard / OpenVPN app
-  -> Entry: wg_access (UDP 51821) / ovpn_access (1194)
-  -> NAT to the inner tunnel address, policy route into wg_gw
-  -> UDPlex line #1 + line #2 (UDP or TCP each)
-  -> Exit: wg_gw
+  -> Entry: listen 51821/udp (WireGuard), 1194/udp (OpenVPN)
+  -> UDPlex line #1 + line #2 (UDP or TCP each), packets stay encrypted end to end
+  -> Exit: wg_access / ovpn_access (embedded servers)
   -> NAT to the exit's public address
   -> Internet
 ```
 
-The entry NATs client addresses to its inner tunnel address, so the exit needs no routes back to the client pools. Only traffic from the client pools is policy routed; the entry's own traffic is untouched.
+- The entry decrypts nothing and needs no TUN interface, NAT or routing. The client's traffic is encrypted once, by its own protocol.
+- Every client address gets its own connection ID on the entry. The lines carry it to the exit, so the exit tells clients apart, and a client is the same connection on both lines.
+- Below the bandwidth threshold every packet is sent over both lines. WireGuard and OpenVPN drop the second copy with their replay protection. Above it, packets are split across the lines or kept on one, as chosen at install.
+- Clients use UDP only; OpenVPN over TCP cannot be relayed this way.
 
 ## Requirements
 
 - Two Linux servers with Docker (the script installs it when missing) and root access
-- `/dev/net/tun` on both
-- Open ports: on the exit the two line ports (9100, 9101 by default); on the entry the WireGuard (51821/udp) and OpenVPN (1194) ports
-- `openssl` on the entry when OpenVPN is enabled
+- Exit: `/dev/net/tun`, `wireguard-tools` and `openssl` (installed by the script)
+- Open ports: on the entry the WireGuard (51821/udp) and OpenVPN (1194/udp) ports; on the exit the two line ports (9100, 9101 by default)
 
 ## Install
 
-Download and run the script on both servers at the same time, because each side asks for the other's public key:
+Install the entry first; the exit asks for what the entry shows.
 
 ```bash
 curl -fsSL -o udplex-gateway-manager.sh https://raw.githubusercontent.com/tao08141/UDPlex/master/udplex-gateway-manager.sh
 sudo bash udplex-gateway-manager.sh install
 ```
 
-1. Choose the role: `1` entry, `2` exit.
-2. Enter the shared secret. Leave it empty on the first server to generate one, then enter that value on the second.
-3. Copy the inner tunnel public key shown on each server into the other.
-4. Set the bandwidth threshold, the protocol of each line and the high traffic mode, as in `udplex-wg-manager.sh`.
-5. On the exit, enter the two line ports. On the entry, enter the two exit addresses (`host:port`).
-6. On the entry, choose the access protocols:
-   - WireGuard: port and client pool (default `10.8.0.0/24`)
-   - OpenVPN: UDP or TCP, port and client pool (default `10.9.0.0/24`). The script creates a CA, the server certificate and a `tls-crypt` key.
-   - Public address that goes into the client files, DNS pushed to clients, and the routes clients send through the gateway (`0.0.0.0/0` for all traffic).
-7. Start both sides: `sudo bash udplex-gateway-manager.sh start`.
+Entry:
+
+1. Choose role `1`.
+2. Leave the shared secret empty to generate one.
+3. Set the bandwidth threshold, the protocol of each line and the high traffic mode.
+4. Enter the two exit addresses (`host:port`, e.g. `exit.example.com:9100` and `:9101`).
+5. Choose the client protocols and their ports.
+6. Note the secret and ports shown at the end.
+
+Exit:
+
+1. Choose role `2` and enter the entry's secret.
+2. Choose the same line protocols and enter the two line ports.
+3. Enable the same client protocols with the entry's ports, choose the client pools (default `10.8.0.0/24` and `10.9.0.0/24`), and enter the entry's public address. The client files point at that address. The script creates the OpenVPN CA, the server certificate and a `tls-crypt` key.
+4. Choose the DNS server pushed to clients and the routes they send through the gateway (`0.0.0.0/0` for all traffic).
+
+Start both sides: `sudo bash udplex-gateway-manager.sh start`.
 
 ## Clients
 
-Run these on the entry:
+Run these on the exit:
 
 ```bash
 sudo bash udplex-gateway-manager.sh client add alice
@@ -56,7 +64,7 @@ sudo bash udplex-gateway-manager.sh client list
 sudo bash udplex-gateway-manager.sh client del alice
 ```
 
-`client add` writes `/opt/udplex-gw/clients/<name>/wg.conf` and `<name>.ovpn`, one for each enabled protocol. Import them in the WireGuard app or OpenVPN Connect. Adding or deleting a WireGuard client restarts the container. `client del` also revokes the OpenVPN certificate; the CRL is read on every handshake, so the revoked client cannot reconnect.
+`client add` writes `/opt/udplex-gw/clients/<name>/wg.conf` and `<name>.ovpn`, one for each enabled protocol. Import them in the WireGuard app or OpenVPN Connect. Adding or deleting a WireGuard client restarts the exit's container. `client del` also revokes the OpenVPN certificate; the CRL is read on every handshake, so the revoked client cannot reconnect.
 
 ## Commands
 
@@ -64,12 +72,12 @@ sudo bash udplex-gateway-manager.sh client del alice
 |---|---|
 | `install` | Configure this server as the entry or the exit |
 | `start` / `stop` / `restart` | Control the container; `restart` applies config changes |
-| `status` | Container, interfaces, policy routing and clients |
+| `status` | Container, interfaces and clients |
 | `logs` | Follow container logs |
 | `update` | Pull the latest image and restart |
-| `show-keys` | Print the shared secret and the inner tunnel public key |
-| `client add/del/list/show` | Manage clients (entry only) |
-| `set-threshold <bps>` | Change the bandwidth threshold, then `restart` |
+| `show-keys` | Print the shared secret (and on the entry the client ports) |
+| `client add/del/list/show` | Manage clients (exit only) |
+| `set-threshold <bps>` | Change the bandwidth threshold, then `restart`; set the same value on both sides |
 | `lang <zh\|en>` | Switch the script language |
 | `uninstall` | Stop the gateway and remove `/opt/udplex-gw` (offers a backup) |
 
@@ -79,27 +87,25 @@ sudo bash udplex-gateway-manager.sh client del alice
 |---|---|
 | `settings.env` | Answers from `install` |
 | `config.yaml` | Generated UDPlex config, regenerated by `client` and `set-threshold`; do not edit |
-| `docker-compose.yml` | Container definition (host network, `NET_ADMIN`, `/dev/net/tun`) |
-| `keys/` | Inner tunnel and WireGuard access keys |
-| `pki/` | OpenVPN CA, server certificate, `tc.key`, `crl.pem` |
-| `clients/<name>/` | Client keys, `wg.conf`, `<name>.ovpn` |
+| `docker-compose.yml` | Container definition (host network; on the exit also `NET_ADMIN` and `/dev/net/tun`) |
+| `keys/` | Exit: WireGuard server key |
+| `pki/` | Exit: OpenVPN CA, server certificate, `tc.key`, `crl.pem` |
+| `clients/<name>/` | Exit: client keys, `wg.conf`, `<name>.ovpn` |
 
 ## How It Works
 
-The generated config uses these components:
+See [examples/gateway_entry.yaml](../examples/gateway_entry.yaml) and [examples/gateway_exit.yaml](../examples/gateway_exit.yaml).
 
-- Inner tunnel: a `wg` component `wg_gw` on both sides, carried over `forward`/`listen` or `tcp_tunnel_*` lines and a `load_balancer`, like `udplex-wg-manager.sh`. On the entry its peer has `allowed_ips: 0.0.0.0/0` so it accepts return traffic for any destination.
-- WireGuard access: a `wg` component with `bind_mode: native` (see [WireGuard component](wg_component_en.md#accepting-external-clients-bind_mode-native)).
-- OpenVPN access: an [`openvpn` component](openvpn_component_en.md).
-- Both access components set `ip_forward`, `mss_clamp`, a policy route from the client pool into `wg_gw` (table 7100) and a masquerade out of `wg_gw`. The exit masquerades the inner tunnel out of its default interface.
-
-UDPlex adds these routes, rules and iptables entries when it starts and removes them when it stops. The script also enables `net.ipv4.ip_forward` on the host (`/etc/sysctl.d/99-udplex-gw.conf`), because it is read-only inside the container.
+- Entry: a `listen` per protocol with `broadcast_mode: false` gives each client its own connection ID and sends its packets to a `load_balancer` over the two lines. Replies go back through a `filter` that sends WireGuard messages to the WireGuard `listen` and everything else to the OpenVPN one.
+- Exit: the line `listen` components set [`preserve_conn_id`](listen_en.md) so the entry's IDs survive. A `filter` splits the protocols, and a `wg` and an [`openvpn`](openvpn_component_en.md) component in `bind_mode: udplex` serve the clients. Replies go through the `load_balancer` over both lines.
+- The exit's components set `ip_forward`, `mss_clamp` and masquerade the client pools out of the default interface. UDPlex adds these rules when it starts and removes them when it stops. The script enables `net.ipv4.ip_forward` on the exit host (`/etc/sysctl.d/99-udplex-gw.conf`), because it is read-only inside the container.
 
 ## Troubleshooting
 
-- `status` shows the interfaces and `ip rule`; check that `wg_gw` exists on both sides and that `ping 10.0.0.2` works from the entry.
+- `status` on the exit shows `wg_access` and `ovpn_access`.
+- Clients get no handshake: check the secret, line protocols and ports on both sides, and that the entry's client ports are open.
 - Clients connect but have no internet: check that the exit's firewall allows forwarding and that the exit's default interface is right. Set `UDPLEX_IPTABLES_BACKEND=legacy` or `nft` in `docker-compose.yml` if UDPlex picked the wrong iptables backend (logged at startup).
-- Large downloads stall: the MTU is 1420 on all interfaces and MSS is clamped; lower the MTU in the client file if a line adds more overhead.
+- Large downloads stall: client MTU is 1420 and MSS is clamped; lower the MTU in the client file if the path to the entry is smaller than 1500.
 
 ## Integration Tests
 
@@ -107,8 +113,8 @@ UDPlex adds these routes, rules and iptables entries when it starts and removes 
 
 ```bash
 cd tests/integration
-./run_in_docker.sh -tests gateway            # clients -> entry -> exit -> target, plus cleanup on SIGTERM
+./run_in_docker.sh -tests gateway            # clients -> entry -> exit -> target
 ./run_in_docker.sh -tests gateway_internet   # both clients reach the real internet through the exit
 ```
 
-`gateway_internet` is only run when selected, because it needs internet access and adds a NAT rule to the host (removed afterwards).
+`gateway` streams verified TCP data to a target behind the exit. It sends numbered UDP datagrams from two clients at once while every packet crosses both lines, and checks that each comes back exactly once to its sender. It also checks that SIGTERM removes the exit's iptables rules. `gateway_internet` is only run when selected, because it needs internet access and adds a NAT rule to the host (removed afterwards).

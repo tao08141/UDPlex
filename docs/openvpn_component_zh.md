@@ -76,7 +76,7 @@ tun-mtu 1420
 
 ## `udplex` 模式
 
-`udplex` 模式下服务端从其他组件接收报文，因此 OpenVPN 客户端可以经 UDPlex `listen` 组件或多条线路连入。服务端按报文的连接 ID 区分客户端：请使用 `listen` 组件（每个客户端地址一个 ID）或开启了 `auth` 的线路。
+`udplex` 模式下服务端从其他组件接收报文，因此 OpenVPN 客户端可以经 UDPlex `listen` 组件或多条线路连入。服务端按报文的连接 ID 区分客户端：请使用 `listen` 组件（每个客户端地址一个 ID）。经中继转发时，通过开启 `auth` 的线路携带中继分配的 ID，并在接收端 `listen` 上设置 `preserve_conn_id: true`（`tcp_tunnel` 线路本身就会保留）。重复到达的报文（例如经两条冗余线路）会被 OpenVPN 的重放保护丢弃，[接入网关](udplex_gateway_zh.md)正是这样使用的。
 
 ```yaml
 - type: listen

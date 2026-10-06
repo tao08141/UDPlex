@@ -1,5 +1,6 @@
-# Access gateway exit: terminates the inner tunnel from gateway_entry.yaml and
-# sends the clients' traffic to the internet. Linux only, needs NET_ADMIN.
+# Access gateway exit: terminates the WireGuard and OpenVPN clients relayed by
+# gateway_entry.yaml and NATs their traffic to the internet. Linux only, needs
+# NET_ADMIN.
 buffer_size: 1500
 queue_size: 10240
 logging:
@@ -7,34 +8,22 @@ logging:
   format: console
   output_path: stdout
 services:
-  - type: wg
-    tag: wg_gw
-    interface_name: wg_gw
-    mtu: 1420
-    addresses: [10.0.0.2/24]
-    private_key: EXIT_INNER_PRIVATE_KEY
-    detour: [load_balancer]
-    ip_forward: true
-    mss_clamp: true
-    masquerade:
-      # auto: the interface of the default route.
-      - {source: 10.0.0.0/24, out_interface: auto}
-    peers:
-      - public_key: ENTRY_INNER_PUBLIC_KEY
-        allowed_ips: [10.0.0.1/32]
-
+  # preserve_conn_id keeps the entry's per-client connection IDs, so clients
+  # stay apart and a client is the same connection on both lines.
   - type: listen
     tag: line1
     listen_addr: 0.0.0.0:9100
     timeout: 120
-    detour: [wg_gw]
+    preserve_conn_id: true
+    detour: [client_filter]
     auth: {enabled: true, secret: CHANGE_ME, heartbeat_interval: 30}
 
   - type: listen
     tag: line2
     listen_addr: 0.0.0.0:9101
     timeout: 120
-    detour: [wg_gw]
+    preserve_conn_id: true
+    detour: [client_filter]
     auth: {enabled: true, secret: CHANGE_ME, heartbeat_interval: 30}
 
   - type: load_balancer
@@ -48,3 +37,58 @@ services:
         targets: [line1]
       - rule: "(bps > 50000000) && (seq % 2 == 1) && available_line2 && available_line1"
         targets: [line2]
+
+  - type: filter
+    tag: client_filter
+    use_proto_detectors: [wireguard]
+    detour:
+      wireguard: [wg_access]
+    detour_miss: [ovpn_access]
+
+  # WireGuard clients; clients connect to the entry's port 51821.
+  - type: wg
+    tag: wg_access
+    bind_mode: udplex
+    interface_name: wg_access
+    mtu: 1420
+    addresses: [10.8.0.1/24]
+    private_key: ACCESS_PRIVATE_KEY
+    detour: [load_balancer]
+    reuse_incoming_detour: false
+    ip_forward: true
+    mss_clamp: true
+    masquerade:
+      # auto: the interface of the default route.
+      - {source: 10.8.0.0/24, out_interface: auto}
+    peers:
+      - public_key: CLIENT_PUBLIC_KEY
+        allowed_ips: [10.8.0.2/32]
+
+  # OpenVPN clients; clients connect to the entry's UDP port 1194.
+  - type: openvpn
+    tag: ovpn_access
+    bind_mode: udplex
+    interface_name: ovpn_access
+    mtu: 1420
+    addresses: [10.9.0.1/24]
+    detour: [load_balancer]
+    reuse_incoming_detour: false
+    ca: pki/ca.crt
+    cert: pki/server.crt
+    key: pki/server.key
+    tls_crypt: pki/tc.key
+    push_dns: [1.1.1.1]
+    redirect_gateway: true
+    ip_forward: true
+    mss_clamp: true
+    masquerade:
+      - {source: 10.9.0.0/24, out_interface: auto}
+
+protocol_detectors:
+  wireguard:
+    signatures:
+      - offset: 0
+        bytes: "00000000"
+        mask: "F8FFFFFF"
+        hex: true
+        length: {min: 32}

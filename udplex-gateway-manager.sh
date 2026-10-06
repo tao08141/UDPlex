@@ -3,15 +3,15 @@ set -euo pipefail
 
 # UDPlex access gateway manager
 #
-# The entry server accepts ordinary WireGuard and OpenVPN clients and sends
-# their traffic through an embedded WireGuard tunnel carried by two UDPlex
-# lines to the exit server, which forwards it to the internet.
+# Ordinary WireGuard and OpenVPN clients connect to the entry server, which
+# relays their packets unchanged over two UDPlex lines to the exit server.
+# The exit terminates the clients and forwards their traffic to the internet.
 #
-#   client --WireGuard/OpenVPN--> entry --wg_gw over UDPlex lines--> exit --> internet
+#   client --WireGuard/OpenVPN--> entry ==UDPlex lines==> exit (wg/openvpn) --> internet
 #
 # Commands:
 #   install | uninstall | start | stop | restart | status | logs | update | show-keys
-#   client add|del|list|show <name> | lang <zh|en> | set-threshold <bps>
+#   client add|del|list|show <name> (exit) | lang <zh|en> | set-threshold <bps>
 
 # --------------------------------
 # Global
@@ -30,14 +30,10 @@ CONTAINER_PKI_DIR="/app/pki"
 UDPLEX_IMAGE="ghcr.io/tao08141/udplex:latest"
 DOCKER_INSTALL_SCRIPT_URL="https://get.docker.com"
 
-INNER_IFACE="wg_gw"
 WG_ACCESS_IFACE="wg_access"
 OVPN_ACCESS_IFACE="ovpn_access"
+# Client packets plus the 16-byte line header still fit a 1500-byte path.
 TUNNEL_MTU=1420
-# Routing table and rule priorities steering client pools into the inner tunnel.
-POLICY_TABLE=7100
-WG_RULE_PRIORITY=7100
-OVPN_RULE_PRIORITY=7101
 
 DOCKER_COMPOSE=""
 
@@ -54,23 +50,19 @@ LINE1_ADDR=""
 LINE2_ADDR=""
 LISTEN1_PORT="9100"
 LISTEN2_PORT="9101"
-INNER_ADDR=""
-INNER_PEER=""
-PEER_PUBKEY=""
 WG_ACCESS="no"
 WG_ACCESS_PORT="51821"
 WG_NET="10.8.0"
 OVPN_ACCESS="no"
 OVPN_PORT="1194"
-OVPN_PROTO="udp"
 OVPN_NET="10.9.0"
 PUBLIC_HOST=""
 CLIENT_DNS="1.1.1.1"
 CLIENT_ROUTES="0.0.0.0/0"
 
 SETTINGS_KEYS=(LANG_SEL ROLE SECRET THRESHOLD LINE1_PROTO LINE2_PROTO HIGH_TRAFFIC_MODE PREFERRED_LINE
-  LINE1_ADDR LINE2_ADDR LISTEN1_PORT LISTEN2_PORT INNER_ADDR INNER_PEER PEER_PUBKEY
-  WG_ACCESS WG_ACCESS_PORT WG_NET OVPN_ACCESS OVPN_PORT OVPN_PROTO OVPN_NET
+  LINE1_ADDR LINE2_ADDR LISTEN1_PORT LISTEN2_PORT
+  WG_ACCESS WG_ACCESS_PORT WG_NET OVPN_ACCESS OVPN_PORT OVPN_NET
   PUBLIC_HOST CLIENT_DNS CLIENT_ROUTES)
 
 # --------------------------------
@@ -94,8 +86,8 @@ T() {
     en:pkg_manual) msg="Please install manually: %s" ;;
     zh:already_installed) msg="检测到已有安装（%s）。重新安装会保留密钥、证书和客户端，并重写配置。继续？(y/N): " ;;
     en:already_installed) msg="An installation exists in %s. Reinstalling keeps keys, certificates and clients and rewrites the config. Continue? (y/N): " ;;
-    zh:select_role) msg="请选择角色：[1] 入口端（接入外部客户端）  [2] 出口端（转发到互联网）" ;;
-    en:select_role) msg="Select role: [1] Entry (accepts external clients)  [2] Exit (forwards to the internet)" ;;
+    zh:select_role) msg="请选择角色：[1] 入口端（中继客户端报文，先安装）  [2] 出口端（终结客户端并转发到互联网）" ;;
+    en:select_role) msg="Select role: [1] Entry (relays client packets, install it first)  [2] Exit (terminates clients, forwards to the internet)" ;;
     zh:invalid_choice) msg="无效选择。" ;;
     en:invalid_choice) msg="Invalid choice." ;;
     zh:prompt_threshold) msg="带宽阈值（bps，默认 %s）: " ;;
@@ -104,12 +96,8 @@ T() {
     en:prompt_secret) msg="UDPlex line auth secret (must match on both ends, empty to generate): " ;;
     zh:show_secret_title) msg="UDPlex 共享密钥（请复制到对端）:" ;;
     en:show_secret_title) msg="UDPlex shared secret (copy it to the peer):" ;;
-    zh:show_pubkey_title) msg="本机内层隧道 WireGuard 公钥（请发送给对端）:" ;;
-    en:show_pubkey_title) msg="Local inner tunnel WireGuard public key (share it with the peer):" ;;
-    zh:prompt_peer_pub) msg="请输入对端内层隧道公钥（对端执行 install 或 show-keys 可看到）:" ;;
-    en:prompt_peer_pub) msg="Paste the peer's inner tunnel public key (shown by install or show-keys on the peer):" ;;
-    zh:bad_pubkey) msg="公钥格式不正确，请重新输入。" ;;
-    en:bad_pubkey) msg="Invalid public key, please paste again." ;;
+    zh:show_entry_title) msg="出口端安装时需要以下信息：" ;;
+    en:show_entry_title) msg="The exit install asks for the following:" ;;
     zh:prompt_line1_proto) msg="线路 1 外层协议 [1] UDP  [2] TCP（默认 1）: " ;;
     en:prompt_line1_proto) msg="Outer protocol for line #1 [1] UDP  [2] TCP (default 1): " ;;
     zh:prompt_line2_proto) msg="线路 2 外层协议 [1] UDP  [2] TCP（默认 1）: " ;;
@@ -128,26 +116,26 @@ T() {
     en:prompt_listen1) msg="Line #1 listen port (default 9100): " ;;
     zh:prompt_listen2) msg="线路 2 监听端口（默认 9101）: " ;;
     en:prompt_listen2) msg="Line #2 listen port (default 9101): " ;;
-    zh:prompt_enable_wg) msg="启用 WireGuard 客户端接入？(Y/n): " ;;
-    en:prompt_enable_wg) msg="Accept WireGuard clients? (Y/n): " ;;
-    zh:prompt_wg_port) msg="WireGuard 接入端口（UDP，默认 51821）: " ;;
-    en:prompt_wg_port) msg="WireGuard access port (UDP, default 51821): " ;;
+    zh:prompt_enable_wg) msg="启用 WireGuard 客户端接入？(Y/n，两端必须一致): " ;;
+    en:prompt_enable_wg) msg="Accept WireGuard clients? (Y/n, must match on both ends): " ;;
+    zh:prompt_wg_port) msg="入口端 WireGuard 接入端口（UDP，默认 51821）: " ;;
+    en:prompt_wg_port) msg="WireGuard access port on the entry (UDP, default 51821): " ;;
     zh:prompt_wg_net) msg="WireGuard 客户端网段（/24，默认 10.8.0.0/24）: " ;;
     en:prompt_wg_net) msg="WireGuard client subnet (/24, default 10.8.0.0/24): " ;;
-    zh:prompt_enable_ovpn) msg="启用 OpenVPN 客户端接入？(Y/n): " ;;
-    en:prompt_enable_ovpn) msg="Accept OpenVPN clients? (Y/n): " ;;
-    zh:prompt_ovpn_proto) msg="OpenVPN 协议 [1] UDP  [2] TCP（默认 1）: " ;;
-    en:prompt_ovpn_proto) msg="OpenVPN protocol [1] UDP  [2] TCP (default 1): " ;;
-    zh:prompt_ovpn_port) msg="OpenVPN 接入端口（默认 1194）: " ;;
-    en:prompt_ovpn_port) msg="OpenVPN access port (default 1194): " ;;
+    zh:prompt_enable_ovpn) msg="启用 OpenVPN 客户端接入？(Y/n，两端必须一致): " ;;
+    en:prompt_enable_ovpn) msg="Accept OpenVPN clients? (Y/n, must match on both ends): " ;;
+    zh:prompt_ovpn_port) msg="入口端 OpenVPN 接入端口（UDP，默认 1194）: " ;;
+    en:prompt_ovpn_port) msg="OpenVPN access port on the entry (UDP, default 1194): " ;;
     zh:prompt_ovpn_net) msg="OpenVPN 客户端网段（/24，默认 10.9.0.0/24）: " ;;
     en:prompt_ovpn_net) msg="OpenVPN client subnet (/24, default 10.9.0.0/24): " ;;
     zh:bad_net) msg="网段格式应为 a.b.c.0/24，且两个网段不能相同。" ;;
     en:bad_net) msg="Subnets must look like a.b.c.0/24 and differ from each other." ;;
-    zh:need_access) msg="入口端至少要启用一种客户端接入。" ;;
-    en:need_access) msg="The entry needs at least one kind of client access." ;;
-    zh:prompt_public_host) msg="客户端连接本机使用的地址（默认 %s）: " ;;
-    en:prompt_public_host) msg="Address clients use to reach this server (default %s): " ;;
+    zh:need_access) msg="至少要启用一种客户端接入。" ;;
+    en:need_access) msg="Enable at least one kind of client access." ;;
+    zh:prompt_public_host) msg="客户端连接的入口端地址（入口公网 IP 或域名）: " ;;
+    en:prompt_public_host) msg="Entry address clients connect to (public IP or domain of the entry): " ;;
+    zh:need_public_host) msg="必须提供入口端地址。" ;;
+    en:need_public_host) msg="The entry address is required." ;;
     zh:prompt_dns) msg="推送给客户端的 DNS（默认 1.1.1.1）: " ;;
     en:prompt_dns) msg="DNS server for clients (default 1.1.1.1): " ;;
     zh:prompt_routes) msg="客户端经隧道访问的网段，逗号分隔（默认 0.0.0.0/0 即全局）: " ;;
@@ -156,26 +144,26 @@ T() {
     en:pki_created) msg="OpenVPN PKI created in %s" ;;
     zh:install_done) msg="安装完成。现在可以执行：sudo bash $0 start" ;;
     en:install_done) msg="Installation finished. Now run: sudo bash $0 start" ;;
-    zh:install_done_entry) msg="启动后用 sudo bash $0 client add <名称> 添加客户端。" ;;
-    en:install_done_entry) msg="After starting, add clients with: sudo bash $0 client add <name>" ;;
+    zh:install_done_exit) msg="启动后用 sudo bash $0 client add <名称> 添加客户端。" ;;
+    en:install_done_exit) msg="After starting, add clients with: sudo bash $0 client add <name>" ;;
     zh:open_ports) msg="请确认防火墙/安全组已放通：%s" ;;
     en:open_ports) msg="Make sure your firewall / security group allows: %s" ;;
     zh:no_install) msg="未找到安装，请先执行：sudo bash $0 install" ;;
     en:no_install) msg="No installation found. Run: sudo bash $0 install" ;;
     zh:started) msg="UDPlex 网关已启动。" ;;
     en:started) msg="UDPlex gateway started." ;;
-    zh:iface_ready) msg="内层隧道接口 %s 已就绪。" ;;
-    en:iface_ready) msg="Inner tunnel interface %s is up." ;;
-    zh:iface_fail) msg="内层隧道接口 %s 未就绪，请执行 logs 查看日志。" ;;
-    en:iface_fail) msg="Inner tunnel interface %s is not up. Check: sudo bash $0 logs" ;;
+    zh:iface_ready) msg="接口 %s 已就绪。" ;;
+    en:iface_ready) msg="Interface %s is up." ;;
+    zh:iface_fail) msg="接口 %s 未就绪，请执行 logs 查看日志。" ;;
+    en:iface_fail) msg="Interface %s is not up. Check: sudo bash $0 logs" ;;
     zh:stopped) msg="UDPlex 网关已停止。" ;;
     en:stopped) msg="UDPlex gateway stopped." ;;
     zh:restarted) msg="UDPlex 网关已按新配置重启。" ;;
     en:restarted) msg="UDPlex gateway restarted with the new config." ;;
     zh:updated_image) msg="镜像已更新并重启。" ;;
     en:updated_image) msg="Image updated and restarted." ;;
-    zh:entry_only) msg="客户端管理只能在入口端使用。" ;;
-    en:entry_only) msg="Client management is only available on the entry." ;;
+    zh:exit_only) msg="客户端管理只能在出口端使用。" ;;
+    en:exit_only) msg="Client management is only available on the exit." ;;
     zh:bad_name) msg="客户端名称只能包含字母、数字、点、下划线和横线（最多 32 个字符）。" ;;
     en:bad_name) msg="Client names may contain letters, digits, dot, underscore and dash (up to 32 characters)." ;;
     zh:client_exists) msg="客户端 %s 已存在。" ;;
@@ -326,9 +314,11 @@ install_docker() {
   fi
 }
 
-# prepare_host enables forwarding on the host: /proc/sys is read-only inside
-# the container. Netfilter modules are loaded here for the same reason.
+# prepare_host enables forwarding on the exit host: /proc/sys is read-only
+# inside the container. Netfilter modules are loaded here for the same reason.
+# The entry only relays UDP and needs neither.
 prepare_host() {
+  [[ "${ROLE}" == "exit" ]] || return 0
   printf 'net.ipv4.ip_forward = 1\n' > "${SYSCTL_FILE}"
   sysctl -q -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
   modprobe -a tun iptable_nat iptable_mangle xt_MASQUERADE xt_TCPMSS >/dev/null 2>&1 || true
@@ -341,10 +331,6 @@ random_secret() {
 detect_public_ip() {
   curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null ||
     curl -fsS4 --max-time 5 https://ifconfig.me 2>/dev/null || true
-}
-
-validate_pubkey() {
-  [[ "${1:-}" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]]
 }
 
 # parse_net turns a.b.c.0/24 (or a.b.c) into a.b.c.
@@ -511,10 +497,12 @@ render_line_auth() {
       enabled: true
       secret: "${SECRET}"
       enable_encryption: false
-      heartbeat_interval: 30
+      heartbeat_interval: 10
 YAML
 }
 
+# Lines are checked every 5 seconds, so they re-authenticate quickly after
+# the exit restarts (client add/del restarts it).
 render_entry_line() {
   local tag="$1" target="$2" proto="$3"
   if [[ "${proto}" == "tcp" ]]; then
@@ -522,24 +510,27 @@ render_entry_line() {
   - type: tcp_tunnel_forward
     tag: ${tag}
     forwarders: [${target}:4]
-    reconnect_interval: 5
-    connection_check_time: 30
+    reconnect_interval: 2
+    connection_check_time: 5
     no_delay: true
-    detour: [${INNER_IFACE}]
+    detour: [$(client_detour)]
 YAML
   else
     cat <<YAML
   - type: forward
     tag: ${tag}
     forwarders: [${target}]
-    reconnect_interval: 5
-    connection_check_time: 30
-    detour: [${INNER_IFACE}]
+    reconnect_interval: 2
+    connection_check_time: 5
+    detour: [$(client_detour)]
 YAML
   fi
   render_line_auth
 }
 
+# The exit's line listeners keep the connection ID the entry gave each
+# client, so the exit tells clients apart and sees a client as the same
+# connection on both lines.
 render_exit_line() {
   local tag="$1" port="$2" proto="$3"
   if [[ "${proto}" == "tcp" ]]; then
@@ -549,7 +540,7 @@ render_exit_line() {
     listen_addr: 0.0.0.0:${port}
     timeout: 120
     no_delay: true
-    detour: [${INNER_IFACE}]
+    detour: [$(client_detour)]
 YAML
   else
     cat <<YAML
@@ -557,39 +548,116 @@ YAML
     tag: ${tag}
     listen_addr: 0.0.0.0:${port}
     timeout: 120
-    detour: [${INNER_IFACE}]
+    preserve_conn_id: true
+    detour: [$(client_detour)]
 YAML
   fi
   render_line_auth
 }
 
-render_wg_access() {
-  local dir name
+# client_detour is where packets arriving from the lines go: the client
+# component of the enabled protocol, or the filter telling both apart.
+client_detour() {
+  if [[ "${WG_ACCESS}" == "yes" && "${OVPN_ACCESS}" == "yes" ]]; then
+    printf 'client_filter'
+  elif [[ "${WG_ACCESS}" == "yes" ]]; then
+    printf '%s' "$(client_tag wg)"
+  else
+    printf '%s' "$(client_tag ovpn)"
+  fi
+}
+
+# client_tag names the component facing the clients of a protocol: the relay
+# listener on the entry, the server on the exit.
+client_tag() {
+  case "${ROLE}:$1" in
+    entry:wg) printf 'wg_in' ;;
+    entry:ovpn) printf 'ovpn_in' ;;
+    exit:wg) printf '%s' "${WG_ACCESS_IFACE}" ;;
+    exit:ovpn) printf '%s' "${OVPN_ACCESS_IFACE}" ;;
+  esac
+}
+
+render_client_filter() {
+  [[ "${WG_ACCESS}" == "yes" && "${OVPN_ACCESS}" == "yes" ]] || return 0
   cat <<YAML
-  - type: wg
-    tag: ${WG_ACCESS_IFACE}
-    bind_mode: native
-    interface_name: ${WG_ACCESS_IFACE}
-    mtu: ${TUNNEL_MTU}
-    listen_port: ${WG_ACCESS_PORT}
-    addresses: [${WG_NET}.1/24]
-    private_key: $(cat "${KEYS_DIR}/access.key")
-    ip_forward: true
-    mss_clamp: true
-    policy_routes:
-      - {from: [${WG_NET}.0/24], table: ${POLICY_TABLE}, priority: ${WG_RULE_PRIORITY}, dev: ${INNER_IFACE}}
-    masquerade:
-      - {source: ${WG_NET}.0/24, out_interface: ${INNER_IFACE}}
-    peers:
+  - type: filter
+    tag: client_filter
+    use_proto_detectors: [wireguard]
+    detour:
+      wireguard: [$(client_tag wg)]
+    detour_miss: [$(client_tag ovpn)]
 YAML
+}
+
+# A WireGuard message starts with its type (1-4) and three zero bytes; the
+# first byte of an OpenVPN packet carries the opcode in its upper five bits,
+# so it is at least 0x08.
+render_protocol_detectors() {
+  [[ "${WG_ACCESS}" == "yes" && "${OVPN_ACCESS}" == "yes" ]] || return 0
+  cat <<YAML
+protocol_detectors:
+  wireguard:
+    signatures:
+      - offset: 0
+        bytes: "00000000"
+        mask: "F8FFFFFF"
+        hex: true
+        length: {min: 32}
+    description: WireGuard message
+YAML
+}
+
+render_entry_relay() {
+  local proto port
+  for proto in wg ovpn; do
+    if [[ "${proto}" == "wg" ]]; then
+      [[ "${WG_ACCESS}" == "yes" ]] || continue
+      port="${WG_ACCESS_PORT}"
+    else
+      [[ "${OVPN_ACCESS}" == "yes" ]] || continue
+      port="${OVPN_PORT}"
+    fi
+    cat <<YAML
+  - type: listen
+    tag: $(client_tag "${proto}")
+    listen_addr: 0.0.0.0:${port}
+    timeout: 180
+    broadcast_mode: false
+    detour: [load_balancer]
+YAML
+  done
+}
+
+render_wg_access() {
+  local dir name peers=""
   for dir in "${CLIENTS_DIR}"/*/; do
     [[ -f "${dir}wg.pub" ]] || continue
     name="$(basename "${dir}")"
-    cat <<YAML
-      - public_key: $(cat "${dir}wg.pub") # ${name}
+    peers+="      - public_key: $(cat "${dir}wg.pub") # ${name}
         allowed_ips: [$(cat "${dir}wg.ip")/32]
-YAML
+"
   done
+  cat <<YAML
+  - type: wg
+    tag: ${WG_ACCESS_IFACE}
+    bind_mode: udplex
+    interface_name: ${WG_ACCESS_IFACE}
+    mtu: ${TUNNEL_MTU}
+    addresses: [${WG_NET}.1/24]
+    private_key: $(cat "${KEYS_DIR}/access.key")
+    detour: [load_balancer]
+    reuse_incoming_detour: false
+    ip_forward: true
+    mss_clamp: true
+    masquerade:
+      - {source: ${WG_NET}.0/24, out_interface: auto}
+YAML
+  if [[ -n "${peers}" ]]; then
+    printf '    peers:\n%s' "${peers}"
+  else
+    echo "    peers: []"
+  fi
 }
 
 render_ovpn_access() {
@@ -597,11 +665,12 @@ render_ovpn_access() {
   cat <<YAML
   - type: openvpn
     tag: ${OVPN_ACCESS_IFACE}
-    listen_addr: 0.0.0.0:${OVPN_PORT}
-    proto: ${OVPN_PROTO}
+    bind_mode: udplex
     interface_name: ${OVPN_ACCESS_IFACE}
     mtu: ${TUNNEL_MTU}
     addresses: [${OVPN_NET}.1/24]
+    detour: [load_balancer]
+    reuse_incoming_detour: false
     ca: ${CONTAINER_PKI_DIR}/ca.crt
     cert: ${CONTAINER_PKI_DIR}/server.crt
     key: ${CONTAINER_PKI_DIR}/server.key
@@ -620,30 +689,12 @@ YAML
   cat <<YAML
     ip_forward: true
     mss_clamp: true
-    policy_routes:
-      - {from: [${OVPN_NET}.0/24], table: ${POLICY_TABLE}, priority: ${OVPN_RULE_PRIORITY}, dev: ${INNER_IFACE}}
     masquerade:
-      - {source: ${OVPN_NET}.0/24, out_interface: ${INNER_IFACE}}
+      - {source: ${OVPN_NET}.0/24, out_interface: auto}
 YAML
 }
 
 render_config() {
-  local peer_allowed inner_extra
-  if [[ "${ROLE}" == "entry" ]]; then
-    # Replies from anywhere come back through the inner tunnel. No system
-    # routes are derived from it (route_allowed_ips is off).
-    peer_allowed="0.0.0.0/0"
-    inner_extra="    reuse_incoming_detour: true"
-  else
-    # The entry masquerades clients to its inner address.
-    peer_allowed="${INNER_PEER}/32"
-    inner_extra="    reuse_incoming_detour: false
-    ip_forward: true
-    mss_clamp: true
-    masquerade:
-      - {source: ${INNER_ADDR%.*}.0/24, out_interface: auto}"
-  fi
-
   {
     cat <<YAML
 # Generated by udplex-gateway-manager.sh, changes are overwritten.
@@ -656,33 +707,17 @@ logging:
   output_path: stdout
   caller: false
 services:
-  - type: wg
-    tag: ${INNER_IFACE}
-    interface_name: ${INNER_IFACE}
-    mtu: ${TUNNEL_MTU}
-    addresses: [${INNER_ADDR}]
-    private_key: $(cat "${KEYS_DIR}/inner.key")
-    detour: [load_balancer]
-${inner_extra}
-    peers:
-      - public_key: ${PEER_PUBKEY}
 YAML
     if [[ "${ROLE}" == "entry" ]]; then
-      cat <<YAML
-        endpoint: udplex-peer
-        persistent_keepalive: 25
-YAML
-    fi
-    cat <<YAML
-        allowed_ips: [${peer_allowed}]
-YAML
-    if [[ "${ROLE}" == "entry" ]]; then
+      render_entry_relay
       render_entry_line line1 "${LINE1_ADDR}" "${LINE1_PROTO}"
       render_entry_line line2 "${LINE2_ADDR}" "${LINE2_PROTO}"
     else
       render_exit_line line1 "${LISTEN1_PORT}" "${LINE1_PROTO}"
       render_exit_line line2 "${LISTEN2_PORT}" "${LINE2_PROTO}"
     fi
+    # Every packet goes over both lines below the threshold; the client
+    # protocols drop the duplicate copies.
     cat <<YAML
   - type: load_balancer
     tag: load_balancer
@@ -691,21 +726,29 @@ YAML
     detour:
 YAML
     render_load_balancer_rules
-    if [[ "${ROLE}" == "entry" ]]; then
-      [[ "${WG_ACCESS}" == "yes" ]] && render_wg_access
+    render_client_filter
+    if [[ "${ROLE}" == "exit" ]]; then
       [[ "${OVPN_ACCESS}" == "yes" ]] && render_ovpn_access
+      [[ "${WG_ACCESS}" == "yes" ]] && render_wg_access
     fi
+    render_protocol_detectors
   } > "${CONFIG_FILE}.tmp"
 
-  # A WireGuard access component without clients ends with a bare "peers:".
-  if [[ "$(tail -n 1 "${CONFIG_FILE}.tmp")" == "    peers:" ]]; then
-    sed -i '$ s/peers:$/peers: []/' "${CONFIG_FILE}.tmp"
-  fi
   chmod 600 "${CONFIG_FILE}.tmp"
   mv -f "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
 }
 
 write_compose_file() {
+  # Only the exit runs the client servers: TUN interfaces, NAT and the PKI.
+  local exit_only=""
+  if [[ "${ROLE}" == "exit" ]]; then
+    exit_only="
+      - ./pki:${CONTAINER_PKI_DIR}:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN"
+  fi
   cat > "${COMPOSE_FILE}" <<YAML
 services:
   udplex:
@@ -714,12 +757,7 @@ services:
     restart: always
     command: ["/app/UDPlex", "-c", "/app/config.yaml"]
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
-      - ./pki:${CONTAINER_PKI_DIR}:ro
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
+      - ./config.yaml:/app/config.yaml:ro${exit_only}
     network_mode: host
     logging:
       options:
@@ -736,9 +774,12 @@ show_peer_info() {
   echo "========================================"
   T show_secret_title; echo
   printf '%s\n' "${SECRET}"
-  echo
-  T show_pubkey_title; echo
-  cat "${KEYS_DIR}/inner.pub"
+  if [[ "${ROLE}" == "entry" ]]; then
+    echo
+    T show_entry_title; echo
+    [[ "${WG_ACCESS}" == "yes" ]] && echo "  WireGuard: ${WG_ACCESS_PORT}/udp"
+    [[ "${OVPN_ACCESS}" == "yes" ]] && echo "  OpenVPN:   ${OVPN_PORT}/udp"
+  fi
   echo "========================================"
   echo
 }
@@ -756,20 +797,23 @@ install_flow() {
   read -rp "> " lang_choice || true
   case "${lang_choice}" in 1) LANG_SEL="en" ;; 2) LANG_SEL="zh" ;; esac
 
-  install_docker
-  install_packages wg:wireguard-tools openssl:openssl curl:curl
-  mkdir -p "${BASE_DIR}" "${KEYS_DIR}" "${CLIENTS_DIR}"
-  chmod 700 "${BASE_DIR}" "${KEYS_DIR}" "${CLIENTS_DIR}"
-  gen_wg_keypair inner
-
   T select_role; echo
   local role_choice=""
   read -rp "> " role_choice || true
   case "${role_choice}" in
-    1) ROLE="entry"; INNER_ADDR="10.0.0.1/24"; INNER_PEER="10.0.0.2" ;;
-    2) ROLE="exit"; INNER_ADDR="10.0.0.2/24"; INNER_PEER="10.0.0.1" ;;
+    1) ROLE="entry" ;;
+    2) ROLE="exit" ;;
     *) err invalid_choice; exit 1 ;;
   esac
+
+  install_docker
+  if [[ "${ROLE}" == "exit" ]]; then
+    install_packages wg:wireguard-tools openssl:openssl curl:curl
+  else
+    install_packages curl:curl
+  fi
+  mkdir -p "${BASE_DIR}" "${KEYS_DIR}" "${CLIENTS_DIR}"
+  chmod 700 "${BASE_DIR}" "${KEYS_DIR}" "${CLIENTS_DIR}"
 
   local secret_input=""
   read -rp "$(T prompt_secret)" secret_input || true
@@ -778,14 +822,6 @@ install_flow() {
   elif [[ -z "${SECRET}" ]]; then
     SECRET="$(random_secret)"
   fi
-  show_peer_info
-
-  while true; do
-    T prompt_peer_pub; echo
-    read -r PEER_PUBKEY || true
-    validate_pubkey "${PEER_PUBKEY}" && break
-    warn bad_pubkey
-  done
 
   local threshold_input=""
   read -rp "$(T prompt_threshold "${THRESHOLD}")" threshold_input || true
@@ -819,13 +855,14 @@ install_flow() {
       err need_two_lines
       exit 1
     fi
-    install_entry_access
+    install_access_ports
     [[ "${WG_ACCESS}" == "yes" ]] && ports+=("${WG_ACCESS_PORT}/udp")
-    [[ "${OVPN_ACCESS}" == "yes" ]] && ports+=("${OVPN_PORT}/${OVPN_PROTO}")
+    [[ "${OVPN_ACCESS}" == "yes" ]] && ports+=("${OVPN_PORT}/udp")
   else
     ask LISTEN1_PORT "$(T prompt_listen1)" "9100"
     ask LISTEN2_PORT "$(T prompt_listen2)" "9101"
     ports+=("${LISTEN1_PORT}/${LINE1_PROTO}" "${LISTEN2_PORT}/${LINE2_PROTO}")
+    install_exit_access
   fi
 
   save_settings
@@ -834,29 +871,42 @@ install_flow() {
 
   echo
   info install_done
-  [[ "${ROLE}" == "entry" ]] && info install_done_entry
+  [[ "${ROLE}" == "exit" ]] && info install_done_exit
   info open_ports "${ports[*]}"
   show_peer_info
 }
 
-install_entry_access() {
-  local net=""
+# install_access_ports asks which client protocols are relayed and on which
+# entry ports; the exit asks the same so its client files match.
+install_access_ports() {
   WG_ACCESS="no"
   OVPN_ACCESS="no"
   if ask_yes "$(T prompt_enable_wg)" y; then
     WG_ACCESS="yes"
-    gen_wg_keypair access
     ask WG_ACCESS_PORT "$(T prompt_wg_port)" "51821"
+  fi
+  if ask_yes "$(T prompt_enable_ovpn)" y; then
+    OVPN_ACCESS="yes"
+    ask OVPN_PORT "$(T prompt_ovpn_port)" "1194"
+  fi
+  if [[ "${WG_ACCESS}" != "yes" && "${OVPN_ACCESS}" != "yes" ]]; then
+    err need_access
+    exit 1
+  fi
+}
+
+install_exit_access() {
+  local net=""
+  install_access_ports
+  if [[ "${WG_ACCESS}" == "yes" ]]; then
+    gen_wg_keypair access
     while true; do
       ask net "$(T prompt_wg_net)" "10.8.0.0/24"
       if WG_NET="$(parse_net "${net}")"; then break; fi
       warn bad_net
     done
   fi
-  if ask_yes "$(T prompt_enable_ovpn)" y; then
-    OVPN_ACCESS="yes"
-    OVPN_PROTO="$(select_proto prompt_ovpn_proto)"
-    ask OVPN_PORT "$(T prompt_ovpn_port)" "1194"
+  if [[ "${OVPN_ACCESS}" == "yes" ]]; then
     while true; do
       ask net "$(T prompt_ovpn_net)" "10.9.0.0/24"
       if OVPN_NET="$(parse_net "${net}")" && [[ "${WG_ACCESS}" != "yes" || "${OVPN_NET}" != "${WG_NET}" ]]; then break; fi
@@ -864,14 +914,12 @@ install_entry_access() {
     done
     pki_init
   fi
-  if [[ "${WG_ACCESS}" != "yes" && "${OVPN_ACCESS}" != "yes" ]]; then
-    err need_access
+
+  ask PUBLIC_HOST "$(T prompt_public_host)" "${PUBLIC_HOST}"
+  if [[ -z "${PUBLIC_HOST}" ]]; then
+    err need_public_host
     exit 1
   fi
-
-  local detected
-  detected="${PUBLIC_HOST:-$(detect_public_ip)}"
-  ask PUBLIC_HOST "$(T prompt_public_host "${detected}")" "${detected}"
   ask CLIENT_DNS "$(T prompt_dns)" "1.1.1.1"
   ask CLIENT_ROUTES "$(T prompt_routes)" "0.0.0.0/0"
   CLIENT_ROUTES="${CLIENT_ROUTES// /}"
@@ -880,10 +928,10 @@ install_entry_access() {
 # --------------------------------
 # Clients
 # --------------------------------
-require_entry() {
+require_exit() {
   require_install
-  if [[ "${ROLE}" != "entry" ]]; then
-    err entry_only
+  if [[ "${ROLE}" != "exit" ]]; then
+    err exit_only
     exit 1
   fi
 }
@@ -928,13 +976,12 @@ EOF
 }
 
 write_ovpn_client_conf() {
-  local dir="$1" name="$2" proto="udp"
-  [[ "${OVPN_PROTO}" == "tcp" ]] && proto="tcp-client"
+  local dir="$1" name="$2"
   {
     cat <<EOF
 client
 dev tun
-proto ${proto}
+proto udp
 remote ${PUBLIC_HOST} ${OVPN_PORT}
 resolv-retry infinite
 nobind
@@ -967,7 +1014,7 @@ apply_client_change() {
 
 client_add() {
   local name="${1:-}"
-  require_entry
+  require_exit
   validate_client_name "${name}"
   local dir="${CLIENTS_DIR}/${name}"
   if [[ -d "${dir}" ]]; then
@@ -1001,7 +1048,7 @@ client_add() {
 
 client_del() {
   local name="${1:-}"
-  require_entry
+  require_exit
   validate_client_name "${name}"
   local dir="${CLIENTS_DIR}/${name}"
   if [[ ! -d "${dir}" ]]; then
@@ -1019,7 +1066,7 @@ client_del() {
 }
 
 client_list() {
-  require_entry
+  require_exit
   local dir name found=0
   printf '%-20s %-16s %s\n' "NAME" "WIREGUARD" "OPENVPN"
   for dir in "${CLIENTS_DIR}"/*/; do
@@ -1034,7 +1081,7 @@ client_list() {
 
 client_show() {
   local name="${1:-}"
-  require_entry
+  require_exit
   validate_client_name "${name}"
   local dir="${CLIENTS_DIR}/${name}"
   if [[ ! -d "${dir}" ]]; then
@@ -1067,16 +1114,23 @@ compose() {
   ${DOCKER_COMPOSE} -f "${COMPOSE_FILE}" "$@"
 }
 
-wait_inner_iface() {
-  local _
-  for _ in $(seq 1 15); do
-    if ip link show "${INNER_IFACE}" >/dev/null 2>&1; then
-      info iface_ready "${INNER_IFACE}"
-      return 0
+# wait_client_ifaces waits for the exit's client interfaces.
+wait_client_ifaces() {
+  [[ "${ROLE}" == "exit" ]] || return 0
+  local iface _
+  for iface in "${WG_ACCESS_IFACE}" "${OVPN_ACCESS_IFACE}"; do
+    [[ "${iface}" == "${WG_ACCESS_IFACE}" && "${WG_ACCESS}" != "yes" ]] && continue
+    [[ "${iface}" == "${OVPN_ACCESS_IFACE}" && "${OVPN_ACCESS}" != "yes" ]] && continue
+    for _ in $(seq 1 15); do
+      ip link show "${iface}" >/dev/null 2>&1 && break
+      sleep 1
+    done
+    if ip link show "${iface}" >/dev/null 2>&1; then
+      info iface_ready "${iface}"
+    else
+      warn iface_fail "${iface}"
     fi
-    sleep 1
   done
-  warn iface_fail "${INNER_IFACE}"
 }
 
 start_services() {
@@ -1085,7 +1139,7 @@ start_services() {
   prepare_host
   compose up -d
   info started
-  wait_inner_iface
+  wait_client_ifaces
 }
 
 stop_services() {
@@ -1102,7 +1156,7 @@ restart_services() {
   # Recreate so a changed config.yaml or compose file is picked up.
   compose up -d --force-recreate
   info restarted
-  wait_inner_iface
+  wait_client_ifaces
 }
 
 update_image() {
@@ -1117,17 +1171,13 @@ show_status() {
   require_install
   echo "=== Container ==="
   compose ps || true
-  echo
-  echo "=== Interfaces ==="
-  local iface
-  for iface in "${INNER_IFACE}" "${WG_ACCESS_IFACE}" "${OVPN_ACCESS_IFACE}"; do
-    ip -brief addr show "${iface}" 2>/dev/null || true
-  done
-  if [[ "${ROLE}" == "entry" ]]; then
+  if [[ "${ROLE}" == "exit" ]]; then
     echo
-    echo "=== Policy routing ==="
-    ip rule 2>/dev/null | grep "lookup ${POLICY_TABLE}" || true
-    ip route show table "${POLICY_TABLE}" 2>/dev/null || true
+    echo "=== Interfaces ==="
+    local iface
+    for iface in "${WG_ACCESS_IFACE}" "${OVPN_ACCESS_IFACE}"; do
+      ip -brief addr show "${iface}" 2>/dev/null || true
+    done
     echo
     echo "=== Clients ==="
     client_list
@@ -1135,14 +1185,16 @@ show_status() {
   echo
   echo "=== Settings ==="
   echo "Role: ${ROLE}"
-  echo "Inner tunnel: ${INNER_ADDR} -> ${INNER_PEER}"
   echo "Lines: ${LINE1_PROTO}/${LINE2_PROTO}, high traffic ${HIGH_TRAFFIC_MODE}, threshold ${THRESHOLD} bps"
   if [[ "${ROLE}" == "entry" ]]; then
-    [[ "${WG_ACCESS}" == "yes" ]] && echo "WireGuard access: ${PUBLIC_HOST}:${WG_ACCESS_PORT}/udp, clients ${WG_NET}.0/24"
-    [[ "${OVPN_ACCESS}" == "yes" ]] && echo "OpenVPN access: ${PUBLIC_HOST}:${OVPN_PORT}/${OVPN_PROTO}, clients ${OVPN_NET}.0/24"
-    echo "Client routes: ${CLIENT_ROUTES}, DNS ${CLIENT_DNS}"
+    echo "Lines to: ${LINE1_ADDR}, ${LINE2_ADDR}"
+    [[ "${WG_ACCESS}" == "yes" ]] && echo "WireGuard relay: ${WG_ACCESS_PORT}/udp"
+    [[ "${OVPN_ACCESS}" == "yes" ]] && echo "OpenVPN relay: ${OVPN_PORT}/udp"
   else
     echo "Listen ports: ${LISTEN1_PORT}/${LINE1_PROTO}, ${LISTEN2_PORT}/${LINE2_PROTO}"
+    [[ "${WG_ACCESS}" == "yes" ]] && echo "WireGuard: clients ${WG_NET}.0/24 via ${PUBLIC_HOST}:${WG_ACCESS_PORT}/udp"
+    [[ "${OVPN_ACCESS}" == "yes" ]] && echo "OpenVPN: clients ${OVPN_NET}.0/24 via ${PUBLIC_HOST}:${OVPN_PORT}/udp"
+    echo "Client routes: ${CLIENT_ROUTES}, DNS ${CLIENT_DNS}"
   fi
   echo "Directory: ${BASE_DIR}"
 }
@@ -1178,16 +1230,16 @@ usage() {
 Usage: sudo bash $0 <command>
 
 Commands:
-  install                 Configure this server as the entry or the exit (interactive)
+  install                 Configure this server as the entry or the exit (interactive, entry first)
   start | stop | restart  Control the gateway container (restart applies config changes)
   status                  Show container, interfaces, routing and clients
   logs                    Follow container logs
   update                  Pull the latest image and restart
-  show-keys               Print the shared secret and the inner tunnel public key
-  client add <name>       Create a client (WireGuard config and/or OpenVPN profile)
-  client del <name>       Delete a client and revoke its certificate
-  client list             List clients
-  client show <name>      Print a client's WireGuard config (QR code with qrencode)
+  show-keys               Print the shared line secret (and the entry's access ports)
+  client add <name>       Exit: create a client (WireGuard config and/or OpenVPN profile)
+  client del <name>       Exit: delete a client and revoke its certificate
+  client list             Exit: list clients
+  client show <name>      Exit: print a client's WireGuard config (QR code with qrencode)
   set-threshold <bps>     Change the bandwidth threshold, then run restart
   lang <zh|en>            Switch the script language
   uninstall               Stop the gateway and remove ${BASE_DIR}

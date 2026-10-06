@@ -76,7 +76,7 @@ tun-mtu 1420
 
 ## `udplex` Bind Mode
 
-In `udplex` bind mode the server takes its datagrams from other components, so OpenVPN clients can reach it through UDPlex `listen` components or multiple lines. Clients are told apart by the connection id of their packets: use a `listen` component (one id per client address) or lines with `auth` enabled.
+In `udplex` bind mode the server takes its datagrams from other components, so OpenVPN clients can reach it through UDPlex `listen` components or multiple lines. Clients are told apart by the connection id of their packets: use a `listen` component (one id per client address). Behind a relay, carry the relay's ids over `auth` lines with `preserve_conn_id: true` on the receiving `listen` (`tcp_tunnel` lines keep them anyway). Packets arriving twice, e.g. over two redundant lines, are dropped by OpenVPN's replay protection; the [access gateway](udplex_gateway_en.md) uses this.
 
 ```yaml
 - type: listen
